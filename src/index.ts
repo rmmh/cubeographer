@@ -6,8 +6,11 @@ const Stats = require("stats.js");
 
 let ONDEMAND = true;
 
-const glitterCount = 1e6;
-const cubeCount = 512 * 512;
+let PROD = 1;
+
+const glitterCount = PROD ? 1e6 : 1e4;
+const cubeCount = PROD ? 512 * 512 : 1024;
+const space = PROD ? 512 : 64;
 
 document.body.addEventListener('mouseleave', () => { ONDEMAND = true; });
 document.body.addEventListener('mouseenter', () => { ONDEMAND = false; });
@@ -56,7 +59,7 @@ function makeglitter(particles: number): [THREE.Points, THREE.InterleavedBuffer,
 
     const color = new THREE.Color();
 
-    const n = 512, n2 = n / 2; // particles spread in the cube
+    const n = space, n2 = n / 2; // particles spread in the cube
 
     for (let i = 0; i < interleavedFloat32Buffer.length; i += 4) {
 
@@ -100,9 +103,10 @@ function makeglitter(particles: number): [THREE.Points, THREE.InterleavedBuffer,
 function makeCubes(cubes: number): [THREE.Mesh, THREE.InterleavedBuffer, THREE.InterleavedBuffer] {
     const geometry = new THREE.BufferGeometry();
 
-    // vec3 pos, normal, 24bit color => 6 * 4 + 3 + 1 (pad) => 28B
-    // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
-    const stride = 28;
+    // vec3 pos, 32bit color (normal in a) => 3 * 4 + 4 => 16B
+    // TODO: rewrite vertex shader to pack position into 4B (3 x 10 bit signed integers) => 7B each?
+    // TODO: use gl_VertexID to infer normals for -1B? :D => 6B per vertex
+    const stride = 16;
     const stridef = (stride / 4)|0;
     const tris = 12;  // 6 faces * 2 tris each -- 28B * 6 * 2 * 3 = 1008B each!
     const arrayBuffer = new ArrayBuffer(cubes * stride * tris * 3);
@@ -114,7 +118,7 @@ function makeCubes(cubes: number): [THREE.Mesh, THREE.InterleavedBuffer, THREE.I
 
     const color = new THREE.Color();
 
-    const n = 512, n2 = n / 2;	// cubes spread in the cube
+    const n = space, n2 = n / 2;	// cubes spread in the cube
     const d = 1, d2 = d / 2;	// individual triangle size
 
     const cb = new THREE.Vector3();
@@ -128,28 +132,22 @@ function makeCubes(cubes: number): [THREE.Mesh, THREE.InterleavedBuffer, THREE.I
         const nx = cb.x;
         const ny = cb.y;
         const nz = cb.z;
+        // compress the normal vector
+        const np = (nx + 1) * 16 + (ny + 1) * 4 + (nz + 1);
+        if (i < 25 && false) {console.log(nx, ny, nz, np);}
 
         let o = i * stridef * 3;
         bf32[o++] = pA.x;
         bf32[o++] = pA.y;
         bf32[o++] = pA.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
         o += 1;
         bf32[o++] = pB.x;
         bf32[o++] = pB.y;
         bf32[o++] = pB.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
         o += 1;
         bf32[o++] = pC.x;
         bf32[o++] = pC.y;
         bf32[o++] = pC.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
 
         // colors
         const vx = (pA.x / (n + d)) + 0.5;
@@ -157,10 +155,11 @@ function makeCubes(cubes: number): [THREE.Mesh, THREE.InterleavedBuffer, THREE.I
         const vz = (pA.z / (n + d)) + 0.5;
 
         let r = (vx * 255) | 0, g = (vy * 255) | 0, b = (vz * 255) | 0;
-        for (let o = i * stride * 3 + 6 * 4; o < (i + 1) * stride * 3; o += stride - 3) {
+        for (let o = i * stride * 3 + 3 * 4; o < (i + 1) * stride * 3; o += stride - 4) {
             bu8[o++] = r;
             bu8[o++] = g;
             bu8[o++] = b;
+            bu8[o++] = np;
         }
     }
 
@@ -205,14 +204,66 @@ function makeCubes(cubes: number): [THREE.Mesh, THREE.InterleavedBuffer, THREE.I
     const ibu8 = new THREE.InterleavedBuffer(bu8, stride);
 
     geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ibf32, 3, 0, false));
-    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ibf32, 3, 3, false));
-    geometry.setAttribute('color', new THREE.InterleavedBufferAttribute(ibu8, 3, 24, true));
+    geometry.setAttribute('colorn', new THREE.InterleavedBufferAttribute(ibu8, 4, 12, true)); // also normal
 
     geometry.computeBoundingSphere();
 
-    const material = new THREE.MeshPhongMaterial({
+    let material: THREE.Material = new THREE.MeshPhongMaterial({
         color: 0xaaaaaa, specular: 0xffffff, shininess: 250,
         side: THREE.FrontSide, vertexColors: true
+    });
+
+    material = new THREE.RawShaderMaterial({
+        uniforms: {
+            time: { value: 1.0 }
+        },
+        vertexShader: `# version 300 es
+			precision mediump float;
+			precision mediump int;
+
+			uniform mat4 modelViewMatrix; // optional
+			uniform mat4 projectionMatrix; // optional
+
+			in vec3 position;
+            in vec4 colorn;
+            in vec3 normal;
+            in uint normb;
+
+			out vec3 vPosition;
+            out vec4 vColor;
+            out vec3 vNormal;
+
+            vec3 unpackNorm(int d) {
+                return vec3(uvec3((d >> 4) - 1, ((d >> 2) & 3) - 1, (d & 3) - 1));
+            }
+
+			void main()	{
+                vColor = vec4(colorn.rgb, 1.0);
+                // I don't know why this normalize is required
+                vNormal = normalize(unpackNorm(int(colorn.a * 255.0)));
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			}
+        `,
+        fragmentShader: `# version 300 es
+            precision mediump float;
+			precision mediump int;
+
+			uniform float time;
+
+			in vec3 vPosition;
+			in vec4 vColor;
+            in vec3 vNormal;
+
+            out vec4 outColor;
+
+			void main()	{
+				vec4 color = vec4( vColor );
+				outColor = vec4(color.rgb * (0.6+.4*dot(vNormal, normalize(vec3(10,5,2)))), 1);
+			}
+        `,
+        side: THREE.FrontSide,
+        transparent: true
+
     });
 
     return [new THREE.Mesh(geometry, material), ibf32, ibu8];
@@ -281,10 +332,10 @@ function renderFrame() {
             jitters[i] = ((Math.random() - 0.5) * 2.5)|0;
         }
         const count = 1000;
-        const cs = 7 * 6 * 2 * 3;  // cube stride. 252 floats!
+        const cs = 4 * 6 * 2 * 3;  // cube stride. 144 floats!
         const offset = cs * ((Math.random() * (paa.length/(cs) - count)) | 0);
         for (let i = offset; i < offset + count * cs; i += cs) {
-            for (let j = 0; j < cs; j += 7) {
+            for (let j = 0; j < cs; j += 4) {
                 paa[i + j] += jitters[i % jitters.length];
                 paa[i + j + 1] += jitters[i % jitters.length];
                 paa[i + j + 2] += jitters[i % jitters.length];
