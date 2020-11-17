@@ -9,6 +9,9 @@ import * as THREE from "three";
 import { AddEquation, InstancedBufferAttribute } from "three";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
+var vertexShader = require('./cube_vertex.glsl');
+var fragmentShader = require('./cube_fragment.glsl');
+
 const Stats = require("stats.js");
 
 let ONDEMAND = true;
@@ -261,61 +264,11 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
 
     const material: THREE.Material = new THREE.RawShaderMaterial({
         uniforms: {
-            atlas: {value: tex}
+            atlas: {value: tex},
+            space: {value: space},
         },
-        vertexShader: `# version 300 es
-			precision mediump float;
-			precision highp int;
-
-			uniform mat4 modelViewMatrix; // optional
-			uniform mat4 projectionMatrix; // optional
-
-			in vec3 position;
-            in vec4 color;
-            in vec3 normal;
-            in vec2 uv;
-            in uvec2 attr;
-            in uint normb;
-
-			out vec3 vPosition;
-            out vec4 vColor;
-            out vec3 vNormal;
-            out vec2 vTexCoord;
-
-            vec3 unpackPos(uint p) {
-                return vec3(float(p >> 20), float((p >> 10) & 1023u), float(p & 1023u)) - vec3(${space/2});
-            }
-            vec3 unpackColor(int p) {
-                return vec3((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff) / 255.0;
-            }
-
-			void main()	{
-                vColor = vec4(unpackColor(int(attr.y)), 1.0);
-                vNormal = normal.xyz;
-                int block = 1023 - int(attr.y >> 24u);
-                vTexCoord = (vec2(float(uv.x), float(uv.y)) + vec2(block % 32, block / 32)) / 32.0;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4( position + unpackPos(attr.x), 1.0 );
-			}
-        `,
-        fragmentShader: `# version 300 es
-            precision mediump float;
-			precision highp int;
-
-            uniform sampler2D atlas;
-
-			in vec3 vPosition;
-			in vec4 vColor;
-            in vec3 vNormal;
-            in vec2 vTexCoord;
-
-            out vec4 outColor;
-
-			void main()	{
-                vec4 color = vec4( vColor ) * texture(atlas, vTexCoord);
-                if (color.a == 0.0) discard;
-				outColor = vec4(color.rgb * (0.6+.4*dot(vNormal, normalize(vec3(10,5,2)))), color.a);
-			}
-        `,
+        vertexShader,
+        fragmentShader,
         side: THREE.FrontSide,
         transparent: true
     });
