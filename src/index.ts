@@ -1,3 +1,10 @@
+/*
+TODO: open addressing for block insertion/deletion
+steal from https://shlegeris.com/2017/01/06/hash-maps.html
+
+
+*/
+
 import * as THREE from "three";
 import { AddEquation, InstancedBufferAttribute } from "three";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -10,7 +17,7 @@ let PROD = 1;
 
 const glitterCount = PROD ? 1e6 : 1e4;
 const cubeCount = PROD ? 512 * 512 * 2 : 1024;
-const space = PROD ? 750 : 64;
+const space = PROD ? 512 : 64;
 
 document.body.addEventListener('mouseleave', () => { ONDEMAND = true; });
 document.body.addEventListener('mouseenter', () => { ONDEMAND = false; });
@@ -103,11 +110,10 @@ const CUBE_ATTRIB_STRIDE = 2;
 function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
     // vec3 pos, normal, 24bit color => 6 * 4 + 3 + 1 (pad) => 28B
     // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
-    const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 => 24B
+    const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
     const stridef = (stride / 4)|0;
     const tris = 12;  // 6 faces * 2 tris each -- 28B * 6 * 2 * 3 = 1008B each!
     const cubeBuffer = new ArrayBuffer(stride * tris * 3);
-    console.log("cubeBuf is", Math.round(cubeBuffer.byteLength / 1024 / 1024), "MiB");
 
     // the following typed arrays share the same buffer
     const bf32 = new Float32Array(cubeBuffer);
@@ -134,20 +140,42 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
         bf32[o++] = nx;
         bf32[o++] = ny;
         bf32[o++] = nz;
-        o += 1;
+        o++;
         bf32[o++] = pB.x;
         bf32[o++] = pB.y;
         bf32[o++] = pB.z;
         bf32[o++] = nx;
         bf32[o++] = ny;
         bf32[o++] = nz;
-        o += 1;
+        o++;
         bf32[o++] = pC.x;
         bf32[o++] = pC.y;
         bf32[o++] = pC.z;
         bf32[o++] = nx;
         bf32[o++] = ny;
         bf32[o++] = nz;
+        o++;
+
+        o = i * stride * 3 + 24;
+        if (i % 2 == 0) {
+            bu8[o] = 0;
+            bu8[o + 1] = 1;
+            o += stride;
+            bu8[o] = 1;
+            bu8[o + 1] = 1;
+            o += stride;
+            bu8[o] = 1;
+            bu8[o + 1] = 0;
+        } else {
+            bu8[o] = 1;
+            bu8[o + 1] = 0;
+            o += stride;
+            bu8[o] = 0;
+            bu8[o + 1] = 0;
+            o += stride;
+            bu8[o] = 0;
+            bu8[o + 1] = 1;
+        }
     }
 
     function addQuad(pA: THREE.Vector3, pB: THREE.Vector3, pC: THREE.Vector3, pD: THREE.Vector3, i: number) {
@@ -173,43 +201,67 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
     BRU.set(1, 1, 0);
 
     // Note: "front face" is CCW
-    addQuad(FLD, FRD, FRU, FLU, 0);      // F
+    addQuad(FLD, FRD, FRU, FLU, 0);  // F
     addQuad(FLD, FLU, BLU, BLD, 2);  // L
     addQuad(BLU, BRU, BRD, BLD, 4);  // B
     addQuad(BRD, BRU, FRU, FRD, 6);  // R
     addQuad(FLU, FRU, BRU, BLU, 8);  // U
     addQuad(BRD, FRD, FLD, BLD, 10); // D
 
-    const attribBuffer = new Uint32Array(cubes * CUBE_ATTRIB_STRIDE);
+    const attr = new Uint32Array(cubes * CUBE_ATTRIB_STRIDE);
+    console.log("cube attr buf is", Math.round(attr.byteLength / 1024 / 1024), "MiB");
 
     for (let i = 0; i < cubes; i++) {
         // positions
-        const x = (Math.random() * n) | 0;
-        const y = (Math.random() * n) | 0;
-        const z = (Math.random() * n) | 0;
+        let x = (Math.random() * n) | 0;
+        let y = (Math.random() * n) | 0;
+        let z = (Math.random() * n) | 0;
 
         // colors
         let r = ((x / n) * 255) | 0, g = ((y / n) * 255) | 0, b = ((z / n) * 255) | 0;
+
+        if (i < space * space) {
+            x = i % space;
+            z = i / space;
+            y = space / 2 - 10 + Math.sin(x / 30) * 5 + Math.sin(z / 40) * 5;
+            //r = ((x / n) * 255) | 0, g = ((y / n) * 255) | 0, b = ((z / n) * 255) | 0;
+            //g = Math.min(255, g + 60);
+            r = g = b = 255;
+        }
+
         let o = i * CUBE_ATTRIB_STRIDE;
-        attribBuffer[o] = (x << 20) | (y << 10) | z;
-        attribBuffer[o+1] = (r << 16) | (g << 8) | b;
+        attr[o] = (x << 20) | (y << 10) | z;
+        attr[o+1] = ((Math.random() * 255) << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    // shuffle attrs
+    for (let i = attr.length / 2; i > 0;) {
+        let j = Math.floor(Math.random() * i--);
+        let t1 = attr[i*2], t2 = attr[i*2+1];
+        attr[i*2] = attr[j*2], attr[i*2+1] = attr[j*2+1];
+        attr[j*2] = t1, attr[j*2+1] = t2;
     }
 
     const geometry = new THREE.BufferGeometry();
 
     const ibf32 = new THREE.InterleavedBuffer(bf32, stridef);
     const ibu8 = new THREE.InterleavedBuffer(bu8, stride);
-    const attrBuf = new THREE.InstancedBufferAttribute(attribBuffer, CUBE_ATTRIB_STRIDE);
+    const attrBuf = new THREE.InstancedBufferAttribute(attr, CUBE_ATTRIB_STRIDE);
 
     geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ibf32, 3, 0, false));
-    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ibf32, 3, 3, false));
+    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ibf32, 4, 3, false));
+    geometry.setAttribute('uv', new THREE.InterleavedBufferAttribute(ibu8, 2, 24, false));
     geometry.setAttribute('attr', attrBuf);
 
     geometry.computeBoundingSphere();
 
+    const tex = new THREE.TextureLoader().load(PROD ? 'textures/atlas.png' : 'textures/debug.png');
+    tex.magFilter = THREE.NearestFilter;
+    tex.flipY = true;
+
     const material: THREE.Material = new THREE.RawShaderMaterial({
         uniforms: {
-            time: { value: 1.0 }
+            atlas: {value: tex}
         },
         vertexShader: `# version 300 es
 			precision mediump float;
@@ -221,23 +273,27 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
 			in vec3 position;
             in vec4 color;
             in vec3 normal;
-            in uvec3 attr;
+            in vec2 uv;
+            in uvec2 attr;
             in uint normb;
 
 			out vec3 vPosition;
             out vec4 vColor;
             out vec3 vNormal;
+            out vec2 vTexCoord;
 
             vec3 unpackPos(uint p) {
                 return vec3(float(p >> 20), float((p >> 10) & 1023u), float(p & 1023u)) - vec3(${space/2});
             }
             vec3 unpackColor(int p) {
-                return vec3(p >> 16, (p >> 8) & 0xff, p & 0xff) / 255.0;
+                return vec3((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff) / 255.0;
             }
 
 			void main()	{
                 vColor = vec4(unpackColor(int(attr.y)), 1.0);
-                vNormal = normal;
+                vNormal = normal.xyz;
+                int block = 1023 - int(attr.y >> 24u);
+                vTexCoord = (vec2(float(uv.x), float(uv.y)) + vec2(block % 32, block / 32)) / 32.0;
                 gl_Position = projectionMatrix * modelViewMatrix * vec4( position + unpackPos(attr.x), 1.0 );
 			}
         `,
@@ -245,25 +301,28 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
             precision mediump float;
 			precision highp int;
 
-			uniform float time;
+            uniform sampler2D atlas;
 
 			in vec3 vPosition;
 			in vec4 vColor;
             in vec3 vNormal;
+            in vec2 vTexCoord;
 
             out vec4 outColor;
 
 			void main()	{
-				vec4 color = vec4( vColor );
-				outColor = vec4(color.rgb * (0.6+.4*dot(vNormal, normalize(vec3(10,5,2)))), 1);
+                vec4 color = vec4( vColor ) * texture(atlas, vTexCoord);
+                if (color.a == 0.0) discard;
+				outColor = vec4(color.rgb * (0.6+.4*dot(vNormal, normalize(vec3(10,5,2)))), color.a);
 			}
         `,
         side: THREE.FrontSide,
         transparent: true
-
     });
 
     const mesh = new THREE.InstancedMesh(geometry, material, 0);
+    // InstancedMesh by default has instanceMatrix (16 floats per instance),
+    // creating it with 0 and then fudging the count lets us use our own attributes.
     mesh.count = cubes;
 
     return [mesh, attrBuf];
@@ -283,7 +342,6 @@ scene.add(cubes);
 
 var dLight = new THREE.DirectionalLight('#fff', 1);
 dLight.position.set(-10, 15, 20);
-
 var aLight = new THREE.AmbientLight('#111');
 
 scene.add(dLight);
@@ -358,3 +416,40 @@ function renderFrame() {
 
 render();
 controls.addEventListener('change', render);
+
+/*
+declare namespace Cubiomes {
+    function _initBiomes(): void;
+    function _malloc(bytes: number): number;
+
+    function onRuntimeInitialized(): void;
+}
+
+Cubiomes.onRuntimeInitialized = function () {
+    console.log("cubiomes intialized");
+    Cubiomes._initBiomes();
+    let layerStack = Cubiomes._malloc(500);
+}
+
+fetch("map/r.-1.-1.cmt").then(
+    async response => {
+        if (cubeAttr.array instanceof Uint32Array) {
+            console.log("loaded", response.url);
+            let paa = cubeAttr.array;
+
+            cubeAttr.array = new Uint32Array(await response.arrayBuffer());
+
+
+            const attrBuf = new THREE.InstancedBufferAttribute(cubeAttr.array, CUBE_ATTRIB_STRIDE);
+            if (cubes.geometry instanceof THREE.BufferGeometry)
+                cubes.geometry.setAttribute('attr', attrBuf);
+
+            cubeAttr.needsUpdate = true;
+            if (cubes instanceof THREE.InstancedMesh) {
+                cubes.count = cubeAttr.array.length / CUBE_ATTRIB_STRIDE;
+            }
+        }
+    },
+    reason => console.log("rejected", reason)
+)
+*/

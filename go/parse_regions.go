@@ -143,7 +143,7 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 	return nil
 }
 
-func scanRegion(dir string, file os.FileInfo) error {
+func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	f, err := os.Open(path.Join(dir, file.Name()))
 	if err != nil {
 		return err
@@ -186,7 +186,6 @@ func scanRegion(dir string, file os.FileInfo) error {
 
 	var cdata [1024]chunkDatum
 
-	bblocks := [][]byte{}
 	for _, chunkNum := range seqChunks {
 		f.Seek(int64(offsets[chunkNum]>>8)*4096, os.SEEK_SET)
 		paddedLen := 4096 * int(offsets[chunkNum]&0xff)
@@ -252,13 +251,58 @@ func scanRegion(dir string, file os.FileInfo) error {
 			continue
 		}
 		//fmt.Println(len(blocks), ys)
-		cdata[chunkNum] = chunkDatum{bblocks, lights, lightsSky}
+		cdata[chunkNum] = chunkDatum{blocks, lights, lightsSky}
 		if err != nil {
 			return err
 		}
 		//fmt.Println(chunkNum, chunkLen, len(chunk), chunk[:50])
 		if false {
 			fmt.Println(chunkNum, chunkLen, len(chunk))
+		}
+	}
+
+	get := func(x, y, z int) byte {
+		if (x|y|z)&256 != 0 {
+			return 0
+		}
+		chunk := cdata[(x>>4)+(z>>4)*32]
+		ys := y >> 4
+		if ys >= len(chunk.blocks) {
+			return 0
+		}
+		return chunk.blocks[ys][x&15+(z&15)*16+(y&15)*256]
+	}
+
+	out, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cmt", 1)))
+	if err != nil {
+		log.Println("unable to open dest file")
+		return err
+	}
+
+	attrBuf := make([]byte, 8)
+	for x := 0; x < 512; x++ {
+		for z := 0; z < 512; z++ {
+			chunk := cdata[(x>>4)+(z>>4)*32]
+			wasAir := true
+			for y := len(chunk.blocks)*16 - 1; y >= 0; y-- {
+				b := chunk.blocks[y>>4][x&15+(z&15)*16+(y&15)*256]
+				shouldWrite := false
+				if b == 0 {
+					wasAir = true
+				} else if wasAir {
+					shouldWrite = true
+					wasAir = false
+				} else if get(x-1, y, z) == 0 || get(x+1, y, z) == 0 ||
+					get(x, y-1, z) == 0 ||
+					get(x, y, z-1) == 0 || get(x+1, y, z+1) == 0 {
+					shouldWrite = true
+				}
+				if shouldWrite {
+					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<20|y<<10|z))
+					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|0xffffff)
+					out.Write(attrBuf)
+				}
+			}
 		}
 	}
 
@@ -269,19 +313,15 @@ type coord struct {
 	x, z int
 }
 
-func windowChunks(x1, z1, x2, z2, buffer, depth int) []coord {
-	return nil
-}
-
 func main() {
-	regionDir := "maps/salc1/region"
+	regionDir := os.Args[1]
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 	for _, file := range files {
-		err = scanRegion(regionDir, file)
+		err = scanRegion(regionDir, os.Args[2], file)
 		if err != nil {
 			log.Fatal(err)
 		}
