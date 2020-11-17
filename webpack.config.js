@@ -28,6 +28,10 @@ module.exports = {
     new CopyPlugin({
       patterns: [
         { from: "./src/index.html" },
+        {
+          from: "./node_modules/three/examples/fonts/helvetiker_regular.typeface.json",
+          to: 'fonts/'
+        },
       ],
     }),
   ],

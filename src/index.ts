@@ -6,7 +6,7 @@ steal from https://shlegeris.com/2017/01/06/hash-maps.html
 */
 
 import * as THREE from "three";
-import { AddEquation, InstancedBufferAttribute } from "three";
+import { AddEquation, InstancedBufferAttribute, MeshPhongMaterial } from "three";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 var vertexShader = require('./cube_vertex.glsl');
@@ -115,7 +115,7 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
     // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
     const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
     const stridef = (stride / 4)|0;
-    const tris = 12;  // 6 faces * 2 tris each -- 28B * 6 * 2 * 3 = 1008B each!
+    const tris = 6;  // 3 faces * 2 tris each (we flip based on camera)
     const cubeBuffer = new ArrayBuffer(stride * tris * 3);
 
     // the following typed arrays share the same buffer
@@ -204,12 +204,9 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
     BRU.set(1, 1, 0);
 
     // Note: "front face" is CCW
-    addQuad(FLD, FRD, FRU, FLU, 0);  // F
-    addQuad(FLD, FLU, BLU, BLD, 2);  // L
-    addQuad(BLU, BRU, BRD, BLD, 4);  // B
-    addQuad(BRD, BRU, FRU, FRD, 6);  // R
-    addQuad(FLU, FRU, BRU, BLU, 8);  // U
-    addQuad(BRD, FRD, FLD, BLD, 10); // D
+    addQuad(FLD, FRD, FRU, FLU, 0);  // F+B
+    addQuad(FLD, FLU, BLU, BLD, 2);  // L+R
+    addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
 
     const attr = new Uint32Array(cubes * CUBE_ATTRIB_STRIDE);
     console.log("cube attr buf is", Math.round(attr.byteLength / 1024 / 1024), "MiB");
@@ -258,7 +255,9 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
 
     geometry.computeBoundingSphere();
 
-    const tex = new THREE.TextureLoader().load(PROD ? 'textures/atlas.png' : 'textures/debug.png');
+    const tex = new THREE.TextureLoader().load(PROD ? 'textures/atlas.png' : 'textures/debug.png',
+        () => render(),
+    );
     tex.magFilter = THREE.NearestFilter;
     tex.flipY = true;
 
@@ -269,7 +268,7 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
         },
         vertexShader,
         fragmentShader,
-        side: THREE.FrontSide,
+        side: THREE.DoubleSide,
         transparent: true
     });
 
@@ -296,6 +295,27 @@ scene.add(cubes);
 var dLight = new THREE.DirectionalLight('#fff', 1);
 dLight.position.set(-10, 15, 20);
 var aLight = new THREE.AmbientLight('#111');
+
+if (true) {
+    const loader = new THREE.FontLoader();
+    loader.load('fonts/helvetiker_regular.typeface.json', function (font) {
+        let materials = [
+            new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }), // front
+            new THREE.MeshPhongMaterial({ color: 0xffffff }) // side
+        ];
+        for (let pos of [[10, 10, 10], [10, 10, -10], [10, -10, -10]]) {
+            const geometry = new THREE.TextGeometry("" + pos, {
+                font: font,
+                size: 2,
+                height: .1,
+                curveSegments: 12,
+            });
+            let mesh = new THREE.Mesh(geometry, materials)
+            mesh.position.set(pos[0], pos[1], pos[2]);
+            scene.add(mesh);
+        }
+    });
+}
 
 scene.add(dLight);
 scene.add(aLight);
