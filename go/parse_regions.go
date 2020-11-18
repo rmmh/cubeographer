@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math"
@@ -31,6 +33,7 @@ const (
 	tagList
 	tagCompound
 	tagIntArray
+	tagLongArray
 )
 
 type nbtList struct {
@@ -111,6 +114,10 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 			len := binary.BigEndian.Uint32(buf[o:])
 			cb(jpath, ty, buf[o+4:o+4+int(len)*4])
 			o += 4 + int(len)*4
+		case tagLongArray:
+			len := binary.BigEndian.Uint32(buf[o:])
+			cb(jpath, ty, buf[o+4:o+4+int(len)*8])
+			o += 4 + int(len)*8
 		case tagList:
 			lty := nbtType(buf[o])
 			len := int(binary.BigEndian.Uint32(buf[o+1:]))
@@ -180,7 +187,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	sort.Slice(seqChunks[:], func(i, j int) bool {
 		return offsets[seqChunks[i]] < offsets[seqChunks[j]]
 	})
-	fmt.Println(dir, file.Name(), seqChunks[:32])
+
+	fmt.Printf("%s %s ", dir, file.Name())
 
 	chunkBuf := make([]byte, 4096*maxSectors)
 
@@ -250,19 +258,14 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 			log.Println("sections out of order somehow?", ys)
 			continue
 		}
-		//fmt.Println(len(blocks), ys)
 		cdata[chunkNum] = chunkDatum{blocks, lights, lightsSky}
 		if err != nil {
 			return err
 		}
-		//fmt.Println(chunkNum, chunkLen, len(chunk), chunk[:50])
-		if false {
-			fmt.Println(chunkNum, chunkLen, len(chunk))
-		}
 	}
 
 	get := func(x, y, z int) byte {
-		if (x|y|z)&256 != 0 {
+		if (x|y|z)&512 != 0 {
 			return 0
 		}
 		chunk := cdata[(x>>4)+(z>>4)*32]
@@ -273,38 +276,71 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		return chunk.blocks[ys][x&15+(z&15)*16+(y&15)*256]
 	}
 
+	neighs := func(x, y, z int) []byte {
+		return []byte{
+			get(x-1, y, z), get(x+1, y, z),
+			get(x, y-1, z), get(x, y+1, z),
+			get(x, y, z-1), get(x, y, z+1)}
+	}
+
 	out, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cmt", 1)))
 	if err != nil {
 		log.Println("unable to open dest file")
 		return err
+	}
+	defer out.Close()
+	outBuf := bufio.NewWriterSize(out, 1<<20)
+	defer outBuf.Flush()
+
+	isTransparent := func(b byte) bool {
+		return b == 0 || b == 8 || b == 9
 	}
 
 	attrBuf := make([]byte, 8)
 	for x := 0; x < 512; x++ {
 		for z := 0; z < 512; z++ {
 			chunk := cdata[(x>>4)+(z>>4)*32]
-			wasAir := true
 			for y := len(chunk.blocks)*16 - 1; y >= 0; y-- {
-				b := chunk.blocks[y>>4][x&15+(z&15)*16+(y&15)*256]
-				shouldWrite := false
+				b := get(x, y, z)
+
+				// 3) water & adjacent to a non-water transparent
+				// 4) transparent & adjacent to a transparent (incl water)
+
 				if b == 0 {
-					wasAir = true
-				} else if wasAir {
-					shouldWrite = true
-					wasAir = false
-				} else if get(x-1, y, z) == 0 || get(x+1, y, z) == 0 ||
-					get(x, y-1, z) == 0 ||
-					get(x, y, z-1) == 0 || get(x+1, y, z+1) == 0 {
-					shouldWrite = true
+					continue
 				}
-				if shouldWrite {
+
+				ns := neighs(x, y, z)
+
+				// Visibility rules:
+				if bytes.IndexByte(ns, 0) >= 0 || // 1) adjacent to a void
+					// 2) non-transparent & adjacent to transparent
+					(!isTransparent(b) && (bytes.IndexByte(ns, 8) >= 0 || bytes.IndexByte(ns, 9) >= 0)) {
+					color := uint32(0xfff)
+					//TODO: make colors biome-based
+					if b == 8 || b == 9 { // water
+						color = 0x33f
+					} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
+						color = 0x374
+					}
+					sideVis := 0
+					for i, nb := range ns {
+						if (b == 8 || b == 9) && nb == 0 {
+							sideVis |= 1 << i
+						} else if isTransparent(nb) {
+							sideVis |= 1 << i
+						}
+					}
 					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<20|y<<10|z))
-					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|0xffffff)
-					out.Write(attrBuf)
+					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|(color<<6)|uint32(sideVis))
+					outBuf.Write(attrBuf)
+					// fmt.Println(x, y, z, b)
 				}
 			}
 		}
 	}
+	offset, err := out.Seek(0, io.SeekEnd)
+	fmt.Println(offset/1024, "KiB")
 
 	return err
 }
@@ -315,12 +351,28 @@ type coord struct {
 
 func main() {
 	regionDir := os.Args[1]
+	filters := []string{}
+	if len(os.Args) >= 4 {
+		filters = os.Args[3:]
+	}
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 	for _, file := range files {
+		if len(filters) > 0 {
+			good := false
+			for _, filter := range filters {
+				if strings.Contains(file.Name(), filter) {
+					good = true
+					break
+				}
+			}
+			if !good {
+				continue
+			}
+		}
 		err = scanRegion(regionDir, os.Args[2], file)
 		if err != nil {
 			log.Fatal(err)

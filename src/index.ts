@@ -6,7 +6,7 @@ steal from https://shlegeris.com/2017/01/06/hash-maps.html
 */
 
 import * as THREE from "three";
-import { AddEquation, InstancedBufferAttribute, MeshPhongMaterial } from "three";
+import { AddEquation, InstancedBufferAttribute, MeshPhongMaterial, Sphere } from "three";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 var vertexShader = require('./cube_vertex.glsl');
@@ -26,7 +26,7 @@ document.body.addEventListener('mouseleave', () => { ONDEMAND = true; });
 document.body.addEventListener('mouseenter', () => { ONDEMAND = false; });
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
 const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
@@ -35,15 +35,19 @@ const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
+renderer.setClearColor('#85a7ff');
+
+// TODO: replace these controls with block-based ones,
+// i.e. rotate around the click target
 let controls = new OrbitControls(camera, renderer.domElement);
 
 //controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
 
 controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
 controls.dampingFactor = 0.05;
-controls.screenSpacePanning = false;
+controls.screenSpacePanning = true;
 controls.minDistance = 1;
-controls.maxDistance = space * 1.2;
+controls.maxDistance = space * 2;
 
 // controls.maxPolarAngle = Math.PI / 2;
 
@@ -110,104 +114,153 @@ function makeGlitter(particles: number): [THREE.Points, THREE.InterleavedBuffer,
 
 const CUBE_ATTRIB_STRIDE = 2;
 
+class CubeFactory {
+    geometry: THREE.BufferGeometry;
+    material: THREE.RawShaderMaterial;;
+
+    constructor() {
+        const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
+        const stridef = (stride / 4) | 0;
+        const tris = 6;  // 3 faces * 2 tris each (we flip based on camera)
+        const cubeBuffer = new ArrayBuffer(stride * tris * 3);
+
+        // the following typed arrays share the same buffer
+        const bf32 = new Float32Array(cubeBuffer);
+        const bu8 = new Uint8Array(cubeBuffer);
+
+        const cb = new THREE.Vector3();
+        const ab = new THREE.Vector3();
+        function addTri(pA: THREE.Vector3, pB: THREE.Vector3, pC: THREE.Vector3, i: number) {
+            // flat face normals
+            cb.subVectors(pC, pB);
+            ab.subVectors(pA, pB);
+            cb.cross(ab);
+            cb.normalize();
+            const nx = cb.x;
+            const ny = cb.y;
+            const nz = cb.z;
+
+            let o = i * stridef * 3;
+            bf32[o++] = pA.x;
+            bf32[o++] = pA.y;
+            bf32[o++] = pA.z;
+            bf32[o++] = nx;
+            bf32[o++] = ny;
+            bf32[o++] = nz;
+            o++;
+            bf32[o++] = pB.x;
+            bf32[o++] = pB.y;
+            bf32[o++] = pB.z;
+            bf32[o++] = nx;
+            bf32[o++] = ny;
+            bf32[o++] = nz;
+            o++;
+            bf32[o++] = pC.x;
+            bf32[o++] = pC.y;
+            bf32[o++] = pC.z;
+            bf32[o++] = nx;
+            bf32[o++] = ny;
+            bf32[o++] = nz;
+            o++;
+
+            o = i * stride * 3 + 24;
+            if (i % 2 == 0) {
+                bu8[o] = 0;
+                bu8[o + 1] = 1;
+                o += stride;
+                bu8[o] = 1;
+                bu8[o + 1] = 1;
+                o += stride;
+                bu8[o] = 1;
+                bu8[o + 1] = 0;
+            } else {
+                bu8[o] = 1;
+                bu8[o + 1] = 0;
+                o += stride;
+                bu8[o] = 0;
+                bu8[o + 1] = 0;
+                o += stride;
+                bu8[o] = 0;
+                bu8[o + 1] = 1;
+            }
+        }
+
+        function addQuad(pA: THREE.Vector3, pB: THREE.Vector3, pC: THREE.Vector3, pD: THREE.Vector3, i: number) {
+            addTri(pA, pB, pC, i);
+            addTri(pC, pD, pA, i + 1);
+        }
+
+        const FLD = new THREE.Vector3(), FLU = new THREE.Vector3(),
+            FRD = new THREE.Vector3(), FRU = new THREE.Vector3(),
+            BLD = new THREE.Vector3(), BLU = new THREE.Vector3(),
+            BRD = new THREE.Vector3(), BRU = new THREE.Vector3();
+
+        // cubes have 8 vertices
+        // OpenGL/Minecraft: +X = East, +Y = Up, +Z = South
+        // Front/Back, Left/Right, Up/Down
+        FLD.set(0, 0, 1);
+        FLU.set(0, 1, 1);
+        FRD.set(1, 0, 1);
+        FRU.set(1, 1, 1);
+        BLD.set(0, 0, 0);
+        BLU.set(0, 1, 0);
+        BRD.set(1, 0, 0);
+        BRU.set(1, 1, 0);
+
+        // Note: "front face" is CCW
+        addQuad(FLD, FRD, FRU, FLU, 0);  // F+B
+        addQuad(FLD, FLU, BLU, BLD, 2);  // L+R
+        addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
+
+        this.geometry = new THREE.BufferGeometry();
+
+        const ibf32 = new THREE.InterleavedBuffer(bf32, stridef);
+        const ibu8 = new THREE.InterleavedBuffer(bu8, stride);
+
+        this.geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ibf32, 3, 0, false));
+        this.geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ibf32, 4, 3, false));
+        this.geometry.setAttribute('uv', new THREE.InterleavedBufferAttribute(ibu8, 2, 24, false));
+
+        const tex = new THREE.TextureLoader().load(PROD ? 'textures/atlas.png' : 'textures/debug.png',
+            () => render(),
+        );
+        tex.magFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.NearestFilter;
+        tex.flipY = true;
+
+        this.material = new THREE.RawShaderMaterial({
+            uniforms: {
+                atlas: { value: tex },
+                space: { value: space },
+            },
+            vertexShader,
+            fragmentShader,
+            side: THREE.DoubleSide,
+            transparent: true
+        });;
+    }
+
+    make(attr: Uint32Array): [THREE.Mesh, InstancedBufferAttribute] {
+        const geometry = this.geometry.clone();
+        const mat = this.material.clone();
+        mat.uniforms = {...this.material.uniforms};
+        const attrBuf = new THREE.InstancedBufferAttribute(attr, CUBE_ATTRIB_STRIDE);
+        geometry.setAttribute('attr', attrBuf);
+        const mesh = new THREE.InstancedMesh(geometry, mat, 0);
+        // InstancedMesh by default has instanceMatrix (16 floats per instance),
+        // creating it with 0 and then fudging the count lets us use our own attributes.
+        mesh.count = attr.length / CUBE_ATTRIB_STRIDE;
+        return [mesh, attrBuf];
+    }
+}
+
+const cubeFactory = new CubeFactory();
+
 function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
-    // vec3 pos, normal, 24bit color => 6 * 4 + 3 + 1 (pad) => 28B
-    // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
-    const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
-    const stridef = (stride / 4)|0;
-    const tris = 6;  // 3 faces * 2 tris each (we flip based on camera)
-    const cubeBuffer = new ArrayBuffer(stride * tris * 3);
-
-    // the following typed arrays share the same buffer
-    const bf32 = new Float32Array(cubeBuffer);
-    const bu8 = new Uint8Array(cubeBuffer);
-
     const n = space;	// cubes spread in the cube
 
-    const cb = new THREE.Vector3();
-    const ab = new THREE.Vector3();
-    function addTri(pA: THREE.Vector3, pB: THREE.Vector3, pC: THREE.Vector3, i: number) {
-        // flat face normals
-        cb.subVectors(pC, pB);
-        ab.subVectors(pA, pB);
-        cb.cross(ab);
-        cb.normalize();
-        const nx = cb.x;
-        const ny = cb.y;
-        const nz = cb.z;
-
-        let o = i * stridef * 3;
-        bf32[o++] = pA.x;
-        bf32[o++] = pA.y;
-        bf32[o++] = pA.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
-        o++;
-        bf32[o++] = pB.x;
-        bf32[o++] = pB.y;
-        bf32[o++] = pB.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
-        o++;
-        bf32[o++] = pC.x;
-        bf32[o++] = pC.y;
-        bf32[o++] = pC.z;
-        bf32[o++] = nx;
-        bf32[o++] = ny;
-        bf32[o++] = nz;
-        o++;
-
-        o = i * stride * 3 + 24;
-        if (i % 2 == 0) {
-            bu8[o] = 0;
-            bu8[o + 1] = 1;
-            o += stride;
-            bu8[o] = 1;
-            bu8[o + 1] = 1;
-            o += stride;
-            bu8[o] = 1;
-            bu8[o + 1] = 0;
-        } else {
-            bu8[o] = 1;
-            bu8[o + 1] = 0;
-            o += stride;
-            bu8[o] = 0;
-            bu8[o + 1] = 0;
-            o += stride;
-            bu8[o] = 0;
-            bu8[o + 1] = 1;
-        }
-    }
-
-    function addQuad(pA: THREE.Vector3, pB: THREE.Vector3, pC: THREE.Vector3, pD: THREE.Vector3, i: number) {
-        addTri(pA, pB, pC, i);
-        addTri(pC, pD, pA, i + 1);
-    }
-
-    const FLD = new THREE.Vector3(), FLU = new THREE.Vector3(),
-        FRD = new THREE.Vector3(), FRU = new THREE.Vector3(),
-        BLD = new THREE.Vector3(), BLU = new THREE.Vector3(),
-        BRD = new THREE.Vector3(), BRU = new THREE.Vector3();
-
-    // cubes have 8 vertices
-    // OpenGL/Minecraft: +X = East, +Y = Up, +Z = South
-    // Front/Back, Left/Right, Up/Down
-    FLD.set(0, 0, 1);
-    FLU.set(0, 1, 1);
-    FRD.set(1, 0, 1);
-    FRU.set(1, 1, 1);
-    BLD.set(0, 0, 0);
-    BLU.set(0, 1, 0);
-    BRD.set(1, 0, 0);
-    BRU.set(1, 1, 0);
-
-    // Note: "front face" is CCW
-    addQuad(FLD, FRD, FRU, FLU, 0);  // F+B
-    addQuad(FLD, FLU, BLU, BLD, 2);  // L+R
-    addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
-
+    // vec3 pos, normal, 24bit color => 6 * 4 + 3 + 1 (pad) => 28B
+    // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
     const attr = new Uint32Array(cubes * CUBE_ATTRIB_STRIDE);
     console.log("cube attr buf is", Math.round(attr.byteLength / 1024 / 1024), "MiB");
 
@@ -242,59 +295,24 @@ function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
         attr[j*2] = t1, attr[j*2+1] = t2;
     }
 
-    const geometry = new THREE.BufferGeometry();
-
-    const ibf32 = new THREE.InterleavedBuffer(bf32, stridef);
-    const ibu8 = new THREE.InterleavedBuffer(bu8, stride);
-    const attrBuf = new THREE.InstancedBufferAttribute(attr, CUBE_ATTRIB_STRIDE);
-
-    geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(ibf32, 3, 0, false));
-    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(ibf32, 4, 3, false));
-    geometry.setAttribute('uv', new THREE.InterleavedBufferAttribute(ibu8, 2, 24, false));
-    geometry.setAttribute('attr', attrBuf);
-
-    geometry.computeBoundingSphere();
-
-    const tex = new THREE.TextureLoader().load(PROD ? 'textures/atlas.png' : 'textures/debug.png',
-        () => render(),
-    );
-    tex.magFilter = THREE.NearestFilter;
-    tex.flipY = true;
-
-    const material: THREE.Material = new THREE.RawShaderMaterial({
-        uniforms: {
-            atlas: {value: tex},
-            space: {value: space},
-        },
-        vertexShader,
-        fragmentShader,
-        side: THREE.DoubleSide,
-        transparent: true
-    });
-
-    const mesh = new THREE.InstancedMesh(geometry, material, 0);
-    // InstancedMesh by default has instanceMatrix (16 floats per instance),
-    // creating it with 0 and then fudging the count lets us use our own attributes.
-    mesh.count = cubes;
-
-    return [mesh, attrBuf];
-
+    return cubeFactory.make(attr);
 }
 
-const geometry = new THREE.BoxGeometry();
-const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-const cube = new THREE.Mesh(geometry, material);
+function makeCube() {
+    const geometry = new THREE.BoxGeometry();
+    const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+    return new THREE.Mesh(geometry, material);
+}
+
+const cube = makeCube();
 scene.add(cube);
 
+/*
 let [glitter, glitterPos, glitterColor] = makeGlitter(glitterCount);
 scene.add(glitter);
 
 let [cubes, cubeAttr] = makeCubes(cubeCount);
 scene.add(cubes);
-
-var dLight = new THREE.DirectionalLight('#fff', 1);
-dLight.position.set(-10, 15, 20);
-var aLight = new THREE.AmbientLight('#111');
 
 if (true) {
     const loader = new THREE.FontLoader();
@@ -303,7 +321,8 @@ if (true) {
             new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }), // front
             new THREE.MeshPhongMaterial({ color: 0xffffff }) // side
         ];
-        for (let pos of [[10, 10, 10], [10, 10, -10], [10, -10, -10]]) {
+        for (let pos of [[10, 10, 10], [10, 10, -10], [10, -10, -10], [10,-10,10],
+                         [-10, 10, 10], [-10, 10, -10], [-10, -10, -10], [-10, -10, 10] ]) {
             const geometry = new THREE.TextGeometry("" + pos, {
                 font: font,
                 size: 2,
@@ -316,6 +335,11 @@ if (true) {
         }
     });
 }
+*/
+
+var dLight = new THREE.DirectionalLight('#fff', 1);
+dLight.position.set(-10, 15, 20);
+var aLight = new THREE.AmbientLight('#111');
 
 scene.add(dLight);
 scene.add(aLight);
@@ -341,6 +365,7 @@ function renderFrame() {
 
     controls.update();
 
+    /*
     if (scene.children.includes(glitter) && glitterPos.array instanceof Float32Array) {
         let paa = glitterPos.array;
         let jitters = new Float32Array(128 + (Math.random() * 50)|0);
@@ -381,6 +406,7 @@ function renderFrame() {
 
     cube.rotation.x += 0.01;
     cube.rotation.y += 0.01;
+    */
 
     renderer.render(scene, camera);
 
@@ -403,26 +429,52 @@ Cubiomes.onRuntimeInitialized = function () {
     Cubiomes._initBiomes();
     let layerStack = Cubiomes._malloc(500);
 }
-
-fetch("map/r.-1.-1.cmt").then(
-    async response => {
-        if (cubeAttr.array instanceof Uint32Array) {
-            console.log("loaded", response.url);
-            let paa = cubeAttr.array;
-
-            cubeAttr.array = new Uint32Array(await response.arrayBuffer());
-
-
-            const attrBuf = new THREE.InstancedBufferAttribute(cubeAttr.array, CUBE_ATTRIB_STRIDE);
-            if (cubes.geometry instanceof THREE.BufferGeometry)
-                cubes.geometry.setAttribute('attr', attrBuf);
-
-            cubeAttr.needsUpdate = true;
-            if (cubes instanceof THREE.InstancedMesh) {
-                cubes.count = cubeAttr.array.length / CUBE_ATTRIB_STRIDE;
-            }
-        }
-    },
-    reason => console.log("rejected", reason)
-)
 */
+
+function fetchRegion(x: number, z: number, xo: number, zo: number) {
+    fetch(`map/r.${x}.${z}.cmt`).then(
+        async response => {
+            if (!response.ok) {
+                return;
+            }
+            console.log("loaded", response.url);
+            const array = new Uint32Array(await response.arrayBuffer());
+
+            let mesh = cubeFactory.make(array)[0];
+            mesh.position.set((x + xo) * 512, 150, (z + zo) * 512);
+            if (mesh.material instanceof THREE.RawShaderMaterial) {
+                mesh.material.uniforms.offset = { value: mesh.position };
+            }
+            // TODO: why is this so imprecise??
+            /*
+            let center = new THREE.Vector3(0, -256, 0);
+            let dist = center.distanceTo(new THREE.Vector3(256,0,256));
+            center.add(mesh.position);
+            mesh.geometry.boundingSphere = new THREE.Sphere(center, dist * 1.75);
+            mesh.frustumCulled = true;
+            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius);
+            let smesh = new THREE.Mesh(sph, new THREE.MeshBasicMaterial({wireframe: true}));
+            smesh.position.add(mesh.geometry.boundingSphere.center);
+            scene.add(smesh);
+            */
+            scene.add(mesh);
+            render();
+        },
+        reason => console.log("rejected", reason)
+    );
+}
+
+// fetchRegion(-1, 0, 1, 0);
+
+if (1)
+    for (let x = -1; x <= 1; x++) {
+        for (let z = -1; z <= -1; z++) {
+            fetchRegion(x, z, -1, 1)
+            // camera.position.set(-200, 1, 250);
+            // camera.lookAt(-250, 0, 250);
+            // controls.center = new THREE.Vector3(-250, 0, 250);
+            break;
+        }
+    }
+
+// */
