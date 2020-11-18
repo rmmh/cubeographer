@@ -18,8 +18,6 @@ let ONDEMAND = true;
 
 let PROD = 1;
 
-const glitterCount = PROD ? 1e6 : 1e4;
-const cubeCount = PROD ? 512 * 512 * 2 : 1024;
 const space = PROD ? 512 : 64;
 
 document.body.addEventListener('mouseleave', () => { ONDEMAND = true; });
@@ -40,16 +38,10 @@ renderer.setClearColor('#85a7ff');
 // TODO: replace these controls with block-based ones,
 // i.e. rotate around the click target
 let controls = new OrbitControls(camera, renderer.domElement);
-
-//controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
-
-controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
-controls.dampingFactor = 0.05;
+controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
 controls.screenSpacePanning = true;
 controls.minDistance = 1;
 controls.maxDistance = space * 2;
-
-// controls.maxPolarAngle = Math.PI / 2;
 
 window.addEventListener('resize', onWindowResize, false);
 function onWindowResize() {
@@ -57,59 +49,6 @@ function onWindowResize() {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     if (ONDEMAND) render();
-}
-
-function makeGlitter(particles: number): [THREE.Points, THREE.InterleavedBuffer, THREE.InterleavedBuffer] {
-    const geometry = new THREE.BufferGeometry();
-
-    // create a generic buffer of binary data (a single particle has 16 bytes of data)
-
-    const arrayBuffer = new ArrayBuffer(particles * 16);
-
-    // the following typed arrays share the same buffer
-
-    const interleavedFloat32Buffer = new Float32Array(arrayBuffer);
-    const interleavedUint8Buffer = new Uint8Array(arrayBuffer);
-
-    const color = new THREE.Color();
-
-    const n = space, n2 = n / 2; // particles spread in the cube
-
-    for (let i = 0; i < interleavedFloat32Buffer.length; i += 4) {
-        // position (first 12 bytes)
-        const x = Math.random() * n - n2;
-        const y = Math.random() * n - n2;
-        const z = Math.random() * n - n2;
-
-        interleavedFloat32Buffer[i + 0] = x;
-        interleavedFloat32Buffer[i + 1] = y;
-        interleavedFloat32Buffer[i + 2] = z;
-
-        // color (last 4 bytes)
-
-        const vx = (x / n) + 0.5;
-        const vy = (y / n) + 0.5;
-        const vz = (z / n) + 0.5;
-
-        color.setRGB(vx, vy, vz);
-
-        const j = (i + 3) * 4;
-
-        interleavedUint8Buffer[j + 0] = color.r * 255;
-        interleavedUint8Buffer[j + 1] = color.g * 255;
-        interleavedUint8Buffer[j + 2] = color.b * 255;
-        interleavedUint8Buffer[j + 3] = 0; // not needed
-    }
-
-    const interleavedBuffer32 = new THREE.InterleavedBuffer(interleavedFloat32Buffer, 4);
-    const interleavedBuffer8 = new THREE.InterleavedBuffer(interleavedUint8Buffer, 16);
-
-    geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(interleavedBuffer32, 3, 0, false));
-    geometry.setAttribute('color', new THREE.InterleavedBufferAttribute(interleavedBuffer8, 3, 12, true));
-
-    const material = new THREE.PointsMaterial({ size: .3, vertexColors: true });
-
-    return [new THREE.Points(geometry, material), interleavedBuffer32, interleavedBuffer8];
 }
 
 const CUBE_ATTRIB_STRIDE = 2;
@@ -208,8 +147,8 @@ class CubeFactory {
         BRU.set(1, 1, 0);
 
         // Note: "front face" is CCW
-        addQuad(FLD, FRD, FRU, FLU, 0);  // F+B
-        addQuad(FLD, FLU, BLU, BLD, 2);  // L+R
+        addQuad(FLD, FLU, BLU, BLD, 0);  // L+R
+        addQuad(FLD, FRD, FRU, FLU, 2);  // F+B
         addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
 
         this.geometry = new THREE.BufferGeometry();
@@ -240,7 +179,7 @@ class CubeFactory {
         });;
     }
 
-    make(attr: Uint32Array): [THREE.Mesh, InstancedBufferAttribute] {
+    make(attr: Uint32Array): [THREE.InstancedMesh, InstancedBufferAttribute] {
         const geometry = this.geometry.clone();
         const mat = this.material.clone();
         mat.uniforms = {...this.material.uniforms};
@@ -256,48 +195,6 @@ class CubeFactory {
 
 const cubeFactory = new CubeFactory();
 
-function makeCubes(cubes: number): [THREE.Mesh, InstancedBufferAttribute] {
-    const n = space;	// cubes spread in the cube
-
-    // vec3 pos, normal, 24bit color => 6 * 4 + 3 + 1 (pad) => 28B
-    // TODO: rewrite vertex shader to unpack 1B normals, 3B position => 8B each?
-    const attr = new Uint32Array(cubes * CUBE_ATTRIB_STRIDE);
-    console.log("cube attr buf is", Math.round(attr.byteLength / 1024 / 1024), "MiB");
-
-    for (let i = 0; i < cubes; i++) {
-        // positions
-        let x = (Math.random() * n) | 0;
-        let y = (Math.random() * n) | 0;
-        let z = (Math.random() * n) | 0;
-
-        // colors
-        let r = ((x / n) * 255) | 0, g = ((y / n) * 255) | 0, b = ((z / n) * 255) | 0;
-
-        if (i < space * space) {
-            x = i % space;
-            z = i / space;
-            y = space / 2 - 10 + Math.sin(x / 30) * 5 + Math.sin(z / 40) * 5;
-            //r = ((x / n) * 255) | 0, g = ((y / n) * 255) | 0, b = ((z / n) * 255) | 0;
-            //g = Math.min(255, g + 60);
-            r = g = b = 255;
-        }
-
-        let o = i * CUBE_ATTRIB_STRIDE;
-        attr[o] = (x << 20) | (y << 10) | z;
-        attr[o+1] = ((Math.random() * 255) << 24) | (r << 16) | (g << 8) | b;
-    }
-
-    // shuffle attrs
-    for (let i = attr.length / 2; i > 0;) {
-        let j = Math.floor(Math.random() * i--);
-        let t1 = attr[i*2], t2 = attr[i*2+1];
-        attr[i*2] = attr[j*2], attr[i*2+1] = attr[j*2+1];
-        attr[j*2] = t1, attr[j*2+1] = t2;
-    }
-
-    return cubeFactory.make(attr);
-}
-
 function makeCube() {
     const geometry = new THREE.BoxGeometry();
     const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
@@ -307,14 +204,7 @@ function makeCube() {
 const cube = makeCube();
 scene.add(cube);
 
-/*
-let [glitter, glitterPos, glitterColor] = makeGlitter(glitterCount);
-scene.add(glitter);
-
-let [cubes, cubeAttr] = makeCubes(cubeCount);
-scene.add(cubes);
-
-if (true) {
+if (false) {
     const loader = new THREE.FontLoader();
     loader.load('fonts/helvetiker_regular.typeface.json', function (font) {
         let materials = [
@@ -335,7 +225,6 @@ if (true) {
         }
     });
 }
-*/
 
 var dLight = new THREE.DirectionalLight('#fff', 1);
 dLight.position.set(-10, 15, 20);
@@ -344,7 +233,7 @@ var aLight = new THREE.AmbientLight('#111');
 scene.add(dLight);
 scene.add(aLight);
 
-camera.position.set(1, 1, 5);  // face northish
+camera.position.set(10, 10, 50);  // face northish
 camera.lookAt(0, 0, 0);
 
 let willRender = false;
@@ -365,71 +254,16 @@ function renderFrame() {
 
     controls.update();
 
-    /*
-    if (scene.children.includes(glitter) && glitterPos.array instanceof Float32Array) {
-        let paa = glitterPos.array;
-        let jitters = new Float32Array(128 + (Math.random() * 50)|0);
-        for (let i = 0; i < jitters.length; i++) {
-            jitters[i] = (Math.random() - 0.5) * 1;
-        }
-        const count = 10000;
-        const offset = (Math.random() * (paa.length - count))|0;
-        for (let i = offset; i < offset + count; i++) {
-            if (i % 4 == 3) { i++; }
-            paa[i] += jitters[i % jitters.length];
-        }
-        glitterPos.needsUpdate = true;
-        glitterPos.updateRange = {offset, count};
-    }
-
-    if (scene.children.includes(cubes) && cubeAttr.array instanceof Uint32Array) {
-        let paa = cubeAttr.array;
-        let jitters = new Int8Array(1 << ((2 + Math.random() * 7) | 0));
-        const jmask = jitters.length - 1;
-        for (let i = 0; i < jitters.length; i++) {
-            jitters[i] = ((Math.random() - 0.5) * 2.5)|0;
-        }
-        const count = 5000;
-        const cs = CUBE_ATTRIB_STRIDE;
-        const offset = cs * ((Math.random() * (paa.length/(cs) - count)) | 0);
-        for (let i = offset; i < offset + count * cs; i += cs) {
-            let x = paa[i] >> 20, y = (paa[i] >> 10) & 1023, z = paa[i] & 1023;
-            x = Math.max(0, x + jitters[i & jmask]);
-            y = Math.max(0, y + jitters[(i + 1) & jmask]);
-            z = Math.max(0, z + jitters[(i + 2) & jmask]);
-            paa[i] = (x&1023)<<20 | (y&1023) << 10 | (z&1023);
-        }
-
-        cubeAttr.needsUpdate = true;
-        cubeAttr.updateRange = { offset, count: count * cs };
-    }
-
-    cube.rotation.x += 0.01;
-    cube.rotation.y += 0.01;
-    */
-
     renderer.render(scene, camera);
 
     stats.end();
 };
 
 render();
-controls.addEventListener('change', render);
 
-/*
-declare namespace Cubiomes {
-    function _initBiomes(): void;
-    function _malloc(bytes: number): number;
-
-    function onRuntimeInitialized(): void;
+function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-Cubiomes.onRuntimeInitialized = function () {
-    console.log("cubiomes intialized");
-    Cubiomes._initBiomes();
-    let layerStack = Cubiomes._malloc(500);
-}
-*/
 
 function fetchRegion(x: number, z: number, xo: number, zo: number) {
     fetch(`map/r.${x}.${z}.cmt`).then(
@@ -437,44 +271,66 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
             if (!response.ok) {
                 return;
             }
-            console.log("loaded", response.url);
-            const array = new Uint32Array(await response.arrayBuffer());
+            const size = response.headers.get("Content-Length");
+            let array: Uint32Array;
+            if (size) {
+                array = new Uint32Array(+size / Uint32Array.BYTES_PER_ELEMENT);
+            } else {
+                array = new Uint32Array(await response.arrayBuffer());
+            }
+            console.log(size ? "streaming" : "loaded", response.url, (array.length / 1024) | 0, "KiB");
 
-            let mesh = cubeFactory.make(array)[0];
+            let [mesh, attrArr] = cubeFactory.make(array);
             mesh.position.set((x + xo) * 512, 150, (z + zo) * 512);
             if (mesh.material instanceof THREE.RawShaderMaterial) {
                 mesh.material.uniforms.offset = { value: mesh.position };
             }
             // TODO: why is this so imprecise??
             /*
-            let center = new THREE.Vector3(0, -256, 0);
-            let dist = center.distanceTo(new THREE.Vector3(256,0,256));
-            center.add(mesh.position);
-            mesh.geometry.boundingSphere = new THREE.Sphere(center, dist * 1.75);
+            let center = new THREE.Vector3(-128, -256, -128);
+            let dist = center.distanceTo(new THREE.Vector3(128,128,128));
+            mesh.geometry.boundingSphere = new THREE.Sphere(center, dist);
             mesh.frustumCulled = true;
-            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius);
+            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius, 20, 20);
             let smesh = new THREE.Mesh(sph, new THREE.MeshBasicMaterial({wireframe: true}));
-            smesh.position.add(mesh.geometry.boundingSphere.center);
+            smesh.position.add(center);
+            smesh.position.add(mesh.position);
             scene.add(smesh);
             */
             scene.add(mesh);
-            render();
+
+
+            if (size) {
+                let byteArray = new Uint8Array(array.buffer);
+                const reader = response.body.getReader();
+                let offset = 0;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    byteArray.set(value, offset);
+                    attrArr.needsUpdate = true;
+                    offset += value.length;
+                    mesh.count = offset / array.BYTES_PER_ELEMENT;
+                    render();
+                }
+                console.log("done streaming", response.url);
+            } else {
+                render();
+            }
+
         },
         reason => console.log("rejected", reason)
     );
 }
 
-// fetchRegion(-1, 0, 1, 0);
+// interesting coords:
+// Novigrad: [0, 2, 2, 3, -1.5, -2.8]
 
-if (1)
-    for (let x = -1; x <= 1; x++) {
-        for (let z = -1; z <= -1; z++) {
-            fetchRegion(x, z, -1, 1)
-            // camera.position.set(-200, 1, 250);
-            // camera.lookAt(-250, 0, 250);
-            // controls.center = new THREE.Vector3(-250, 0, 250);
-            break;
-        }
+for (let x = 0; x <= 2; x++) {
+    for (let z = 2; z <= 3; z++) {
+        fetchRegion(x, z, -1.5, -2.8)
+        // camera.position.set(-200, 1, 250);
+        // camera.lookAt(-250, 0, 250);
+        // controls.center = new THREE.Vector3(-250, 0, 250);
     }
-
-// */
+}

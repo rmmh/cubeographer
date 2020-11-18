@@ -265,6 +265,9 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	}
 
 	get := func(x, y, z int) byte {
+		if y < 0 {
+			return 7 // bedrock
+		}
 		if (x|y|z)&512 != 0 {
 			return 0
 		}
@@ -277,10 +280,12 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	}
 
 	neighs := func(x, y, z int) []byte {
+		// NOTE: the order of this return value is critical
+		// for the vertex shader to reject hidden faces
 		return []byte{
 			get(x-1, y, z), get(x+1, y, z),
-			get(x, y-1, z), get(x, y+1, z),
-			get(x, y, z-1), get(x, y, z+1)}
+			get(x, y, z+1), get(x, y, z-1),
+			get(x, y+1, z), get(x, y-1, z)}
 	}
 
 	out, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cmt", 1)))
@@ -292,19 +297,27 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	outBuf := bufio.NewWriterSize(out, 1<<20)
 	defer outBuf.Flush()
 
-	isTransparent := func(b byte) bool {
-		return b == 0 || b == 8 || b == 9
+	isSolid := func(b byte) bool {
+		// instead of trying to track every transparent block, keep a list of *known* solid blocks
+		// this data was stolen from Overviewer
+		return [...]uint64{
+			2811352310602264766, 9079609371303151104, 11389998976731682, 11529215046034675456,
+		}[b>>6]&(1<<(b&63)) != 0
 	}
 
 	attrBuf := make([]byte, 8)
-	for x := 0; x < 512; x++ {
-		for z := 0; z < 512; z++ {
-			chunk := cdata[(x>>4)+(z>>4)*32]
-			for y := len(chunk.blocks)*16 - 1; y >= 0; y-- {
-				b := get(x, y, z)
 
-				// 3) water & adjacent to a non-water transparent
-				// 4) transparent & adjacent to a transparent (incl water)
+	// iterate bottom-to-top so that transparecy (i.e. ocean water)
+	// has a chance to render the bottom THEN the surface
+	for y := 0; y <= 256; y++ {
+		for x := 0; x < 512; x++ {
+			for z := 0; z < 512; z++ {
+				chunk := cdata[(x>>4)+(z>>4)*32]
+				if len(chunk.blocks) < y>>4 {
+					continue
+				}
+
+				b := get(x, y, z)
 
 				if b == 0 {
 					continue
@@ -312,24 +325,24 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 
 				ns := neighs(x, y, z)
 
-				// Visibility rules:
-				if bytes.IndexByte(ns, 0) >= 0 || // 1) adjacent to a void
-					// 2) non-transparent & adjacent to transparent
-					(!isTransparent(b) && (bytes.IndexByte(ns, 8) >= 0 || bytes.IndexByte(ns, 9) >= 0)) {
+				sideVis := 0
+				for i, nb := range ns {
+					if b == 8 || b == 9 {
+						if nb == 0 || (nb != 8 && nb != 9 && !isSolid(nb)) {
+							sideVis |= 1 << i
+						}
+					} else if !isSolid(nb) {
+						sideVis |= 1 << i
+					}
+				}
+
+				if sideVis != 0 {
 					color := uint32(0xfff)
 					//TODO: make colors biome-based
 					if b == 8 || b == 9 { // water
 						color = 0x33f
 					} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
 						color = 0x374
-					}
-					sideVis := 0
-					for i, nb := range ns {
-						if (b == 8 || b == 9) && nb == 0 {
-							sideVis |= 1 << i
-						} else if isTransparent(nb) {
-							sideVis |= 1 << i
-						}
 					}
 					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<20|y<<10|z))
 					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|(color<<6)|uint32(sideVis))
