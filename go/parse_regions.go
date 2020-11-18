@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,56 +151,85 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 	return nil
 }
 
-func scanRegion(dir string, outdir string, file os.FileInfo) error {
-	f, err := os.Open(path.Join(dir, file.Name()))
+type region struct {
+	path       string
+	offsets    [1024]uint32
+	timestamps [1024]uint32
+}
+
+func makeRegion(path string) (*region, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	defer f.Close()
+
+	r := &region{path: path}
+
 	var buf [4096]uint8
-	var offsets [1024]uint32
-	var timestamps [4096]uint8
 	_, err = f.Read(buf[:])
 	if err != nil {
-		return err
+		return nil, err
 	}
+	for i := 0; i < 1024; i++ {
+		r.offsets[i] = binary.BigEndian.Uint32(buf[i*4:])
+	}
+
+	_, err = f.Read(buf[:])
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < 1024; i++ {
+		r.timestamps[i] = binary.BigEndian.Uint32(buf[i*4:])
+	}
+
+	return r, nil
+}
+
+func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
+	var cdata [1024]chunkDatum
+
+	f, err := os.Open(r.path)
+	if err != nil {
+		return cdata, err
+	}
+	defer f.Close()
 
 	maxSectors := 0 // size of largest chunk in region
-	for i := 0; i < 1024; i++ {
-		offsets[i] = binary.BigEndian.Uint32(buf[i*4:])
-		if int(offsets[i]&255) > maxSectors {
-			maxSectors = int(offsets[i] & 255)
+	for _, offset := range r.offsets {
+		if int(offset&255) > maxSectors {
+			maxSectors = int(offset & 255)
 		}
-	}
-
-	_, err = f.Read(timestamps[:])
-	if err != nil {
-		return err
 	}
 
 	// read the region file in sequential order, by first sorting
 	// a list of chunks indexes according to their offset in the region file
 	seqChunks := make([]uint16, 0, 1024)
-	for i := 0; i < 1024; i++ {
-		if offsets[i] != 0 {
-			seqChunks = append(seqChunks, uint16(i))
+	if len(wanted) > 0 {
+		for _, i := range wanted {
+			if r.offsets[i] != 0 {
+				seqChunks = append(seqChunks, uint16(i))
+			}
+		}
+	} else {
+		for i := 0; i < 1024; i++ {
+			if r.offsets[i] != 0 {
+				seqChunks = append(seqChunks, uint16(i))
+			}
 		}
 	}
 	sort.Slice(seqChunks[:], func(i, j int) bool {
-		return offsets[seqChunks[i]] < offsets[seqChunks[j]]
+		return r.offsets[seqChunks[i]] < r.offsets[seqChunks[j]]
 	})
-
-	fmt.Printf("%s %s ", dir, file.Name())
 
 	chunkBuf := make([]byte, 4096*maxSectors)
 
-	var cdata [1024]chunkDatum
-
 	for _, chunkNum := range seqChunks {
-		f.Seek(int64(offsets[chunkNum]>>8)*4096, os.SEEK_SET)
-		paddedLen := 4096 * int(offsets[chunkNum]&0xff)
+		f.Seek(int64(r.offsets[chunkNum]>>8)*4096, os.SEEK_SET)
+		paddedLen := 4096 * int(r.offsets[chunkNum]&0xff)
 		_, err = f.Read(chunkBuf[:paddedLen])
 		if err != nil {
-			return err
+			return cdata, err
 		}
 		chunkLen := int(binary.BigEndian.Uint32(chunkBuf))
 		if chunkLen > paddedLen {
@@ -214,11 +244,11 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		}
 		zr, err := zlib.NewReader(bytes.NewReader(chunkBuf[5 : chunkLen+4]))
 		if err != nil {
-			return err
+			return cdata, err
 		}
 		chunk, err := ioutil.ReadAll(zr)
 		if err != nil {
-			return err
+			return cdata, err
 		}
 		blocks := [][]byte{}
 		lights := [][]byte{}
@@ -260,18 +290,83 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		}
 		cdata[chunkNum] = chunkDatum{blocks, lights, lightsSky}
 		if err != nil {
-			return err
+			return cdata, err
 		}
 	}
+
+	return cdata, nil
+}
+
+func scanRegion(dir string, outdir string, file os.FileInfo) error {
+	r, err := makeRegion(path.Join(dir, file.Name()))
+	if err != nil {
+		return err
+	}
+
+	var rx, rz int
+	regionMatch := regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`).FindStringSubmatch(file.Name())
+	if regionMatch != nil {
+		rx, _ = strconv.Atoi(regionMatch[1])
+		rz, _ = strconv.Atoi(regionMatch[2])
+	}
+
+	fmt.Printf("%s %s ", dir, file.Name())
+
+	cdata, err := r.readChunks(nil)
+	if err != nil {
+		return err
+	}
+
+	cadj := map[uint][1024]chunkDatum{}
 
 	get := func(x, y, z int) byte {
 		if y < 0 {
 			return 7 // bedrock
 		}
-		if (x|y|z)&512 != 0 {
-			return 0
+		var chunk chunkDatum
+		if (x|z)&512 != 0 {
+			key := (uint(x>>9)&3)<<2 | uint(z>>9)&3
+			if _, ok := cadj[key]; !ok {
+				ox := rx
+				oz := rz
+				wanted := make([]int, 0, 32)
+				if x < 0 {
+					ox--
+					for i := 0; i < 32; i++ {
+						wanted = append(wanted, 31+i*32)
+					}
+				} else if x >= 512 {
+					ox++
+					for i := 0; i < 32; i++ {
+						wanted = append(wanted, i*32)
+					}
+				} else if z < 0 {
+					oz--
+					for i := 0; i < 32; i++ {
+						wanted = append(wanted, i+31*32)
+					}
+				} else if z >= 512 {
+					oz++
+					for i := 0; i < 32; i++ {
+						wanted = append(wanted, i)
+					}
+				}
+				ap := path.Join(dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
+				r, err := makeRegion(ap)
+				if err != nil {
+					cadj[key] = [1024]chunkDatum{}
+					return 0
+				}
+				cadj[key], err = r.readChunks(wanted)
+				if err != nil {
+					cadj[key] = [1024]chunkDatum{}
+					return 0
+				}
+			}
+			chunk = cadj[key][((x&511)>>4)+((z&511)>>4)*32]
+		} else {
+			chunk = cdata[(x>>4)+(z>>4)*32]
 		}
-		chunk := cdata[(x>>4)+(z>>4)*32]
 		ys := y >> 4
 		if ys >= len(chunk.blocks) {
 			return 0
