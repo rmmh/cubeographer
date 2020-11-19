@@ -144,7 +144,7 @@ class CubeFactory {
         BRU.set(1, 1, 0);
 
         // Note: "front face" is CCW
-        addQuad(FLD, FLU, BLU, BLD, 0);  // L+R
+        addQuad(BLD, FLD, FLU, BLU, 0);  // L+R
         addQuad(FLD, FRD, FRU, FLU, 2);  // F+B
         addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
 

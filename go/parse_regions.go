@@ -642,18 +642,24 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					if b == 8 || b == 9 { // water
 						color = 0x36e
 					} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
-						color = 0x6B4
+						color = 0x6C4
 					} else if b == 106 { // vines
 						color = 0x5b6
 					}
-					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<20|y<<10|z))
-					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|(color<<6)|uint32(sideVis))
+					// extra rendering bits
+					// 0: use sprite+256 for sides
+					meta := uint32(0)
+					if b == 2 || b == 17 || b == 46 || b == 47 || b == 24 {
+						meta = 1 // special side
+					}
+					// x: 9b z: 9b y: 8b   9+9+8=26b
+					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<18|z<<8|y))
+					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|color<<12|meta<<6|uint32(sideVis))
 					if b == 8 || b == 9 || b == 79 || b == 174 /* ice */ {
 						transBuf.Write(attrBuf)
 					} else {
 						outBuf.Write(attrBuf)
 					}
-					// fmt.Println(x, y, z, b)
 				}
 			}
 		}
