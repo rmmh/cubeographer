@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"math/bits"
 	"os"
 	"path"
 	"regexp"
@@ -297,6 +298,185 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 	return cdata, nil
 }
 
+type chunkVis [32 * 32 * (256 / 16)]struct {
+	dirReachable int   // 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
+	dirVisited   int   // which dirReachable states has this been visited with?
+	connected    int64 // 0-5 +y can reach (+y,-y,+x,...), 6-11 -y can reach (+y, -y ...)
+}
+
+type tinybitset struct {
+	// TODO: accelerate by tracking nonzero vals ?
+	vals [4096 / 64]uint64
+}
+
+func (t *tinybitset) set(x int) {
+	t.vals[x>>6] |= 1 << (x & 63)
+}
+
+func (t *tinybitset) clear(x int) {
+	t.vals[x>>6] &^= 1 << (x & 63)
+}
+
+func (t *tinybitset) has(x int) bool {
+	return t.vals[x>>6]&(1<<(x&63)) != 0
+}
+
+func (t *tinybitset) pop() int {
+	for o, v := range t.vals {
+		if v != 0 {
+			off := 63 - bits.LeadingZeros64(v)
+			t.vals[o] ^= 1 << off
+			return o*64 + off
+		}
+	}
+	return -1
+}
+
+func isSolid(b byte) bool {
+	// instead of trying to track every transparent block, keep a list of *known* solid blocks
+	// this data was stolen from Overviewer
+	return [...]uint64{
+		2811352310602264766 | (1 << 11 /* still lava */), 9079609371303151104, 11389998976731682, 11529215046034675456,
+	}[b>>6]&(1<<(b&63)) != 0
+}
+
+func computeConnected(chunklet []byte) int64 {
+	var passable tinybitset
+	for i, b := range chunklet {
+		if !isSolid(b) {
+			passable.set(i)
+		}
+	}
+	var conn int64
+	for cur := passable.pop(); cur != -1; cur = passable.pop() {
+		// layout: x+z*16+y*256
+		faces := 0
+		var todo tinybitset
+		todo.set(cur)
+		for cur = todo.pop(); cur != -1; cur = todo.pop() {
+			passable.clear(cur)
+			// fmt.Println(cur, faces, todo.has(cur), passable.has(cur))
+			if cur < 256 { // -y, i.e. an exit to the negative y face (down)
+				faces |= 1 << 1
+				if passable.has(cur + 256) {
+					todo.set(cur + 256)
+				}
+			} else if cur >= 15*256 { // +y
+				faces |= 1 << 0
+				if passable.has(cur - 256) {
+					todo.set(cur - 256)
+				}
+			} else {
+				if passable.has(cur - 256) {
+					todo.set(cur - 256)
+				}
+				if passable.has(cur + 256) {
+					todo.set(cur + 256)
+				}
+			}
+			if (cur & 0xFF) < 16 { // -z
+				faces |= 1 << 5
+				if passable.has(cur + 16) {
+					todo.set(cur + 16)
+				}
+			} else if (cur & 0xFF) >= 15*16 { // +z
+				faces |= 1 << 4
+				if passable.has(cur - 16) {
+					todo.set(cur - 16)
+				}
+			} else {
+				if passable.has(cur - 16) {
+					todo.set(cur - 16)
+				}
+				if passable.has(cur + 16) {
+					todo.set(cur + 16)
+				}
+			}
+			if (cur & 0xF) == 0 { // -x
+				faces |= 1 << 3
+				if passable.has(cur + 1) {
+					todo.set(cur + 1)
+				}
+			} else if (cur & 0xF) >= 15 { // +x
+				faces |= 1 << 2
+				if passable.has(cur - 1) {
+					todo.set(cur - 1)
+				}
+			} else {
+				if passable.has(cur - 1) {
+					todo.set(cur - 1)
+				}
+				if passable.has(cur + 1) {
+					todo.set(cur + 1)
+				}
+			}
+		}
+		for i := 0; i < 6; i++ {
+			if faces&(1<<i) != 0 {
+				conn |= int64(faces) << (6 * i)
+			}
+		}
+	}
+	return conn
+}
+
+func makeChunkvis(chunks [1024]chunkDatum) *chunkVis {
+	var cv chunkVis
+
+	for cx := 0; cx < 32; cx++ {
+		for cz := 0; cz < 32; cz++ {
+			for ys, chunklet := range chunks[cx+cz*32].blocks {
+				cv[cx+cz*32+ys*1024].connected = computeConnected(chunklet)
+			}
+		}
+	}
+
+	// 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
+	for cx := 0; cx < 32; cx++ {
+		for cz := 0; cz < 32; cz++ {
+			mask := 0b111101 // top chunklet reachable every dir but below
+			chunk := chunks[cx+cz*32]
+			cv[cx+cz*32+(len(chunk.blocks)-1)*1024].dirReachable |= mask
+			if cx == 0 {
+				mask &^= 1 << 2
+			} else if cx == 31 {
+				mask &^= 1 << 3
+			}
+			if cz == 0 {
+				mask &^= 1 << 4
+			} else if cz == 31 {
+				mask &^= 1 << 5
+			}
+			if mask == 0b111101 { // i.e., not on edge
+				continue
+			}
+			for ys := 0; ys < len(chunk.blocks); ys++ {
+				cv[cx+cz*32+ys*1024].dirReachable |= mask // side chunklet reachable every dir
+			}
+		}
+	}
+
+	// this algorithm is vaguely based on https://tomcc.github.io/2014/08/31/visibility-2.html
+	// ...or it would be, but we end up mostly just following straight down, oh well
+	for cx := 0; cx < 32; cx++ {
+		for cz := 0; cz < 32; cz++ {
+			for ys := len(chunks[cx+cz*32].blocks) - 1; ys >= 0; ys-- {
+				ccv := &cv[cx+cz*32+ys*1024]
+				ccv.dirReachable |= 1 << 1
+				if ys > 3 {
+					if ccv.connected&0b000010_000010_000010_000010_000000_000010 == 0 {
+						break
+					}
+				} else if ccv.connected&0b000010 == 0 {
+					break
+				}
+			}
+		}
+	}
+
+	return &cv
+}
+
 func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	r, err := makeRegion(path.Join(dir, file.Name()))
 	if err != nil {
@@ -374,6 +554,17 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		return chunk.blocks[ys][x&15+(z&15)*16+(y&15)*256]
 	}
 
+	getLight := func(x, y, z int) byte {
+		chunk := cdata[(x>>4)+(z>>4)*32]
+		ys := y >> 4
+		if ys >= len(chunk.lights) || ys >= len(chunk.lightsSky) {
+			return 15
+		}
+		o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
+		s := (x & 1) << 4
+		return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
+	}
+
 	neighs := func(x, y, z int) []byte {
 		// NOTE: the order of this return value is critical
 		// for the vertex shader to reject hidden faces
@@ -389,24 +580,38 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		return err
 	}
 	defer out.Close()
-	outBuf := bufio.NewWriterSize(out, 1<<20)
-	defer outBuf.Flush()
-
-	isSolid := func(b byte) bool {
-		// instead of trying to track every transparent block, keep a list of *known* solid blocks
-		// this data was stolen from Overviewer
-		return [...]uint64{
-			2811352310602264766, 9079609371303151104, 11389998976731682, 11529215046034675456,
-		}[b>>6]&(1<<(b&63)) != 0
-	}
-
-	attrBuf := make([]byte, 8)
-
-	// iterate bottom-to-top so that transparecy (i.e. ocean water)
-	// has a chance to render the bottom THEN the surface
-	for y := 0; y <= 256; y++ {
+	getLight(0, 0, 0)
+	// does this 4*4*4 regions have at least one lit block?
+	const lr = 4
+	lit := make([]bool, (256*512*512)/(lr*lr*lr))
+	for y := 0; y < 63; y++ {
 		for x := 0; x < 512; x++ {
 			for z := 0; z < 512; z++ {
+				if getLight(x, y, z) > 0 {
+					lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr] = true
+				}
+			}
+		}
+	}
+
+	chunkVis := makeChunkvis(cdata)
+	outBuf := bufio.NewWriterSize(out, 1<<20)
+	var transBuf bytes.Buffer
+
+	attrBuf := make([]byte, 8)
+	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
+
+	// iterate bottom-to-top so that transparency (i.e. ocean water)
+	// has a chance to render the bottom THEN the surface
+	for y := 0; y < 256; y++ {
+		for x := 0; x < 512; x++ {
+			for z := 0; z < 512; z++ {
+				chunkletVis := chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
+
+				if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
+					continue
+				}
+
 				chunk := cdata[(x>>4)+(z>>4)*32]
 				if len(chunk.blocks) < y>>4 {
 					continue
@@ -435,18 +640,26 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					color := uint32(0xfff)
 					//TODO: make colors biome-based
 					if b == 8 || b == 9 { // water
-						color = 0x33f
+						color = 0x36e
 					} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
-						color = 0x374
+						color = 0x6B4
+					} else if b == 106 { // vines
+						color = 0x5b6
 					}
 					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<20|y<<10|z))
 					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|(color<<6)|uint32(sideVis))
-					outBuf.Write(attrBuf)
+					if b == 8 || b == 9 || b == 79 || b == 174 /* ice */ {
+						transBuf.Write(attrBuf)
+					} else {
+						outBuf.Write(attrBuf)
+					}
 					// fmt.Println(x, y, z, b)
 				}
 			}
 		}
 	}
+	outBuf.Write(transBuf.Bytes())
+	outBuf.Flush()
 	offset, err := out.Seek(0, io.SeekEnd)
 	fmt.Println(offset/1024, "KiB")
 

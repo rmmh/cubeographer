@@ -191,44 +191,6 @@ class CubeFactory {
 
 const cubeFactory = new CubeFactory();
 
-function makeCube() {
-    const geometry = new THREE.BoxGeometry();
-    const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-    return new THREE.Mesh(geometry, material);
-}
-
-const cube = makeCube();
-scene.add(cube);
-
-if (false) {
-    const loader = new THREE.FontLoader();
-    loader.load('fonts/helvetiker_regular.typeface.json', function (font) {
-        let materials = [
-            new THREE.MeshPhongMaterial({ color: 0xffffff, flatShading: true }), // front
-            new THREE.MeshPhongMaterial({ color: 0xffffff }) // side
-        ];
-        for (let pos of [[10, 10, 10], [10, 10, -10], [10, -10, -10], [10,-10,10],
-                         [-10, 10, 10], [-10, 10, -10], [-10, -10, -10], [-10, -10, 10] ]) {
-            const geometry = new THREE.TextGeometry("" + pos, {
-                font: font,
-                size: 2,
-                height: .1,
-                curveSegments: 12,
-            });
-            let mesh = new THREE.Mesh(geometry, materials)
-            mesh.position.set(pos[0], pos[1], pos[2]);
-            scene.add(mesh);
-        }
-    });
-}
-
-var dLight = new THREE.DirectionalLight('#fff', 1);
-dLight.position.set(-10, 15, 20);
-var aLight = new THREE.AmbientLight('#111');
-
-scene.add(dLight);
-scene.add(aLight);
-
 camera.position.set(100, 40, 100);  // face northish
 camera.lookAt(0, 0, 0);
 
@@ -302,7 +264,7 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
                     byteArray.set(value, offset);
                     attrArr.needsUpdate = true;
                     offset += value.length;
-                    mesh.count = offset / array.BYTES_PER_ELEMENT;
+                    mesh.count = Math.floor(offset / (CUBE_ATTRIB_STRIDE * array.BYTES_PER_ELEMENT));
                     render();
                 }
                 console.log("done streaming", response.url);
@@ -316,14 +278,13 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
 }
 
 // interesting coords:
-// Novigrad: [0, 2, 2, 3, -1.5, -2.8]
+// Novigrad: r.{0..3}.{0..3} -1.5, -2.8]
 
-for (let x = 0; x <= 2; x++) {
-    for (let z = 2; z <= 3; z++) {
-        fetchRegion(x, z, -1.5, -2.8)
-        // camera.position.set(-200, 1, 250);
-        // camera.lookAt(-250, 0, 250);
-        // controls.center = new THREE.Vector3(-250, 0, 250);
+fetchRegion(1,1,-1,-1);
+
+if(0)
+for (let x = -2; x <= 1; x++) {
+    for (let z = -2; z <= 1; z++) {
+        fetchRegion(x, z, 0, 0)
     }
 }
-
