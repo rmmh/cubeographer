@@ -6,7 +6,6 @@ uniform mat4 modelViewMatrix; // optional
 uniform mat4 projectionMatrix; // optional
 uniform vec3 cameraPosition;
 uniform vec3 offset;
-uniform int space;
 
 in vec3 position;
 in vec4 color;
@@ -21,7 +20,7 @@ out vec3 vNormal;
 out vec2 vTexCoord;
 
 vec3 unpackPos(uint p) { // 26b pos (9b,8b,9b each) => vec3
-    return vec3(float(p >> 20), float((p >> 10) & 1023u), float(p & 1023u)) - vec3(space/2);
+    return vec3(float(p >> 20), float((p >> 10) & 1023u), float(p & 1023u));
 }
 
 vec3 unpackColor(int p) { //12b => 24b color
@@ -46,5 +45,5 @@ void main()	{
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);
     int block = 1023 - int(attr.y >> 24u);
     // TODO: fix alpha bleeding with mipmaps??
-    vTexCoord = (vec2(float(uv.x), float(uv.y)) * (1.0-2./32.) + vec2(1./32.,1./32.) + vec2(31 - block % 32, block / 32)) / 32.0;
+    vTexCoord = (vec2(float(uv.x), float(uv.y)) * (1.0-2./16.) + vec2(1./16.,1./16.) + vec2(31 - block % 32, block / 32)) / 32.0;
 }

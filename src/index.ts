@@ -6,7 +6,7 @@ steal from https://shlegeris.com/2017/01/06/hash-maps.html
 */
 
 import * as THREE from "three";
-import { AddEquation, InstancedBufferAttribute, MeshPhongMaterial, Sphere } from "three";
+import { InstancedBufferAttribute, Sphere } from "three";
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 var vertexShader = require('./cube_vertex.glsl');
@@ -19,9 +19,6 @@ let ONDEMAND = true;
 let PROD = 1;
 
 const space = PROD ? 512 : 64;
-
-document.body.addEventListener('mouseleave', () => { ONDEMAND = true; });
-document.body.addEventListener('mouseenter', () => { ONDEMAND = false; });
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
@@ -170,7 +167,6 @@ class CubeFactory {
         this.material = new THREE.RawShaderMaterial({
             uniforms: {
                 atlas: { value: tex },
-                space: { value: space },
             },
             vertexShader,
             fragmentShader,
@@ -233,7 +229,7 @@ var aLight = new THREE.AmbientLight('#111');
 scene.add(dLight);
 scene.add(aLight);
 
-camera.position.set(10, 10, 50);  // face northish
+camera.position.set(100, 40, 100);  // face northish
 camera.lookAt(0, 0, 0);
 
 let willRender = false;
@@ -281,24 +277,20 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
             console.log(size ? "streaming" : "loaded", response.url, (array.length / 1024) | 0, "KiB");
 
             let [mesh, attrArr] = cubeFactory.make(array);
-            mesh.position.set((x + xo) * 512, 150, (z + zo) * 512);
+            mesh.position.set((x + xo) * 512, 0, (z + zo) * 512);
             if (mesh.material instanceof THREE.RawShaderMaterial) {
                 mesh.material.uniforms.offset = { value: mesh.position };
             }
-            // TODO: why is this so imprecise??
-            /*
-            let center = new THREE.Vector3(-128, -256, -128);
-            let dist = center.distanceTo(new THREE.Vector3(128,128,128));
+            let center = new THREE.Vector3(256, 128, 256);
+            let dist = center.distanceTo(new THREE.Vector3(0,0,0));
             mesh.geometry.boundingSphere = new THREE.Sphere(center, dist);
             mesh.frustumCulled = true;
-            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius, 20, 20);
+            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius, 10, 10);
             let smesh = new THREE.Mesh(sph, new THREE.MeshBasicMaterial({wireframe: true}));
             smesh.position.add(center);
             smesh.position.add(mesh.position);
-            scene.add(smesh);
-            */
+            // scene.add(smesh);
             scene.add(mesh);
-
 
             if (size) {
                 let byteArray = new Uint8Array(array.buffer);
