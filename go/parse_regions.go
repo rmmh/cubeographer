@@ -15,9 +15,11 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type nbtType int
@@ -490,8 +492,6 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		rz, _ = strconv.Atoi(regionMatch[2])
 	}
 
-	fmt.Printf("%s %s ", dir, file.Name())
-
 	cdata, err := r.readChunks(nil)
 	if err != nil {
 		return err
@@ -667,7 +667,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	outBuf.Write(transBuf.Bytes())
 	outBuf.Flush()
 	offset, err := out.Seek(0, io.SeekEnd)
-	fmt.Println(offset/1024, "KiB")
+
+	fmt.Println(dir, file.Name(), offset/1024, "KiB", lrsize, "B shrunk")
 
 	return err
 }
@@ -678,15 +679,32 @@ type coord struct {
 
 func main() {
 	regionDir := os.Args[1]
+	outDir := os.Args[2]
 	filters := []string{}
 	if len(os.Args) >= 4 {
 		filters = os.Args[3:]
 	}
+
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+
+	work := make(chan os.FileInfo)
+	var wg sync.WaitGroup
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			for file := range work {
+				err = scanRegion(regionDir, outDir, file)
+				if err != nil {
+					log.Fatal(err)
+				}
+				wg.Done()
+			}
+		}()
+	}
+
 	for _, file := range files {
 		if len(filters) > 0 {
 			good := false
@@ -700,9 +718,8 @@ func main() {
 				continue
 			}
 		}
-		err = scanRegion(regionDir, os.Args[2], file)
-		if err != nil {
-			log.Fatal(err)
-		}
+		wg.Add(1)
+		work <- file
 	}
+	wg.Wait()
 }
