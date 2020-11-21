@@ -134,8 +134,10 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 				cb(jpath, -lty, buf[o:o+len*ltyLen])
 				o += len * ltyLen
 			} else if lty == tagCompound {
-				depth++
-				listStack = append(listStack, nbtList{depth: depth, ty: tagCompound, length: len, idx: 0})
+				if len > 0 {
+					depth++
+					listStack = append(listStack, nbtList{depth: depth, ty: tagCompound, length: len, idx: 0})
+				}
 			} else if lty == tagString {
 				// e.g. Level.TileEntities.Items.tag.pages
 				start := o
