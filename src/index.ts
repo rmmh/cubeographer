@@ -30,7 +30,7 @@ const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-renderer.setClearColor('#85a7ff');
+renderer.setClearColor('#7eabff');
 
 // TODO: replace these controls with block-based ones,
 // i.e. rotate around the click target
@@ -48,7 +48,7 @@ function onWindowResize() {
     if (ONDEMAND) render();
 }
 
-const CUBE_ATTRIB_STRIDE = 2;
+const CUBE_ATTRIB_STRIDE = 3;
 
 class CubeFactory {
     geometry: THREE.BufferGeometry;
@@ -161,7 +161,8 @@ class CubeFactory {
             () => render(),
         );
         tex.magFilter = THREE.NearestFilter;
-        tex.minFilter = THREE.NearestFilter;
+        tex.minFilter = THREE.LinearMipMapLinearFilter; // THREE.NearestFilter;
+        tex.anisotropy = 4;
         tex.flipY = true;
 
         this.material = new THREE.RawShaderMaterial({
@@ -171,7 +172,7 @@ class CubeFactory {
             vertexShader,
             fragmentShader,
             side: THREE.DoubleSide,
-            transparent: true
+            transparent: true,
         });;
     }
 
@@ -280,7 +281,21 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
 // interesting coords:
 // Novigrad: r.{0..3}.{0..3} -1.5, -2.8]
 
-fetchRegion(1,1,-1,-1);
+// fetchRegion(1,1,-1,-1);
+
+if (0)
+for (let x = 4; x <= 7; x++) {
+    for (let z = 24; z <= 26; z++) {
+        fetchRegion(x, z, -5, -25)
+    }
+}
+
+for (let x = 0; x <= 3; x++) {
+    for (let z = 0; z <= 3; z++) {
+        fetchRegion(x, z, -1.9, -3.1)
+    }
+}
+
 
 if(0)
 for (let x = -2; x <= 1; x++) {

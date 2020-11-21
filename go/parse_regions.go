@@ -438,8 +438,11 @@ func makeChunkvis(chunks [1024]chunkDatum) *chunkVis {
 	// 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
-			mask := 0b111101 // top chunklet reachable every dir but below
 			chunk := chunks[cx+cz*32]
+			if len(chunk.blocks) == 0 {
+				continue
+			}
+			mask := 0b111101 // top chunklet reachable every dir but below
 			cv[cx+cz*32+(len(chunk.blocks)-1)*1024].dirReachable |= mask
 			if cx == 0 {
 				mask &^= 1 << 2
@@ -501,9 +504,9 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 
 	cadj := map[uint][1024]chunkDatum{}
 
-	get := func(x, y, z int) byte {
+	get := func(x, y, z int) (byte, byte, byte) {
 		if y < 0 {
-			return 7 // bedrock
+			return 7, 0xf, 0 // bedrock
 		}
 		var chunk chunkDatum
 		if (x|z)&512 != 0 {
@@ -537,12 +540,12 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 				r, err := makeRegion(ap)
 				if err != nil {
 					cadj[key] = [1024]chunkDatum{}
-					return 0
+					return 0, 0xf, 0
 				}
 				cadj[key], err = r.readChunks(wanted)
 				if err != nil {
 					cadj[key] = [1024]chunkDatum{}
-					return 0
+					return 0, 0xf, 0
 				}
 			}
 			chunk = cadj[key][((x&511)>>4)+((z&511)>>4)*32]
@@ -551,9 +554,11 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		}
 		ys := y >> 4
 		if ys >= len(chunk.blocks) {
-			return 0
+			return 0, 0, 0xf
 		}
-		return chunk.blocks[ys][x&15+(z&15)*16+(y&15)*256]
+		o := x&15 + (z&15)*16 + (y&15)*256
+		s := (x & 1) << 2
+		return chunk.blocks[ys][o], (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
 	}
 
 	getLight := func(x, y, z int) byte {
@@ -563,22 +568,33 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 			return 15
 		}
 		o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
-		s := (x & 1) << 4
+		s := (x & 1) << 2
 		return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
 	}
 
-	neighs := func(x, y, z int) []byte {
+	neighs := func(x, y, z int) ([]byte, []byte, []byte) {
 		// NOTE: the order of this return value is critical
 		// for the vertex shader to reject hidden faces
-		return []byte{
-			get(x-1, y, z), get(x+1, y, z),
-			get(x, y, z+1), get(x, y, z-1),
-			get(x, y+1, z), get(x, y-1, z)}
+		bs := make([]byte, 6)
+		ls := make([]byte, 6)
+		sl := make([]byte, 6)
+		bs[0], ls[0], sl[0] = get(x-1, y, z)
+		bs[1], ls[1], sl[1] = get(x+1, y, z)
+		bs[2], ls[2], sl[2] = get(x, y, z+1)
+		bs[3], ls[3], sl[3] = get(x, y, z-1)
+		bs[4], ls[4], sl[4] = get(x, y+1, z)
+		bs[5], ls[5], sl[5] = get(x, y-1, z)
+		return bs, ls, sl
 	}
 
 	out, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cmt", 1)))
 	if err != nil {
 		log.Println("unable to open dest file")
+		return err
+	}
+	lout, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cml", 1)))
+	if err != nil {
+		log.Println("unable to open dest lowrez file")
 		return err
 	}
 	defer out.Close()
@@ -599,9 +615,13 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	chunkVis := makeChunkvis(cdata)
 	outBuf := bufio.NewWriterSize(out, 1<<20)
 	var transBuf bytes.Buffer
+	var lowrezBuf bytes.Buffer
 
-	attrBuf := make([]byte, 8)
+	attrBuf := make([]byte, 12)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
+
+	const subScale = 16
+	lowRez := make([]uint64, 512*512*256/(subScale*subScale*subScale))
 
 	// iterate bottom-to-top so that transparency (i.e. ocean water)
 	// has a chance to render the bottom THEN the surface
@@ -611,7 +631,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 				chunkletVis := chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
 
 				if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
-					continue
+					// cavey-elimination
+					// continue
 				}
 
 				chunk := cdata[(x>>4)+(z>>4)*32]
@@ -619,15 +640,16 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					continue
 				}
 
-				b := get(x, y, z)
+				b, bl, bsl := get(x, y, z)
 
 				if b == 0 {
 					continue
 				}
 
-				ns := neighs(x, y, z)
+				ns, nl, nsl := neighs(x, y, z)
 
-				sideVis := 0
+				sideVis := uint32(0)
+				sideLight := uint32(0)
 				for i, nb := range ns {
 					if b == 8 || b == 9 {
 						if nb == 0 || (nb != 8 && nb != 9 && !isSolid(nb)) {
@@ -636,6 +658,15 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					} else if !isSolid(nb) {
 						sideVis |= 1 << i
 					}
+					l := nsl[i]
+					if nl[i] > l {
+						l = nl[i]
+					} else if bl > l {
+						l = bl
+					} else if bsl > l {
+						l = bsl
+					}
+					sideLight |= uint32(l) << (4 * i)
 				}
 
 				if sideVis != 0 {
@@ -656,11 +687,23 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					}
 					// x: 9b z: 9b y: 8b   9+9+8=26b
 					binary.LittleEndian.PutUint32(attrBuf, uint32(x<<18|z<<8|y))
-					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|color<<12|meta<<6|uint32(sideVis))
+					binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|color<<12|meta<<6|sideVis)
+					binary.LittleEndian.PutUint32(attrBuf[8:], sideLight)
 					if b == 8 || b == 9 || b == 79 || b == 174 /* ice */ {
 						transBuf.Write(attrBuf)
 					} else {
 						outBuf.Write(attrBuf)
+					}
+
+					if isSolid(b) || b == 8 || b == 9 {
+						lro := (x / subScale) + (z/subScale)*(512/subScale) + (y/subScale)*(512*512/subScale/subScale)
+						if byte(lowRez[lro]>>24) == b {
+							// lowRez[lro]++
+						} else if lowRez[lro]&0xffffff == 0 {
+							lowRez[lro] = uint64(b)<<24 + uint64(color)<<32 + 1
+						} else {
+							lowRez[lro]--
+						}
 					}
 				}
 			}
@@ -668,6 +711,31 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 	}
 	outBuf.Write(transBuf.Bytes())
 	outBuf.Flush()
+
+	for o, v := range lowRez {
+		if v == 0 {
+			continue
+		}
+		x := subScale * (o & ((512 / subScale) - 1))
+		z := subScale * ((o / (512 / subScale)) & ((512 / subScale) - 1))
+		y := subScale * (o / (512 * 512 / subScale / subScale))
+		b := byte(v >> 24)
+		color := uint32(v >> 32)
+		sideVis := 0b111111
+		meta := uint32(0)
+		binary.LittleEndian.PutUint32(attrBuf, uint32(x<<18|z<<8|y))
+		binary.LittleEndian.PutUint32(attrBuf[4:], uint32(b)<<24|color<<12|meta<<6|uint32(sideVis))
+		lowrezBuf.Write(attrBuf)
+	}
+
+	lrsize := lowrezBuf.Len()
+	binary.LittleEndian.PutUint32(attrBuf, uint32(rx))
+	binary.LittleEndian.PutUint32(attrBuf[4:], uint32(rz))
+	lout.Write(attrBuf[:8])
+	binary.LittleEndian.PutUint32(attrBuf, uint32(lowrezBuf.Len()))
+	lout.Write(attrBuf[:4])
+	lout.Write(lowrezBuf.Bytes())
+
 	offset, err := out.Seek(0, io.SeekEnd)
 
 	fmt.Println(dir, file.Name(), offset/1024, "KiB", lrsize, "B shrunk")

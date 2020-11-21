@@ -2,6 +2,8 @@
 precision mediump float;
 precision highp int;
 
+// #define CUBE_SCALE 16
+
 uniform mat4 modelViewMatrix; // optional
 uniform mat4 projectionMatrix; // optional
 uniform vec3 cameraPosition;
@@ -11,7 +13,7 @@ in vec3 position;
 in vec4 color;
 in vec3 normal;
 in vec2 uv;
-in uvec2 attr;
+in uvec3 attr;
 in uint normb;
 
 out vec3 vPosition;
@@ -40,9 +42,16 @@ void main()	{
         return;
     }
     bool sideSpecial = face < 4 && (attr.y & 64u) == 64u;
-    vColor = sideSpecial ? vec4(1.0) : vec4(unpackColor(int(attr.y)), 1.0);
+    float sideLight = float( (attr.z>>uint(face*4))&0xFu)/15.0 * 0.7 + 0.3;
+    vColor = sideSpecial ? vec4(sideLight, sideLight, sideLight, 1.0) : vec4(unpackColor(int(attr.y)) * vec3(sideLight), 1.0);
     // if (face >= 2)vColor = vec4(1,shouldDiscard(face, attr.y),0,1);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4((shouldFlip ? vec3(1) - position : position) + unpackedPos, 1.0 );
+#ifdef CUBE_SCALE
+    gl_Position = projectionMatrix * modelViewMatrix *
+        vec4((shouldFlip ? vec3(1) - position : position) * vec3(CUBE_SCALE) + unpackedPos, 1.0 );
+#else
+    gl_Position = projectionMatrix * modelViewMatrix *
+        vec4((shouldFlip ? vec3(1) - position : position) + unpackedPos, 1.0 );
+#endif
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);
     int block = 1023 - (int(attr.y >> 24u) + (sideSpecial ? 256 : 0));
     // TODO: fix alpha bleeding with mipmaps??
