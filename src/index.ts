@@ -48,7 +48,7 @@ function onWindowResize() {
     if (ONDEMAND) render();
 }
 
-const CUBE_ATTRIB_STRIDE = 3;
+const CUBE_ATTRIB_STRIDE = 2;
 
 class CubeFactory {
     geometry: THREE.BufferGeometry;
@@ -224,27 +224,57 @@ function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function fetchRegion(x: number, z: number, xo: number, zo: number) {
-    fetch(`map/r.${x}.${z}.cmt`).then(
+async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): AsyncIterator<Uint8Array, Uint8Array> {
+    const reader = stream.getReader();
+
+    // assumption: the header is in the first chunk returned here
+    {
+        const { done, value } = await reader.read();
+        yield value.slice(0, 16);
+        yield value.slice(16);
+    }
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            return;
+        }
+        yield value;
+    }
+}
+
+function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) {
+    const controller = new AbortController();
+    const { signal } = controller;
+    fetch(`map/r.${x}.${z}.${off}.cmt`, { signal }).then(
         async response => {
             if (!response.ok) {
                 return;
             }
-            const size = response.headers.get("Content-Length");
-            let array: Uint32Array;
-            if (size) {
-                array = new Uint32Array(+size / Uint32Array.BYTES_PER_ELEMENT);
-            } else {
-                array = new Uint32Array(await response.arrayBuffer());
+
+            const stream = asyncIterableFromStream(response.body);
+            const header = (await stream.next()).value;
+            const magic = new TextDecoder("utf-8").decode(header.slice(0, 8));
+            if (magic != "COMTE00\n") {
+                console.error(`invalid comte data file (expected magic "COMTE00\\n", got "${magic}"`);
+                controller.abort();
+                return;
             }
-            console.log(size ? "streaming" : "loaded", response.url, (array.length / 1024) | 0, "KiB");
+            const sectionLengths = new Uint32Array(header.slice(8).buffer);
+            let length = 0;
+            for (const sectionLength of sectionLengths) {
+                length += sectionLength;
+            }
+
+            let array = new Uint32Array(length / Uint32Array.BYTES_PER_ELEMENT);
+            console.log("streaming", response.url, (array.length / 1024) | 0, "KiB");
 
             let [mesh, attrArr] = cubeFactory.make(array);
-            mesh.position.set((x + xo) * 512, 0, (z + zo) * 512);
+            mesh.position.set((x + xo) * 512 + (off&1) * 256, 0, (z + zo) * 512 + (off&2) * 128);
             if (mesh.material instanceof THREE.RawShaderMaterial) {
                 mesh.material.uniforms.offset = { value: mesh.position };
             }
-            let center = new THREE.Vector3(256, 128, 256);
+            // TODO: center this more conservatively based on observed y-height?
+            let center = new THREE.Vector3(128, 128, 128);
             let dist = center.distanceTo(new THREE.Vector3(0,0,0));
             mesh.geometry.boundingSphere = new THREE.Sphere(center, dist);
             mesh.frustumCulled = true;
@@ -255,24 +285,18 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
             // scene.add(smesh);
             scene.add(mesh);
 
-            if (size) {
-                let byteArray = new Uint8Array(array.buffer);
-                const reader = response.body.getReader();
-                let offset = 0;
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    byteArray.set(value, offset);
-                    attrArr.needsUpdate = true;
-                    offset += value.length;
-                    mesh.count = Math.floor(offset / (CUBE_ATTRIB_STRIDE * array.BYTES_PER_ELEMENT));
-                    render();
-                }
-                console.log("done streaming", response.url);
-            } else {
+            let byteArray = new Uint8Array(array.buffer);
+            let offset = 0;
+            while (true) {
+                let { value, done } = await stream.next();
+                if (done) break;
+                byteArray.set(value, offset);
+                attrArr.needsUpdate = true;
+                offset += value.length;
+                mesh.count = Math.floor(offset / (CUBE_ATTRIB_STRIDE * array.BYTES_PER_ELEMENT));
                 render();
             }
-
+            console.log("done streaming", response.url);
         },
         reason => console.log("rejected", reason)
     );
@@ -286,13 +310,15 @@ function fetchRegion(x: number, z: number, xo: number, zo: number) {
 if (0)
 for (let x = 4; x <= 7; x++) {
     for (let z = 24; z <= 26; z++) {
-        fetchRegion(x, z, -5, -25)
+        for (let o = 0; o < 4; o++)
+            fetchRegion(x, z, o, -5, -25)
     }
 }
 
 for (let x = 0; x <= 3; x++) {
     for (let z = 0; z <= 3; z++) {
-        fetchRegion(x, z, -1.9, -3.1)
+        for (let o = 0; o < 4; o++)
+            fetchRegion(x, z, o, -1.9, -3.1)
     }
 }
 
@@ -300,6 +326,7 @@ for (let x = 0; x <= 3; x++) {
 if(0)
 for (let x = -2; x <= 1; x++) {
     for (let z = -2; z <= 1; z++) {
-        fetchRegion(x, z, 0, 0)
+        for (let o = 0; o < 4; o++)
+            fetchRegion(x, z, o, 0, 0)
     }
 }
