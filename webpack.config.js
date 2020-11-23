@@ -3,6 +3,7 @@ const path = require('path');
 
 module.exports = {
   entry: './src/index.ts',
+  devtool: 'source-map',
   module: {
     rules: [
       {
@@ -28,10 +29,6 @@ module.exports = {
     new CopyPlugin({
       patterns: [
         { from: "./src/index.html" },
-        {
-          from: "./node_modules/three/examples/fonts/helvetiker_regular.typeface.json",
-          to: 'fonts/'
-        },
       ],
     }),
   ],

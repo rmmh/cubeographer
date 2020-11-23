@@ -65,7 +65,7 @@ void main()	{
 #endif
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);
     // TODO: fix alpha bleeding with mipmaps??
-    int block = 1023 - (blockId + (sideSpecial ? 256 : 0));
+    int block = (blockId + (sideSpecial ? 256 : 0));
     vec2 primCoord = vec2(float(uv.x), float(uv.y)) * (1.0-2./16.) + vec2(1./16.,1./16.);
-    vTexCoord = ((shouldFlip ?  primCoord : vec2(1) - primCoord) + vec2(31 - block % 32, block / 32)) / 32.0;
+    vTexCoord = ((shouldFlip ?  primCoord : vec2(1) - primCoord) + vec2(block % 32, block / 32)) / 32.0;
 }
