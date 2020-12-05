@@ -5,4 +5,4 @@ dist/textures/atlas.png: extract_textures_from_overviewer.py
 	montage $(shell python3 extract_textures_from_overviewer.py textures/minecraft) -background none -geometry 16x16+0+0 -crop 16x16+0+0 -tile 32x32 dist/textures/atlas.png
 
 dist/map/r.0.0.cmt: go/parse_regions.go
-	go run go/parse_regions.go maps/salc1/region/ dist/map
+	go run ./go/ maps/Novigrad/region/ dist/map r.0. r.1 r.2 r.3
