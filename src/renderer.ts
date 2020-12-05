@@ -210,20 +210,13 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<I
     // * sort meshes
     // * frustum cull meshes
     let init = 1;
+    var activeProgram: WebGLProgram
     for (const mesh of scene) {
         let mat = mesh.material;
 
-        gl.useProgram(mat.program);
-
-        // TODO: modelViewMatrix & projectionMatrix?
-        var matrix = mat4.translate(mat4.create(), camera.getView(), mesh.position);
-
-        if (mat.uniformSetters.modelViewMatrix)
-            mat.uniformSetters.modelViewMatrix(matrix);
-        if (mat.uniformSetters.offset)
-            mat.uniformSetters.offset(mesh.position);
-
-        if (init) {
+        if (mat.program != activeProgram) {
+            activeProgram = mat.program;
+            gl.useProgram(mat.program);
             mat.uniformSetters.projectionMatrix(projectionMatrix);
             if (mat.uniformSetters.cameraPosition)
                 mat.uniformSetters.cameraPosition(camera.position);
@@ -231,10 +224,16 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<I
             for (const [key, value] of Object.entries(mesh.geometry.attributes)) {
                 mat.attribSetters[key](value);
             }
-            init = 0;
         } else {
             mat.attribSetters.attr(mesh.geometry.attributes.attr);
         }
+        if (mat.uniformSetters.offset)
+            mat.uniformSetters.offset(mesh.position);
+
+        // TODO: modelViewMatrix & projectionMatrix?
+        var matrix = mat4.translate(mat4.create(), camera.getView(), mesh.position);
+        if (mat.uniformSetters.modelViewMatrix)
+            mat.uniformSetters.modelViewMatrix(matrix);
 
         gl.drawArraysInstanced(
             gl.TRIANGLES,

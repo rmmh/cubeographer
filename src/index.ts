@@ -296,6 +296,14 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
 
 // fetchRegion(1,1,0,-1.2,-1.2);
 
+for (let x = 1; x <= 2; x++) {
+    for (let z = 1; z <= 2; z++) {
+        for (let o = 0; o < 4; o++)
+            fetchRegion(x, z, o, -1.9, -3.1)
+    }
+}
+
+
 if (0)
 for (let x = 4; x <= 7; x++) {
     for (let z = 24; z <= 26; z++) {
@@ -304,14 +312,13 @@ for (let x = 4; x <= 7; x++) {
     }
 }
 
-if(1)
+if(0)
 for (let x = 0; x <= 3; x++) {
     for (let z = 0; z <= 3; z++) {
         for (let o = 0; o < 4; o++)
             fetchRegion(x, z, o, -1.9, -3.1)
     }
 }
-
 
 if(0)
 for (let x = -2; x <= 1; x++) {

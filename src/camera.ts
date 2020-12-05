@@ -342,27 +342,30 @@ class OrbitControls extends EventDispatcher {
     private rotateUp(angle: number) {
         this.sphericalDelta.phi -= angle;
     }
-    private panLeft = function () {
-        var v = vec3.create();
-        return function (distance: number, objectMatrix: mat4) {
+    private panLeft(distance: number) {
+        let forward = vec3.sub(vec3.create(), this.object.position, this.object.target);
+        let right = vec3.cross(vec3.create(), forward, vec3.fromValues(0, 1, 0));
+        // vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+        vec3.scale(right, right, distance * .5 * vec3.len(forward) / this.domElement.clientWidth);
+        vec3.add(this.panOffset, this.panOffset, right);
+    }
+    private panUp(distance: number) {
+        let forward = vec3.sub(vec3.create(), this.object.position, this.object.target);
+        let right = vec3.cross(vec3.create(), forward, vec3.fromValues(0, 1, 0));
+        // vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
+        let v = vec3.cross(vec3.create(), forward, vec3.normalize(right, right));
+        
+        /*
+        if (this.screenSpacePanning === true) {
+            vec3.set(v, objectMatrix[4], objectMatrix[5], objectMatrix[6]);
+        } else {
             vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-            vec3.scale(v, v, -distance);
-            vec3.add(this.panOffset, this.panOffset, v);
-        };
-    }();
-    private panUp = function () {
-        var v = vec3.create();
-        return function(distance: number, objectMatrix: mat4) {
-            if (this.screenSpacePanning === true) {
-                vec3.set(v, objectMatrix[4], objectMatrix[5], objectMatrix[6]);
-            } else {
-                vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-                vec3.cross(v, v, this.object.up);
-            }
-            vec3.scale(v, v, distance);
-            vec3.add(this.panOffset, this.panOffset, v);
-        };
-    }();
+            vec3.cross(v, v, this.object.up);
+        }
+        */
+        vec3.scale(v, v, -distance * .5 * vec3.len(forward) / this.domElement.clientHeight);
+        vec3.add(this.panOffset, this.panOffset, v);
+    }
     // deltaX and deltaY are in pixels; right and down are positive
     private pan = function () {
         var offset = vec3.create();

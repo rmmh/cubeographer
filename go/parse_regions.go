@@ -51,8 +51,9 @@ type chunkDatum struct {
 }
 
 // a stream-oriented zero-copy nbt parser
-func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
+func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value []byte)) error {
 	path := []string{}
+	idxes := []int{}
 	listStack := []nbtList{}
 	depth := 0
 	var ty nbtType
@@ -60,12 +61,17 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 		if len(listStack) > 0 && listStack[len(listStack)-1].depth == depth {
 			lt := &listStack[len(listStack)-1]
 			lt.idx++
-			if lt.idx == lt.length {
+			if (lt.ty == tagCompound && lt.idx == lt.length) || lt.idx > lt.length {
 				listStack = listStack[:len(listStack)-1]
+				if lt.ty == tagList {
+					depth--
+				}
+				idxes = idxes[:len(listStack)]
 				continue
 			} else {
 				ty = lt.ty
 				path = append(path[:depth], strconv.Itoa(lt.idx-1))
+				idxes = append(idxes[:len(listStack)-1], lt.idx-1)
 			}
 		} else {
 			ty = nbtType(buf[o])
@@ -73,7 +79,7 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 				o++
 				depth--
 				if depth < 0 {
-					return errors.New("unexpected end tag")
+					return fmt.Errorf("unexpected end tag %v, %v", ty, buf[o-1:o+100])
 				}
 				continue
 			}
@@ -83,59 +89,66 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 			o += 3 + tagLen
 		}
 		jpath := strings.Join(path[1:], ".")
+		fmt.Println(jpath, ty, listStack, idxes)
 		switch ty {
 		case tagCompound:
-			cb(jpath, ty, nil)
+			cb(path[1:], idxes, ty, nil)
 			depth++
 		case tagByte:
-			cb(jpath, ty, buf[o:o+1])
+			cb(path[1:], idxes, ty, buf[o:o+1])
 			o++
 		case tagShort:
-			cb(jpath, ty, buf[o:o+2])
+			cb(path[1:], idxes, ty, buf[o:o+2])
 			o += 2
 		case tagInt:
-			cb(jpath, ty, buf[o:o+4])
+			cb(path[1:], idxes, ty, buf[o:o+4])
 			o += 4
 		case tagLong:
-			cb(jpath, ty, buf[o:o+8])
+			cb(path[1:], idxes, ty, buf[o:o+8])
 			o += 8
 		case tagFloat:
-			cb(jpath, ty, buf[o:o+4])
+			cb(path[1:], idxes, ty, buf[o:o+4])
 			o += 4
 		case tagDouble:
-			cb(jpath, ty, buf[o:o+8])
+			cb(path[1:], idxes, ty, buf[o:o+8])
 			o += 8
 		case tagByteArray:
 			len := binary.BigEndian.Uint32(buf[o:])
-			cb(jpath, ty, buf[o+4:o+4+int(len)])
+			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)])
 			o += 4 + int(len)
 		case tagString:
 			len := binary.BigEndian.Uint16(buf[o:])
-			cb(jpath, ty, buf[o+2:o+2+int(len)])
+			cb(path[1:], idxes, ty, buf[o+2:o+2+int(len)])
 			o += 2 + int(len)
 		case tagIntArray:
 			len := binary.BigEndian.Uint32(buf[o:])
-			cb(jpath, ty, buf[o+4:o+4+int(len)*4])
+			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)*4])
 			o += 4 + int(len)*4
 		case tagLongArray:
 			len := binary.BigEndian.Uint32(buf[o:])
-			cb(jpath, ty, buf[o+4:o+4+int(len)*8])
+			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)*8])
 			o += 4 + int(len)*8
 		case tagList:
 			lty := nbtType(buf[o])
 			len := int(binary.BigEndian.Uint32(buf[o+1:]))
+			fmt.Println("list", lty, len)
 			o += 5
 			if lty >= tagByte && lty <= tagDouble {
 				ltyLen := int(lty)
 				if lty > 2 {
 					ltyLen = 4 + 4*int((lty-3)%2)
 				}
-				cb(jpath, -lty, buf[o:o+len*ltyLen])
+				cb(path[1:], idxes, -lty, buf[o:o+len*ltyLen])
 				o += len * ltyLen
 			} else if lty == tagCompound {
 				if len > 0 {
 					depth++
 					listStack = append(listStack, nbtList{depth: depth, ty: tagCompound, length: len, idx: 0})
+				}
+			} else if lty == tagList {
+				if len > 0 {
+					depth++
+					listStack = append(listStack, nbtList{depth: depth, ty: tagList, length: len, idx: 0})
 				}
 			} else if lty == tagString {
 				// e.g. Level.TileEntities.Items.tag.pages
@@ -143,7 +156,7 @@ func nbtWalk(buf []byte, cb func(path string, ty nbtType, value []byte)) error {
 				for i := 0; i < len; i++ {
 					o += int(binary.BigEndian.Uint16(buf[o:])) + 2
 				}
-				cb(jpath, -lty, buf[start:o])
+				cb(path[1:], idxes, -lty, buf[start:o])
 			} else if len > 0 {
 				// TileEntities is length=0 and type=0 when empty?
 				return fmt.Errorf("unhandled TAG_List type: %d at %s (len %d)", lty, jpath, len)
@@ -159,6 +172,11 @@ type region struct {
 	path       string
 	offsets    [1024]uint32
 	timestamps [1024]uint32
+}
+
+type paletteEntry struct {
+	name string
+	props []string
 }
 
 func makeRegion(path string) (*region, error) {
@@ -255,31 +273,48 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			return cdata, err
 		}
 		blocks := [][]byte{}
+		palettes := make([][]paletteEntry, 16)
+		//blockstates := [][]byte{}
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []byte{}
 		xPos, zPos := int(chunkNum&31), int(chunkNum>>5)
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
-		err = nbtWalk(chunk, func(path string, ty nbtType, value []byte) {
+		err = nbtWalk(chunk, func(path []string, idxes []int, ty nbtType, value []byte) {
 			// fmt.Println(path, ty, len(value))
 			if ty == tagByte {
-				if path == "Level.xPos" {
+				if path[1] == "xPos" {
 					chunkXPos = int(value[0])
-				} else if path == "level.zPos" {
+				} else if path[1] == "zPos" {
 					chunkZPos = int(value[0])
 				}
 			}
-			if strings.HasPrefix(path, "Level.Sections.") {
-				if ty == tagByteArray {
-					if strings.HasSuffix(path, "Blocks") {
+			if len(path) > 1 && path[1] == "Sections" {
+				last := path[len(path)-1]
+				// TODO: translate palettes
+				if len(idxes) == 2 && len(path) > 4 && path[3] == "Palette" {
+					cpal := &palettes[idxes[0]]
+					if idxes[1] >= len(*cpal) {
+						*cpal = append(*cpal, paletteEntry{})
+					}
+					entry := &(*cpal)[idxes[1]]
+					if last == "Name" {
+						entry.name = string(value)
+						fmt.Println("PALNAME", path, idxes, string(value))
+					} else if len(path) == 7 && path[5] == "Properties" {
+						entry.props = append(entry.props, last + "=" + string(value))
+						fmt.Println("PALPROP", path, last, idxes, string(value))
+					}
+				} else if ty == tagByteArray {
+					if last == "Blocks" {
 						blocks = append(blocks, value)
-					} else if strings.HasSuffix(path, "BlockLight") {
+					} else if last == "BlockLight" {
 						lights = append(lights, value)
-					} else if strings.HasSuffix(path, "SkyLight") {
+					} else if last == "SkyLight" {
 						lightsSky = append(lightsSky, value)
 					}
-				} else if ty == tagByte && strings.HasSuffix(path, "Y") {
+				} else if ty == tagByte && last == "Y" {
 					ys = append(ys, value[0])
 				}
 			}
@@ -784,6 +819,7 @@ func main() {
 				wg.Done()
 			}
 		}()
+		break
 	}
 
 	for _, file := range files {
