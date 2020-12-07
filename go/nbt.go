@@ -32,10 +32,6 @@ type nbtList struct {
 	idx    int
 }
 
-type chunkDatum struct {
-	blocks, lights, lightsSky [][]byte
-}
-
 // a stream-oriented zero-copy nbt parser
 func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value []byte)) error {
 	path := []string{}

@@ -1,15 +1,16 @@
 package main
 
 import (
-	"io/ioutil"
-	"runtime"
-	"sync"
-	"os"
-	"sort"
-	"log"
-	"strings"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"path"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
 )
 
 func convert(regionDir, outDir string, filters []string) {
@@ -19,19 +20,27 @@ func convert(regionDir, outDir string, filters []string) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 
+	blockmeta, err := ioutil.ReadFile(path.Join(outDir, "..", "blockmeta.json"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	bm, err := loadBlockMapper(blockmeta)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	work := make(chan os.FileInfo)
 	var wg sync.WaitGroup
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go func() {
 			for file := range work {
-				err = scanRegion(regionDir, outDir, file)
+				err = scanRegion(regionDir, outDir, file, bm)
 				if err != nil {
 					log.Fatal(err)
 				}
 				wg.Done()
 			}
 		}()
-		break
 	}
 
 	for _, file := range files {
@@ -55,12 +64,20 @@ func convert(regionDir, outDir string, filters []string) {
 
 func usage() {
 	fmt.Println("usage: prog <regiondir> <outputdir> [filterstrings]")
+	flag.Usage()
 }
 
 func main() {
+	gen := flag.String("gen", "", "generate texture atlas & data files from jar")
 	flag.Parse()
 
 	args := flag.Args()
+
+	if *gen != "" {
+		generate(*gen)
+		return
+	}
+
 	if len(args) > 2 {
 		convert(args[0], args[1], args[2:])
 	} else if len(args) == 2 {

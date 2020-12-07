@@ -193,7 +193,7 @@ function render() {
 }
 
 // setup GLSL program
-let texture = context.loadTexture("textures/atlas.png");
+let texture = context.loadTexture("textures/atlas0.png");
 
 function renderFrame() {
     willRender = false;
@@ -220,8 +220,9 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     // assumption: the header is in the first chunk returned here
     {
         const { done, value } = await reader.read();
-        yield value.slice(0, 16);
-        yield value.slice(16);
+        const headerLen = 8 + 4 * 3;
+        yield value.slice(0, headerLen);
+        yield value.slice(headerLen);
     }
     while (true) {
         const { done, value } = await reader.read();
@@ -256,10 +257,12 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
             }
 
             let array = new Uint32Array(length / Uint32Array.BYTES_PER_ELEMENT);
-            console.debug("streaming", response.url, (array.length / 1024) | 0, "KiB");
+            console.debug("streaming", response.url, (array.length / 1024) | 0, "KiB, sections", Array.from(sectionLengths).toString());
 
             let mesh = cubeFactory.make(array);
             vec3.set(mesh.position, (x + xo) * 512 + (off&1) * 256, 0, (z + zo) * 512 + (off&2) * 128);
+
+            mesh.geometry.layerLengths = sectionLengths
 
             /*
             // TODO: center this more conservatively based on observed y-height?
@@ -299,7 +302,7 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
 for (let x = 1; x <= 2; x++) {
     for (let z = 1; z <= 2; z++) {
         for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, -1.9, -3.1)
+            fetchRegion(x, z, o, -1.9, -2.8)
     }
 }
 

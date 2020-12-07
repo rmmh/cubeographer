@@ -19,6 +19,7 @@ export class Material {
 
 export class Geometry {
     attributes: { [name: string]: webgl_utils.AttribInfo }
+    layerLengths: Uint32Array
 
     constructor(public gl: WebGLRenderingContext, attributes?: { [name: string]: webgl_utils.AttribInfo }) {
         this.attributes = attributes;
@@ -235,11 +236,20 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<I
         if (mat.uniformSetters.modelViewMatrix)
             mat.uniformSetters.modelViewMatrix(matrix);
 
-        gl.drawArraysInstanced(
-            gl.TRIANGLES,
-            0,           // offset
-            3 * 6,       // num vertices per instance
-            mesh.count,  // num instances
-        );
+        if (mesh.geometry.layerLengths) {
+            gl.drawArraysInstanced(
+                gl.TRIANGLES,
+                0,           // offset
+                3 * 6,       // num vertices per instance
+                Math.min(mesh.count, Math.floor(mesh.geometry.layerLengths[0]/8)),  // num instances
+            );
+        } else {
+            gl.drawArraysInstanced(
+                gl.TRIANGLES,
+                0,           // offset
+                3 * 6,       // num vertices per instance
+                mesh.count,  // num instances
+            );
+        }
     }
 }

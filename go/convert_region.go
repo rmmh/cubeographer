@@ -7,27 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
-func isSolid(b byte) bool {
-	// instead of trying to track every transparent block, keep a list of *known* solid blocks
-	// this data was stolen from Overviewer
-	return [...]uint64{
-		2811352310602264766 | (1 << 11 /* still lava */), 9079609371303151104, 11389998976731682, 11529215046034675456,
-	}[b>>6]&(1<<(b&63)) != 0
-}
-
-func scanRegion(dir string, outdir string, file os.FileInfo) error {
+func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) error {
 	if !strings.HasSuffix(file.Name(), ".mca") {
 		return errors.New("file has wrong suffix (not .mca): " + file.Name())
 	}
 
-	r, err := makeRegion(path.Join(dir, file.Name()))
+	r, err := makeRegion(path.Join(dir, file.Name()), bm)
 	if err != nil {
 		return err
 	}
@@ -46,7 +38,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 
 	cadj := map[uint][1024]chunkDatum{}
 
-	get := func(x, y, z int) (byte, byte, byte) {
+	get := func(x, y, z int) (uint16, byte, byte) {
 		if y < 0 {
 			return 7, 0xf, 0 // bedrock
 		}
@@ -79,7 +71,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					}
 				}
 				ap := path.Join(dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
-				r, err := makeRegion(ap)
+				r, err := makeRegion(ap, bm)
 				if err != nil {
 					cadj[key] = [1024]chunkDatum{}
 					return 0, 0xf, 0
@@ -114,10 +106,10 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
 	}
 
-	neighs := func(x, y, z int) ([]byte, []byte, []byte) {
+	neighs := func(x, y, z int) ([]uint16, []byte, []byte) {
 		// NOTE: the order of this return value is critical
 		// for the vertex shader to reject hidden faces
-		bs := make([]byte, 6)
+		bs := make([]uint16, 6)
 		ls := make([]byte, 6)
 		sl := make([]byte, 6)
 		bs[0], ls[0], sl[0] = get(x-1, y, z)
@@ -143,18 +135,20 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		}
 	}
 
-	chunkVis := makeChunkvis(cdata)
+	chunkVis := makeChunkvis(cdata, bm)
 
-	var bufs [4][2]bytes.Buffer
+	var bufs [4][numRenderLayers]bytes.Buffer
 
 	buf := make([]byte, 12)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
 
 	const subScale = 16
-	lowRez := make([]uint64, 512*512*256/(subScale*subScale*subScale))
 
 	// iterate bottom-to-top so that transparency (i.e. ocean water)
 	// has a chance to render the bottom THEN the surface
+
+	waterID := bm.nameToNid["minecraft:water"]
+
 	for y := 0; y < 256; y++ {
 		for x := 0; x < 512; x++ {
 			for z := 0; z < 512; z++ {
@@ -181,11 +175,11 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 				sideVis := uint32(0)
 				sideLight := uint32(0)
 				for i, nb := range ns {
-					if b == 8 || b == 9 {
-						if nb == 0 || (nb != 8 && nb != 9 && !isSolid(nb)) {
+					if b == waterID {
+						if nb == 0 || (nb != 8 && nb != 9 && !bm.isSolid(nb)) {
 							sideVis |= 1 << i
 						}
-					} else if !isSolid(nb) {
+					} else if !bm.isSolid(nb) {
 						sideVis |= 1 << i
 					}
 					l := nsl[i]
@@ -203,39 +197,26 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 					// extra rendering flags
 					// 0: use sprite+256 for sides
 					// 1: tint according to biome colors
-					meta := uint32(0)
-					if b == 2 || b == 17 || b == 46 || b == 47 || b == 24 {
-						meta = 1 // special side
-					}
-					//TODO: make colors biome-based
-					if b == 8 || b == 9 { // water
-						meta |= 2 // color = 0x36e
-					} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
-						meta |= 2 // color = 0x6C4
-					} else if b == 106 { // vines
-						meta |= 2 // color = 0x5b6
-					}
-					// x: 8b z: 8b y: 8b   8+8+8=26b
-					binary.LittleEndian.PutUint32(buf, uint32(b)<<24|uint32((x&255)<<16|(z&255)<<8|y))
-					binary.LittleEndian.PutUint32(buf[4:], meta<<30|sideLight<<6|sideVis)
-					bs := &bufs[x>>8+2*(z>>8)]
-					if b == 8 || b == 9 || b == 79 || b == 174 /* ice */ || !isSolid(b) {
-						bs[1].Write(buf[:8])
-					} else {
-						bs[0].Write(buf[:8])
-					}
-
-					if isSolid(b) || b == 8 || b == 9 {
-						lro := (x / subScale) + (z/subScale)*(512/subScale) + (y/subScale)*(512*512/subScale/subScale)
-						if byte(lowRez[lro]>>24) == b {
-							// lowRez[lro]++
-						} else if lowRez[lro]&0xffffff == 0 {
-							// 4b y (0-255), 9b x (0-4096), 9b z (0-4096)
-							lowRez[lro] = uint64(uint32(b)<<24+meta<<22+uint32(y/subScale)+uint32((rx<<9+x)&4095)<<4+uint32((rz<<9+z)&4095)<<13)<<32 + 1
-						} else {
-							lowRez[lro]--
+					/*
+						meta := uint32(0)
+						if b == 2 || b == 17 || b == 46 || b == 47 || b == 24 {
+							meta = 1 // special side
 						}
-					}
+						//TODO: make colors biome-based
+						if b == waterID { // water
+							meta |= 2 // color = 0x36e
+						} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
+							meta |= 2 // color = 0x6C4
+						} else if b == 106 { // vines
+							meta |= 2 // color = 0x5b6
+						}
+					*/
+					tmpl := bm.tmpl[b]
+					// x: 8b z: 8b y: 8b   8+8+8=26b
+					binary.LittleEndian.PutUint32(buf, tmpl[0]|uint32((x&255)<<16|(z&255)<<8|y))
+					binary.LittleEndian.PutUint32(buf[4:], tmpl[1]|sideLight<<6|sideVis)
+					bs := &bufs[x>>8+2*(z>>8)]
+					bs[bm.layer[b]].Write(buf[:8])
 				}
 			}
 		}
@@ -264,31 +245,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo) error {
 		out.Close()
 	}
 
-	lout, err := os.Create(path.Join(outdir, strings.Replace(path.Base(file.Name()), ".mca", ".cml", 1)))
-	if err != nil {
-		log.Println("unable to open dest lowrez file")
-		return err
-	}
-	defer lout.Close()
-
-	var lowrezBuf bytes.Buffer
-	for _, v := range lowRez {
-		if v == 0 {
-			continue
-		}
-		binary.LittleEndian.PutUint32(buf, uint32(v>>32))
-		lowrezBuf.Write(buf[:4])
-	}
-
-	lrsize := lowrezBuf.Len()
-	binary.LittleEndian.PutUint32(buf, uint32(rx))
-	binary.LittleEndian.PutUint32(buf[4:], uint32(rz))
-	lout.Write(buf[:8])
-	binary.LittleEndian.PutUint32(buf, uint32(lowrezBuf.Len()))
-	lout.Write(buf[:4])
-	lout.Write(lowrezBuf.Bytes())
-
-	fmt.Println(dir, file.Name(), outLen/1024, "KiB", lrsize, "B shrunk")
+	fmt.Println(dir, file.Name(), outLen/1024, "KiB")
 
 	return err
 }

@@ -38,10 +38,10 @@ func (t *tinybitset) pop() int {
 	return -1
 }
 
-func computeConnected(chunklet []byte) int64 {
+func computeConnected(chunklet []uint16, bm *blockMapper) int64 {
 	var passable tinybitset
 	for i, b := range chunklet {
-		if !isSolid(b) {
+		if !bm.isSolid(b) {
 			passable.set(i)
 		}
 	}
@@ -118,13 +118,13 @@ func computeConnected(chunklet []byte) int64 {
 	return conn
 }
 
-func makeChunkvis(chunks [1024]chunkDatum) *chunkVis {
+func makeChunkvis(chunks [1024]chunkDatum, bm *blockMapper) *chunkVis {
 	var cv chunkVis
 
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
 			for ys, chunklet := range chunks[cx+cz*32].blocks {
-				cv[cx+cz*32+ys*1024].connected = computeConnected(chunklet)
+				cv[cx+cz*32+ys*1024].connected = computeConnected(chunklet, bm)
 			}
 		}
 	}

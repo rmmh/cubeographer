@@ -1,36 +1,37 @@
 package main
 
 import (
-	"os"
-	"encoding/binary"
-	"log"
-	"sort"
-	"fmt"
 	"bytes"
-	"io/ioutil"
-	"math"
 	"compress/zlib"
+	"encoding/binary"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"math"
+	"os"
+	"sort"
 )
 
 type region struct {
 	path       string
+	bm         *blockMapper
 	offsets    [1024]uint32
 	timestamps [1024]uint32
 }
 
 type paletteEntry struct {
-	name string
+	name  string
 	props []string
 }
 
-func makeRegion(path string) (*region, error) {
+func makeRegion(path string, bm *blockMapper) (*region, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	r := &region{path: path}
+	r := &region{path: path, bm: bm}
 
 	var buf [4096]uint8
 	_, err = f.Read(buf[:])
@@ -50,6 +51,12 @@ func makeRegion(path string) (*region, error) {
 	}
 
 	return r, nil
+}
+
+type chunkDatum struct {
+	blocks            [][]uint16
+	blockState        [][]uint8
+	lights, lightsSky [][]byte
 }
 
 func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
@@ -117,6 +124,7 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			return cdata, err
 		}
 		blocks := [][]byte{}
+		blockData := [][]byte{}
 		palettes := make([][]paletteEntry, 16)
 		//blockstates := [][]byte{}
 		lights := [][]byte{}
@@ -147,12 +155,14 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 						entry.name = string(value)
 						fmt.Println("PALNAME", path, idxes, string(value))
 					} else if len(path) == 7 && path[5] == "Properties" {
-						entry.props = append(entry.props, last + "=" + string(value))
+						entry.props = append(entry.props, last+"="+string(value))
 						fmt.Println("PALPROP", path, last, idxes, string(value))
 					}
 				} else if ty == tagByteArray {
 					if last == "Blocks" {
 						blocks = append(blocks, value)
+					} else if last == "Data" {
+						blockData = append(blockData, value)
 					} else if last == "BlockLight" {
 						lights = append(lights, value)
 					} else if last == "SkyLight" {
@@ -171,7 +181,23 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			log.Println("sections out of order somehow?", ys)
 			continue
 		}
-		cdata[chunkNum] = chunkDatum{blocks, lights, lightsSky}
+		nblocks := [][]uint16{}
+		if len(blocks) > 0 {
+			if len(blocks) != len(blockData) {
+				panic("blocks/blockData length mismatch in" + r.path)
+			}
+			for bi, bs := range blocks {
+				nb := make([]uint16, 4096)
+				for i, ob := range bs {
+					nb[i] = r.bm.blockstateToNid[uint16(ob)<<4|uint16((blockData[bi][i>>1]>>((i&1)<<2))&0xf)]
+					if nb[i] == 0 {
+						nb[i] = r.bm.blockstateToNid[uint16(ob)<<4]
+					}
+				}
+				nblocks = append(nblocks, nb)
+			}
+		}
+		cdata[chunkNum] = chunkDatum{nblocks, nil, lights, lightsSky}
 		if err != nil {
 			return cdata, err
 		}
