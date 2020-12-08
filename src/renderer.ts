@@ -1,6 +1,7 @@
 import { glMatrix, mat4, quat, vec3, vec4 } from 'gl-matrix';
 
 import * as webgl_utils from "./webgl_utils";
+import { generateMipmaps } from "./downscale";
 
 export class Material {
     gl: WebGLRenderingContext;
@@ -20,9 +21,11 @@ export class Material {
 export class Geometry {
     attributes: { [name: string]: webgl_utils.AttribInfo }
     layerLengths: Uint32Array
+    verts: number
 
     constructor(public gl: WebGLRenderingContext, attributes?: { [name: string]: webgl_utils.AttribInfo }) {
         this.attributes = attributes;
+        this.verts = 3;
     }
 
     clone() {
@@ -58,6 +61,40 @@ export class InstancedMesh {
     }
 }
 
+export class InstancedLayer {
+    constructor(
+        public geometry: Geometry,
+        public material: Material,
+        public texture: WebGLTexture,
+        public name: string,
+    ) {}
+}
+
+export class Chunk {
+    position: vec3
+    layers: { [name: string]: webgl_utils.AttribInfo }
+
+    constructor(public gl: WebGLRenderingContext) {
+        this.position = vec3.create();
+    }
+
+    setLayers(arrays: { [name: string]: any }) {
+        this.layers = webgl_utils.createAttribsFromArrays(this.gl, arrays);
+    }
+
+    addAttribute(name: string, array: any) {
+        Object.assign(this.layers, webgl_utils.createAttribsFromArrays(this.gl, { [name]: array }));
+    }
+
+    updateAttribute(name: string, array: any, offset?: number) {
+        if (!(name in this.layers)) {
+            throw new Error("unknown attribute: " + name);
+        }
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.layers[name].buffer);
+        this.gl.bufferSubData(this.gl.ARRAY_BUFFER, offset || 0, array);
+    }
+}
+
 export class Context {
     canvas: HTMLCanvasElement
     gl: WebGL2RenderingContext
@@ -86,7 +123,11 @@ export class Context {
         return new Geometry(this.gl);
     }
 
-    loadTexture(path: string): WebGLTexture {
+    Chunk(): Chunk {
+        return new Chunk(this.gl);
+    }
+
+    loadTexture(path: string, done?: ()=>void): WebGLTexture {
         function isPowerOf2(value: number) {
             return (value & (value - 1)) === 0;
         }
@@ -107,26 +148,31 @@ export class Context {
             // Now that the image has loaded make copy it to the texture.
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
             // Check if the image is a power of 2 in both dimensions.
             if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
                 // Yes, it's a power of 2. Generate mips.
-                gl.generateMipmap(gl.TEXTURE_2D);
+                // try to prevent texture bleeding by limiting mipmaps to up to 16x reduction.
+                // https://gamedev.stackexchange.com/a/50777
+                generateMipmaps(gl, image, 4);
+                // gl.generateMipmap(gl.TEXTURE_2D);
+                gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 4);
             } else {
-                // No, it's not a power of 2. Turn of mips and set wrapping to clamp to edge
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
             }
-
-            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
             var ext = webgl_utils.getExtensionWithKnownPrefixes(gl, "texture_filter_anisotropic");
             if (ext) {
                 gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, 4);
             }
 
+            done();
         });
         return texture;
     }
@@ -183,7 +229,7 @@ export class PerspectiveCamera implements Camera {
     }
 }
 
-export function render(context: Context, camera: PerspectiveCamera, scene: Set<InstancedMesh>, tex: WebGLTexture) {
+export function render(context: Context, camera: PerspectiveCamera, scene: Set<Chunk>, layers: InstancedLayer[]) {
     const gl = context.gl;
 
     if (!(gl.canvas instanceof HTMLCanvasElement))
@@ -212,45 +258,42 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<I
     // TODO:
     // * sort meshes
     // * frustum cull meshes
-    let init = 1;
     var activeProgram: WebGLProgram
-    for (const mesh of scene) {
-        let mat = mesh.material;
+    for (const layer of layers) {
+        if (!layer) continue;
+        let mat = layer.material;
 
         if (mat.program != activeProgram) {
             activeProgram = mat.program;
             gl.useProgram(mat.program);
             mat.uniformSetters.projectionMatrix(projectionMatrix);
             if (mat.uniformSetters.cameraPosition)
-                mat.uniformSetters.cameraPosition(camera.position);
-            mat.uniformSetters.atlas(tex);
-            for (const [key, value] of Object.entries(mesh.geometry.attributes)) {
+            mat.uniformSetters.cameraPosition(camera.position);
+            mat.uniformSetters.atlas(layer.texture);
+            for (const [key, value] of Object.entries(layer.geometry.attributes)) {
                 mat.attribSetters[key](value);
             }
-        } else {
-            mat.attribSetters.attr(mesh.geometry.attributes.attr);
         }
-        if (mat.uniformSetters.offset)
-            mat.uniformSetters.offset(mesh.position);
 
-        // TODO: modelViewMatrix & projectionMatrix?
-        var matrix = mat4.translate(mat4.create(), camera.getView(), mesh.position);
-        if (mat.uniformSetters.modelViewMatrix)
-            mat.uniformSetters.modelViewMatrix(matrix);
+        for (const chunk of scene) {
+            const chunkLayer = chunk.layers[layer.name];
+            if (!chunkLayer || chunkLayer.size == 0) {
+                continue;
+            }
+            mat.attribSetters.attr(chunkLayer);
+            if (mat.uniformSetters.offset)
+                mat.uniformSetters.offset(chunk.position);
 
-        if (mesh.geometry.layerLengths) {
+            // TODO: modelViewMatrix & projectionMatrix?
+            var matrix = mat4.translate(mat4.create(), camera.getView(), chunk.position);
+            if (mat.uniformSetters.modelViewMatrix)
+                mat.uniformSetters.modelViewMatrix(matrix);
+
             gl.drawArraysInstanced(
                 gl.TRIANGLES,
                 0,           // offset
-                3 * 6,       // num vertices per instance
-                Math.min(mesh.count, Math.floor(mesh.geometry.layerLengths[0]/8)),  // num instances
-            );
-        } else {
-            gl.drawArraysInstanced(
-                gl.TRIANGLES,
-                0,           // offset
-                3 * 6,       // num vertices per instance
-                mesh.count,  // num instances
+                layer.geometry.verts,       // num vertices per instance
+                chunkLayer.size,  // num instances
             );
         }
     }

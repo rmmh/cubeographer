@@ -8,6 +8,8 @@ precision highp int;
 
 // #define CUBE_SCALE 16
 
+//DEFINESBLOCK
+
 uniform mat4 modelViewMatrix; // optional
 uniform mat4 projectionMatrix; // optional
 uniform vec3 cameraPosition;
@@ -33,8 +35,10 @@ vec3 unpackColor(int blockId, uint color) {
     // TODO: read biome color from texture?
     if ((color & (1u << 31)) == 0u)
         return vec3(1.0);
-    if (blockId == 8 || blockId == 9)
+#ifdef WATER_ID
+    if (blockId == WATER_ID)
         return vec3(0.2, 0.4, 0.93);
+#endif
     return vec3(0.4,0.73,0.27);
 }
 
@@ -44,28 +48,35 @@ bool shouldDiscard(int face, uint s) {
 
 void main()	{
     vec3 unpackedPos = unpackPos(attr.x);
+    int blockId = int(attr.x >> 24u);
+#ifdef CROSS
+    float light = float(attr.y&0xFu)/15.0 * 0.7 + 0.3;
+    vColor = vec4(unpackColor(blockId, attr.y) * vec3(light), 1.0);
+    // if (face >= 2)vColor = vec4(1,shouldDiscard(face, attr.y),0,1);
+    bool sideSpecial = false;
+    vNormal = normal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position + unpackedPos, 1.0 );
+#else
     bool shouldFlip = dot(normal, cameraPosition - (unpackedPos + offset)) < 0.0;
     int face = int(gl_VertexID / 6) * 2 + (shouldFlip ? 1 : 0);
     if (shouldDiscard(face, attr.y)) {
         gl_Position = vec4(1e20);
         return;
     }
-    bool sideSpecial = face < 4 && (attr.y & (1u<<30)) != 0u;
-    int blockId = int(attr.x >> 24u);
+    bool sideSpecial = face >= 4 && (attr.y & (1u<<30)) != 0u;
     float sideLight = float( (attr.y>>uint(6+face*4))&0xFu)/15.0 * 0.7 + 0.3;
     vColor = sideSpecial ? vec4(sideLight, sideLight, sideLight, 1.0) :
              vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
-    // if (face >= 2)vColor = vec4(1,shouldDiscard(face, attr.y),0,1);
-#ifdef CUBE_SCALE
-    gl_Position = projectionMatrix * modelViewMatrix *
-        vec4((shouldFlip ? vec3(1) - position : position) * vec3(CUBE_SCALE) + unpackedPos, 1.0 );
-#else
     gl_Position = projectionMatrix * modelViewMatrix *
         vec4((shouldFlip ? vec3(1) - position : position) + unpackedPos, 1.0 );
-#endif
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);
-    // TODO: fix alpha bleeding with mipmaps??
+#endif // CROSS
     int block = (blockId + (sideSpecial ? 256 : 0));
-    vec2 primCoord = vec2(float(uv.x), float(uv.y)) * (1.0-2./16.) + vec2(1./16.,1./16.);
+    vec2 primCoord;
+    primCoord = vec2(float(uv.x), float(uv.y)) * (1.0-1./128.) + vec2(1./256.);
+#ifdef CROSS
+    vTexCoord = (vec2(1) - primCoord + vec2(block % 32, block / 32)) / 32.0;
+#else
     vTexCoord = ((shouldFlip ?  primCoord : vec2(1) - primCoord) + vec2(block % 32, block / 32)) / 32.0;
+#endif
 }
