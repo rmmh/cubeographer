@@ -380,9 +380,9 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
             vec3.set(chunk.position, (x + xo) * 512 + (off&1) * 256, 0, (z + zo) * 512 + (off&2) * 128);
 
             chunk.setLayers({
-                CUBE: { data: new Uint32Array(sectionLengths[0]), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CROSS: { data: new Uint32Array(sectionLengths[1]), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CUBE_FALLBACK: { data: new Uint32Array(sectionLengths[2]), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CUBE: { data: new Uint32Array(sectionLengths[0]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CROSS: { data: new Uint32Array(sectionLengths[1]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CUBE_FALLBACK: { data: new Uint32Array(sectionLengths[2]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
             });
 
             /*
