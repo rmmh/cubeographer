@@ -135,8 +135,6 @@ class OrbitControls extends EventDispatcher {
     autoRotateSpeed = 2.0; // 30 seconds per round when fps is 60
     // Set to false to disable use of the keys
     enableKeys = true;
-    // The four arrow keys
-    keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
     // Mouse buttons
     mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
     // Touch fingers
@@ -170,7 +168,7 @@ class OrbitControls extends EventDispatcher {
         this.domElement.addEventListener('touchstart', this.onTouchStart.bind(this), false);
         this.domElement.addEventListener('touchend', this.onTouchEnd.bind(this), false);
         this.domElement.addEventListener('touchmove', this.onTouchMove.bind(this), false);
-        this.domElement.addEventListener('keydown', this.onKeyDown.bind(this), false);
+        this.domElement.ownerDocument.addEventListener('keydown', this.onKeyDown.bind(this), false);
 
         this.boundPointerMove = this.onPointerMove.bind(this);
         this.boundPointerUp = this.onPointerUp.bind(this);
@@ -282,7 +280,7 @@ class OrbitControls extends EventDispatcher {
         // using small-angle approximation cos(x/2) = 1 - x^2 / 8
         if (this.zoomChanged ||
             vec3.sqrDist(this.lastPosition, this.object.position) > this.EPS ||
-            8 * (1 - quat.dot(this.lastQuaternion, this.object.quaternion)) > this.EPS) {
+            quat.getAngle(this.lastQuaternion, this.object.quaternion) > this.EPS) {
             this.dispatchEvent(this.changeEvent);
             vec3.copy(this.lastPosition, this.object.position);
             quat.copy(this.lastQuaternion, this.object.quaternion);
@@ -302,7 +300,7 @@ class OrbitControls extends EventDispatcher {
         this.domElement.removeEventListener('touchmove', this.onTouchMove, false);
         this.domElement.ownerDocument.removeEventListener('pointermove', this.boundPointerMove, false);
         this.domElement.ownerDocument.removeEventListener('pointerup', this.boundPointerUp, false);
-        this.domElement.removeEventListener('keydown', this.onKeyDown, false);
+        this.domElement.ownerDocument.removeEventListener('keydown', this.onKeyDown, false);
         //this.dispatchEvent( { type: 'dispose' } ); // should this be added here?
     }
 
@@ -469,28 +467,66 @@ class OrbitControls extends EventDispatcher {
         this.update();
     }
     private handleKeyDown(event: KeyboardEvent) {
-        var needsUpdate = false;
-        switch (event.keyCode) {
-            case this.keys.UP:
-                this.pan(0, this.keyPanSpeed);
-                needsUpdate = true;
+        var needsUpdate = true;
+        let dir = vec3.create();
+        let rot = 0;
+        switch (event.code) { // everything that supports WebGL2 supports event.code :)
+            case "KeyR":
+                dir[1] = 1;
                 break;
-            case this.keys.BOTTOM:
-                this.pan(0, - this.keyPanSpeed);
-                needsUpdate = true;
+            case "KeyF":
+                dir[1] = -1;
                 break;
-            case this.keys.LEFT:
-                this.pan(this.keyPanSpeed, 0);
-                needsUpdate = true;
+            case "KeyA":
+            case "ArrowLeft":
+                rot = 1;
                 break;
-            case this.keys.RIGHT:
-                this.pan(- this.keyPanSpeed, 0);
-                needsUpdate = true;
+            case "KeyD":
+            case "ArrowRight":
+                rot = -1;
                 break;
+            case "KeyW":
+            case "ArrowUp":
+                dir[2] = -1;
+                break;
+            case "KeyS":
+            case "ArrowDown":
+                dir[2] = 1;
+                break;
+            case "KeyQ":
+                dir[0] = 1;
+                break;
+            case "KeyE":
+                dir[0] = -1;
+                break;
+            default:
+                needsUpdate = false;
         }
+
+        if (rot !== 0) {
+            let forward = vec3.sub(vec3.create(), this.object.position, this.target);
+            let forwardRot = vec3.rotateY(vec3.create(), forward, vec3.create(), rot * Math.PI / 12);
+            vec3.sub(this.target, this.object.position, forwardRot);
+        }
+
+        if (vec3.length(dir) > 0) {
+            let forward = vec3.sub(vec3.create(), this.object.position, this.object.target);
+            forward[1] = 0;
+            vec3.normalize(forward, forward);
+            let right = vec3.cross(vec3.create(), forward, vec3.fromValues(0, 1, 0));
+
+            let rotDir = vec3.scale(vec3.create(), forward, dir[2]);
+            vec3.scaleAndAdd(rotDir, rotDir, right, dir[0]);
+            rotDir[1] = dir[1];
+
+            vec3.scale(rotDir, rotDir, this.keyPanSpeed);
+
+            vec3.add(this.panOffset, this.panOffset, rotDir);
+        }
+
         if (needsUpdate) {
             // prevent the browser from scrolling on cursor keys
-            event.preventDefault();
+            // if (event.code.startsWith("Arrow")) event.preventDefault();
             this.update();
         }
     }

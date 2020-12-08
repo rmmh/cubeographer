@@ -164,11 +164,13 @@ export class PerspectiveCamera implements Camera {
 
     lookAt(target: vec3) {
         vec3.copy(this.target, target);
+        this.update();
     }
 
     update() {
         mat4.perspective(this.proj, glMatrix.toRadian(this.fov), this.aspect, this.near, this.far);
         mat4.lookAt(this.view, this.position, this.target, vec3.fromValues(0, 1, 0));
+        mat4.getRotation(this.quaternion, this.view);
         // this.matrix.compose(this.position, this.quaternion, this.scale);
     }
 
