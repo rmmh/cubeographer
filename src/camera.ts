@@ -280,7 +280,7 @@ class OrbitControls extends EventDispatcher {
         // using small-angle approximation cos(x/2) = 1 - x^2 / 8
         if (this.zoomChanged ||
             vec3.sqrDist(this.lastPosition, this.object.position) > this.EPS ||
-            quat.getAngle(this.lastQuaternion, this.object.quaternion) > this.EPS) {
+            8 * (1 - quat.dot(this.lastQuaternion, this.object.quaternion)) > this.EPS) {
             this.dispatchEvent(this.changeEvent);
             vec3.copy(this.lastPosition, this.object.position);
             quat.copy(this.lastQuaternion, this.object.quaternion);
