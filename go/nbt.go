@@ -43,11 +43,9 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 		if len(listStack) > 0 && listStack[len(listStack)-1].depth == depth {
 			lt := &listStack[len(listStack)-1]
 			lt.idx++
-			if (lt.ty == tagCompound && lt.idx == lt.length) || lt.idx > lt.length {
+			if lt.idx > lt.length {
 				listStack = listStack[:len(listStack)-1]
-				if lt.ty == tagList {
-					depth--
-				}
+				depth--
 				idxes = idxes[:len(listStack)]
 				continue
 			} else {
@@ -71,7 +69,7 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 			o += 3 + tagLen
 		}
 		jpath := strings.Join(path[1:], ".")
-		// fmt.Println(jpath, ty, listStack, idxes)
+		// fmt.Println(jpath, ty, listStack, depth, idxes)
 		switch ty {
 		case tagCompound:
 			cb(path[1:], idxes, ty, nil)
@@ -131,6 +129,11 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 					depth++
 					listStack = append(listStack, nbtList{depth: depth, ty: tagList, length: len, idx: 0})
 				}
+			} else if lty == tagIntArray {
+				if len > 0 {
+					depth++
+					listStack = append(listStack, nbtList{depth: depth, ty: tagIntArray, length: len, idx: 0})
+				}
 			} else if lty == tagString {
 				// e.g. Level.TileEntities.Items.tag.pages
 				start := o
@@ -145,6 +148,7 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 		default:
 			return fmt.Errorf("unhandled nbt tag type: %d at %s", ty, jpath)
 		}
+
 	}
 	return nil
 }

@@ -125,8 +125,8 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 		}
 		blocks := [][]byte{}
 		blockData := [][]byte{}
-		palettes := make([][]paletteEntry, 16)
-		//blockstates := [][]byte{}
+		blockStates := [][]byte{}
+		palettes := make([][]paletteEntry, 17)
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []byte{}
@@ -144,7 +144,6 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			}
 			if len(path) > 1 && path[1] == "Sections" {
 				last := path[len(path)-1]
-				// TODO: translate palettes
 				if len(idxes) == 2 && len(path) > 4 && path[3] == "Palette" {
 					cpal := &palettes[idxes[0]]
 					if idxes[1] >= len(*cpal) {
@@ -153,10 +152,10 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 					entry := &(*cpal)[idxes[1]]
 					if last == "Name" {
 						entry.name = string(value)
-						fmt.Println("PALNAME", path, idxes, string(value))
+						// fmt.Println("PALNAME", path, idxes, string(value))
 					} else if len(path) == 7 && path[5] == "Properties" {
 						entry.props = append(entry.props, last+"="+string(value))
-						fmt.Println("PALPROP", path, last, idxes, string(value))
+						// fmt.Println("PALPROP", path, last, idxes, string(value))
 					}
 				} else if ty == tagByteArray {
 					if last == "Blocks" {
@@ -168,6 +167,11 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 					} else if last == "SkyLight" {
 						lightsSky = append(lightsSky, value)
 					}
+				} else if ty == tagLongArray {
+					if last == "BlockStates" {
+						blockStates = append(blockStates, value)
+						// fmt.Println("BLOCKSTATES", path, last, idxes, len(value), 8*len(value)/4096)
+					}
 				} else if ty == tagByte && last == "Y" {
 					ys = append(ys, value[0])
 				}
@@ -177,8 +181,12 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			log.Printf("chunk misplaced (corrupt region file?)-- expected %d,%d got %d,%d\n", xPos, zPos, chunkXPos, chunkZPos)
 			continue
 		}
+		if len(ys) > 1 && ys[0] == 255 {
+			ys = ys[1:]
+			palettes = palettes[1:]
+		}
 		if !sort.SliceIsSorted(ys, func(i, j int) bool { return ys[i] < ys[j] }) {
-			log.Println("sections out of order somehow?", ys)
+			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
 			continue
 		}
 		nblocks := [][]uint16{}
@@ -196,6 +204,19 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 				}
 				nblocks = append(nblocks, nb)
 			}
+		} else if len(blockStates) > 0 {
+			for bi, bs := range blockStates {
+				if bi >= len(palettes) {
+					fmt.Println("wtf, a blockstate without an associated palette?")
+					break
+				}
+				// TODO: handle 1.13-1.15 packing
+				vals := blockstatesToShorts116(bs)
+				for i, v := range vals {
+					vals[i] = r.bm.nameToNid[palettes[bi][v].name]
+				}
+				nblocks = append(nblocks, vals)
+			}
 		}
 		cdata[chunkNum] = chunkDatum{nblocks, nil, lights, lightsSky}
 		if err != nil {
@@ -204,4 +225,30 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 	}
 
 	return cdata, nil
+}
+
+// 1.16 64-bit BlockState long array to uint16 array
+func blockstatesToShorts116(value []byte) []uint16 {
+	larr := make([]uint64, len(value)/8)
+	for i, v := range value {
+		larr[i>>3] |= uint64(v) << ((7 - (i & 7)) * 8)
+	}
+	bpb := (64 * len(larr)) / 4096
+	if bpb < 4 {
+		bpb = 4
+	}
+	bmask := uint64(1<<bpb) - 1
+	bpe := 64 / bpb
+	ret := make([]uint16, 4096)
+	for bsi, v := range larr {
+		for i := 0; i < bpe; i++ {
+			index := (v >> (i * bpb)) & bmask
+			nido := bsi*bpe + i
+			if nido >= 4096 {
+				break
+			}
+			ret[nido] = uint16(index)
+		}
+	}
+	return ret
 }

@@ -13,7 +13,7 @@ import (
 	"sync"
 )
 
-func convert(regionDir, outDir string, filters []string) {
+func convert(numProcs int, regionDir, outDir string, filters []string) {
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
@@ -31,7 +31,7 @@ func convert(regionDir, outDir string, filters []string) {
 
 	work := make(chan os.FileInfo)
 	var wg sync.WaitGroup
-	for i := 0; i < runtime.NumCPU(); i++ {
+	for i := 0; i < numProcs; i++ {
 		go func() {
 			for file := range work {
 				err = scanRegion(regionDir, outDir, file, bm)
@@ -69,6 +69,7 @@ func usage() {
 
 func main() {
 	gen := flag.String("gen", "", "generate texture atlas & data files from jar")
+	numProcs := flag.Int("threads", runtime.NumCPU(), "number of parallel threads to use")
 	flag.Parse()
 
 	args := flag.Args()
@@ -79,9 +80,9 @@ func main() {
 	}
 
 	if len(args) > 2 {
-		convert(args[0], args[1], args[2:])
+		convert(*numProcs, args[0], args[1], args[2:])
 	} else if len(args) == 2 {
-		convert(args[0], args[1], nil)
+		convert(*numProcs, args[0], args[1], nil)
 	} else {
 		usage()
 	}

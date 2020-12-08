@@ -92,7 +92,16 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		}
 		o := x&15 + (z&15)*16 + (y&15)*256
 		s := (x & 1) << 2
-		return chunk.blocks[ys][o], (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+		b := chunk.blocks[ys][o]
+		if ys >= len(chunk.lights) {
+			if ys >= len(chunk.lightsSky) {
+				return b, 0xf, 0xf
+			}
+			return b, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+		} else if ys >= len(chunk.lightsSky) {
+			return b, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
+		}
+		return b, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
 	}
 
 	getLight := func(x, y, z int) byte {
@@ -197,22 +206,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 					// extra rendering flags
 					// 0: use sprite+256 for sides
 					// 1: tint according to biome colors
-					/*
-						meta := uint32(0)
-						if b == 2 || b == 17 || b == 46 || b == 47 || b == 24 {
-							meta = 1 // special side
-						}
-						//TODO: make colors biome-based
-						if b == waterID { // water
-							meta |= 2 // color = 0x36e
-						} else if b == 2 || b == 18 || b == 161 { // grass (top) / leaves
-							meta |= 2 // color = 0x6C4
-						} else if b == 106 { // vines
-							meta |= 2 // color = 0x5b6
-						}
-					*/
 					tmpl := bm.tmpl[b]
-					// x: 8b z: 8b y: 8b   8+8+8=26b
+					// x: 8b z: 8b y: 8b   8+8+8=24b
 					binary.LittleEndian.PutUint32(buf, tmpl[0]|uint32((x&255)<<16|(z&255)<<8|y))
 					binary.LittleEndian.PutUint32(buf[4:], tmpl[1]|sideLight<<6|sideVis)
 					bs := &bufs[x>>8+2*(z>>8)]
