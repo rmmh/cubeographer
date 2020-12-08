@@ -187,8 +187,9 @@ type stateConverter struct {
 	columnTops map[string]string
 }
 
-func (s *stateConverter) referencedTextures(st *blockState) []string {
+func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
 	out := []string{}
+	tinted := false
 
 	// fallback: draw ANY texture from ANY sub-model as a cube
 	for _, vs := range st.Variants {
@@ -199,10 +200,26 @@ func (s *stateConverter) referencedTextures(st *blockState) []string {
 					out = append(out, tex)
 				}
 			}
+			for _, el := range model.Elements {
+				for _, face := range el.Faces {
+					if face.TintIndex != nil {
+						tinted = true
+					}
+				}
+			}
 			parent := s.models[removeDefaultPrefix(model.Parent)]
-			if parent != nil && parent.Textures != nil {
-				for _, tex := range model.Textures {
-					out = append(out, tex)
+			if parent != nil {
+				if parent.Textures != nil {
+					for _, tex := range parent.Textures {
+						out = append(out, tex)
+					}
+				}
+				for _, el := range parent.Elements {
+					for _, face := range el.Faces {
+						if face.TintIndex != nil {
+							tinted = true
+						}
+					}
 				}
 			}
 		}
@@ -223,7 +240,7 @@ func (s *stateConverter) referencedTextures(st *blockState) []string {
 			}
 		}
 	}
-	return out
+	return out, tinted
 }
 
 func (s *stateConverter) render(name string, st *blockState) (int, []blockEntry) {
@@ -262,16 +279,28 @@ func (s *stateConverter) render(name string, st *blockState) (int, []blockEntry)
 			fmt.Println("CROSS", name, tex)
 			return 1, []blockEntry{{Name: name, Textures: []string{tex},
 				Template: []uint32{0, 0}}}
+		} else if model.Parent == "minecraft:block/tinted_cross" {
+			tex := model.Textures["cross"]
+			fmt.Println("TINTED_CROSS", name, tex)
+			return 1, []blockEntry{{Name: name, Textures: []string{tex},
+				Template: []uint32{0, 1 << 31}}}
 		}
 		// fmt.Println(name, model)
 	}
 
 	// fallback: draw ANY texture from ANY sub-model as a cube
-	textures := s.referencedTextures(st)
-	if len(textures) > 0 {
-		sort.Strings(textures)
-		return 2, []blockEntry{{Name: name, Textures: []string{textures[0]},
-			Template: []uint32{0, 0}}}
+	textures, tinted := s.referencedTextures(st)
+	sort.Strings(textures)
+	for _, tex := range textures {
+		if tex[0] == '#' {
+			continue
+		}
+		tint := uint32(0)
+		if tinted {
+			tint |= 1 << 31
+		}
+		return 2, []blockEntry{{Name: name, Textures: []string{tex},
+			Template: []uint32{0, tint}}}
 	}
 
 	return -1, nil
@@ -512,8 +541,11 @@ func generate(outDir string) {
 			}
 			ent.Template[0] |= uint32(tid) << 24
 			ent.Template[1] |= uint32(tid>>8) << 30
-			fmt.Printf("%s %v %v %08x %08x\n",
-				ent.Name, ent.Textures, textures[ent.Textures[0]].Bounds(),
+			if ent.Name == "water" {
+				ent.Template[1] |= 1 << 31
+			}
+			fmt.Printf("%s %v=%d %v %08x %08x\n",
+				ent.Name, ent.Textures, tid, textures[ent.Textures[0]].Bounds(),
 				ent.Template[0], ent.Template[1])
 		}
 

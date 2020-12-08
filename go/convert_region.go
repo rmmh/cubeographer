@@ -185,7 +185,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 				sideLight := uint32(0)
 				for i, nb := range ns {
 					if b == waterID {
-						if nb == 0 || (nb != 8 && nb != 9 && !bm.isSolid(nb)) {
+						if nb == 0 || (nb != waterID && !bm.isSolid(nb)) {
 							sideVis |= 1 << i
 						}
 					} else if !bm.isSolid(nb) {
