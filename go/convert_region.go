@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -38,9 +39,9 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 
 	cadj := map[uint][1024]chunkDatum{}
 
-	get := func(x, y, z int) (uint16, byte, byte) {
+	get := func(x, y, z int) (uint16, uint8, byte, byte) {
 		if y < 0 {
-			return 7, 0xf, 0 // bedrock
+			return 7, 0, 0xf, 0 // bedrock
 		}
 		var chunk chunkDatum
 		if (x|z)&512 != 0 {
@@ -74,12 +75,12 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 				r, err := makeRegion(ap, bm)
 				if err != nil {
 					cadj[key] = [1024]chunkDatum{}
-					return 0, 0xf, 0
+					return 0, 0, 0xf, 0
 				}
 				cadj[key], err = r.readChunks(wanted)
 				if err != nil {
 					cadj[key] = [1024]chunkDatum{}
-					return 0, 0xf, 0
+					return 0, 0, 0xf, 0
 				}
 			}
 			chunk = cadj[key][((x&511)>>4)+((z&511)>>4)*32]
@@ -88,20 +89,21 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		}
 		ys := y >> 4
 		if ys >= len(chunk.blocks) {
-			return 0, 0, 0xf
+			return 0, 0, 0, 0xf
 		}
 		o := x&15 + (z&15)*16 + (y&15)*256
 		s := (x & 1) << 2
 		b := chunk.blocks[ys][o]
+		bs := chunk.blockState[ys][o]
 		if ys >= len(chunk.lights) {
 			if ys >= len(chunk.lightsSky) {
-				return b, 0xf, 0xf
+				return b, bs, 0xf, 0xf
 			}
-			return b, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+			return b, bs, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
 		} else if ys >= len(chunk.lightsSky) {
-			return b, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
+			return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
 		}
-		return b, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+		return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
 	}
 
 	getLight := func(x, y, z int) byte {
@@ -121,12 +123,12 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		bs := make([]uint16, 6)
 		ls := make([]byte, 6)
 		sl := make([]byte, 6)
-		bs[0], ls[0], sl[0] = get(x-1, y, z)
-		bs[1], ls[1], sl[1] = get(x+1, y, z)
-		bs[2], ls[2], sl[2] = get(x, y, z+1)
-		bs[3], ls[3], sl[3] = get(x, y, z-1)
-		bs[4], ls[4], sl[4] = get(x, y+1, z)
-		bs[5], ls[5], sl[5] = get(x, y-1, z)
+		bs[0], _, ls[0], sl[0] = get(x-1, y, z)
+		bs[1], _, ls[1], sl[1] = get(x+1, y, z)
+		bs[2], _, ls[2], sl[2] = get(x, y, z+1)
+		bs[3], _, ls[3], sl[3] = get(x, y, z-1)
+		bs[4], _, ls[4], sl[4] = get(x, y+1, z)
+		bs[5], _, ls[5], sl[5] = get(x, y-1, z)
 		return bs, ls, sl
 	}
 
@@ -158,6 +160,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 
 	waterID := bm.nameToNid["minecraft:water"]
 
+	blockCounts := make([]int, len(bm.tmpl))
+
 	for y := 0; y < 256; y++ {
 		for x := 0; x < 512; x++ {
 			for z := 0; z < 512; z++ {
@@ -173,7 +177,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 					continue
 				}
 
-				b, bl, bsl := get(x, y, z)
+				b, bs, bl, bsl := get(x, y, z)
 
 				if b == 0 {
 					continue
@@ -203,15 +207,26 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 				}
 
 				if sideVis != 0 {
+					blockCounts[b]++
+
 					// extra rendering flags
 					// 0: use sprite+256 for sides
 					// 1: tint according to biome colors
-					tmpl := bm.tmpl[b]
+					// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
+					var tmpl []uint32
+					var layer uint8
+					if int(bs) < len(bm.tmpl[b]) {
+						tmpl = bm.tmpl[b][bs]
+						layer = bm.layer[b][bs]
+					} else {
+						tmpl = bm.tmpl[b][0]
+						layer = bm.layer[b][0]
+					}
 					// x: 8b z: 8b y: 8b   8+8+8=24b
 					binary.LittleEndian.PutUint32(buf, tmpl[0]|uint32((x&255)<<16|(z&255)<<8|y))
 					binary.LittleEndian.PutUint32(buf[4:], tmpl[1]|sideLight<<6|sideVis)
 					bs := &bufs[x>>8+2*(z>>8)]
-					bs[bm.layer[b]].Write(buf[:8])
+					bs[layer].Write(buf[:8])
 				}
 			}
 		}
@@ -241,6 +256,25 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 	}
 
 	fmt.Println(dir, file.Name(), outLen/1024, "KiB")
+
+	presentBlocks := []uint16{}
+	for bid, count := range blockCounts {
+		if count > 0 {
+			presentBlocks = append(presentBlocks, uint16(bid))
+		}
+	}
+	sort.Slice(presentBlocks, func(i, j int) bool {
+		return blockCounts[presentBlocks[i]] < blockCounts[presentBlocks[j]]
+	})
+
+	for _, bid := range presentBlocks {
+		if blockCounts[bid] < 100 {
+			continue
+		}
+		if bm.layer[bid][0] == 2 {
+			fmt.Println(bm.nidToName[bid], blockCounts[bid])
+		}
+	}
 
 	return err
 }

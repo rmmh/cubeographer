@@ -298,7 +298,7 @@ const layerNames = ["CUBE", "CROSS", "CUBE_FALLBACK"]
 let layers = [
     makeCubeLayer("CUBE", "textures/atlas0.png"),
     makeCrossLayer("CROSS", "textures/atlas1.png", {CROSS: 1}),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas2.png", {WATER_ID: 2})
+    makeCubeLayer("CUBE_FALLBACK", "textures/atlas2.png", {WATER_ID: 2, FALLBACK: 1})
 ];
 
 let willRender = false;
@@ -448,7 +448,7 @@ for (let x = -1; x <= 1; x++) {
 
 if (1) // novigrad (TEST)
 for (let x = 1; x <= 2; x++) {
-    for (let z = 1; z <= 2; z++) {
+    for (let z = 1; z <= 3; z++) {
         for (let o = 0; o < 4; o++)
             fetchRegion(x, z, o, -1.9, -2.8)
     }

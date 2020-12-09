@@ -63,8 +63,13 @@ void main()	{
         gl_Position = vec4(1e20);
         return;
     }
-    bool sideSpecial = face >= 4 && (attr.y & (1u<<30)) != 0u;
     float sideLight = float( (attr.y>>uint(6+face*4))&0xFu)/15.0 * 0.7 + 0.3;
+#ifdef FALLBACK
+    bool sideSpecial = false;
+    blockId |= int(attr.y>>22) & 256;
+#else
+    bool sideSpecial = face >= 4 && (attr.y & (1u<<30)) != 0u;
+#endif
     vColor = sideSpecial ? vec4(sideLight, sideLight, sideLight, 1.0) :
              vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
     gl_Position = projectionMatrix * modelViewMatrix *

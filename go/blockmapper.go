@@ -4,21 +4,27 @@ import (
 	"encoding/json"
 )
 
+// TODO: this should probably go back to AOS instead of this SOA form
 type blockMapper struct {
-	meta            blockentryMetadata
-	solid           []uint64
-	blockstateToNid [4096]uint16
-	nameToNid       map[string]uint16
-	tmpl            [][]uint32
-	layer           []uint8
+	meta               blockentryMetadata
+	solid              []uint64
+	blockstateToNid    [4096]uint16
+	blockstateToNstate [4096]uint8
+	nameToNid          map[string]uint16
+	nidToName          []string
+	nidToSmap          []statemap
+	tmpl               [][][]uint32
+	layer              [][]uint8
 }
 
 func loadBlockMapper(buf []byte) (*blockMapper, error) {
 	bm := &blockMapper{
 		nameToNid: map[string]uint16{},
+		nidToName: []string{""},
+		nidToSmap: []statemap{nil},
 		solid:     []uint64{},
-		tmpl:      [][]uint32{nil},
-		layer:     []uint8{0},
+		tmpl:      [][][]uint32{nil},
+		layer:     [][]uint8{nil},
 	}
 
 	err := json.Unmarshal(buf, &bm.meta)
@@ -26,33 +32,44 @@ func loadBlockMapper(buf []byte) (*blockMapper, error) {
 		return nil, err
 	}
 
-	numBlocks := 0
 	count := 1
-	for layer, bs := range bm.meta.Layers {
-		numBlocks += len(bs)
-		for _, b := range bs {
-			n := uint16(count)
-			if b.Name == "air" || b.Name == "cave_air" || b.Name == "void_air" {
-				n = 0
-			} else {
-				count++
+	for _, b := range bm.meta.Blocks {
+		n := uint16(count)
+		if b.Name == "air" || b.Name == "cave_air" || b.Name == "void_air" {
+			n = 0
+		} else {
+			count++
+		}
+		bm.nameToNid["minecraft:"+b.Name] = n
+		smap := buildStateMap(b.States)
+		if int(n) >= len(bm.nidToName) {
+			bm.nidToName = append(bm.nidToName, b.Name)
+			bm.nidToSmap = append(bm.nidToSmap, smap)
+		} else {
+			bm.nidToName[n] = b.Name
+		}
+		if n > 0 {
+			if int(n>>6) >= len(bm.solid) {
+				bm.solid = append(bm.solid, 0)
 			}
-			bm.nameToNid["minecraft:"+b.Name] = n
-			if n > 0 {
-				if int(n>>6) >= len(bm.solid) {
-					bm.solid = append(bm.solid, 0)
-				}
-				if b.Solid {
-					bm.solid[n>>6] |= 1 << (n & 63)
-				}
-				bm.tmpl = append(bm.tmpl, b.Template)
-				bm.layer = append(bm.layer, uint8(layer))
+			if b.Solid {
+				bm.solid[n>>6] |= 1 << (n & 63)
 			}
+			tmpls := [][]uint32{}
+			layers := []uint8{}
+			for _, model := range b.Templates {
+				tmpls = append(tmpls, model.Template)
+				layers = append(layers, uint8(model.Layer))
+			}
+			bm.tmpl = append(bm.tmpl, tmpls)
+			bm.layer = append(bm.layer, layers)
 		}
 	}
 
 	for blockstate, data := range blockstateMap {
-		bm.blockstateToNid[blockstate] = bm.nameToNid["minecraft:"+data.name]
+		nid := bm.nameToNid["minecraft:"+data.name]
+		bm.blockstateToNid[blockstate] = nid
+		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].getState(data.properties)
 	}
 
 	return bm, nil

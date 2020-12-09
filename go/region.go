@@ -190,19 +190,25 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			continue
 		}
 		nblocks := [][]uint16{}
+		nstates := [][]uint8{}
 		if len(blocks) > 0 {
 			if len(blocks) != len(blockData) {
 				panic("blocks/blockData length mismatch in" + r.path)
 			}
 			for bi, bs := range blocks {
 				nb := make([]uint16, 4096)
+				ns := make([]uint8, 4096)
 				for i, ob := range bs {
-					nb[i] = r.bm.blockstateToNid[uint16(ob)<<4|uint16((blockData[bi][i>>1]>>((i&1)<<2))&0xf)]
+					o := uint16(ob)<<4 | uint16((blockData[bi][i>>1]>>((i&1)<<2))&0xf)
+					nb[i] = r.bm.blockstateToNid[o]
+					ns[i] = r.bm.blockstateToNstate[o]
 					if nb[i] == 0 {
-						nb[i] = r.bm.blockstateToNid[uint16(ob)<<4]
+						nb[i] = r.bm.blockstateToNid[o&^0xf]
+						ns[i] = r.bm.blockstateToNstate[o&^0xf]
 					}
 				}
 				nblocks = append(nblocks, nb)
+				nstates = append(nstates, ns)
 			}
 		} else if len(blockStates) > 0 {
 			for bi, bs := range blockStates {
@@ -218,7 +224,7 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 				nblocks = append(nblocks, vals)
 			}
 		}
-		cdata[chunkNum] = chunkDatum{nblocks, nil, lights, lightsSky}
+		cdata[chunkNum] = chunkDatum{nblocks, nstates, lights, lightsSky}
 		if err != nil {
 			return cdata, err
 		}
