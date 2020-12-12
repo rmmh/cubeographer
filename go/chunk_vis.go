@@ -11,16 +11,20 @@ type chunkVis [32 * 32 * (256 / 16)]struct {
 }
 
 type tinybitset struct {
-	// TODO: accelerate by tracking nonzero vals ?
-	vals [4096 / 64]uint64
+	nonzeros uint64
+	vals     [4096 / 64]uint64
 }
 
 func (t *tinybitset) set(x int) {
 	t.vals[x>>6] |= 1 << (x & 63)
+	t.nonzeros |= 1 << ((x >> 6) & 63)
 }
 
 func (t *tinybitset) clear(x int) {
 	t.vals[x>>6] &^= 1 << (x & 63)
+	if t.vals[x>>6] == 0 {
+		t.nonzeros &^= 1 << ((x >> 6) & 63)
+	}
 }
 
 func (t *tinybitset) has(x int) bool {
@@ -28,12 +32,16 @@ func (t *tinybitset) has(x int) bool {
 }
 
 func (t *tinybitset) pop() int {
-	for o, v := range t.vals {
-		if v != 0 {
-			off := 63 - bits.LeadingZeros64(v)
-			t.vals[o] ^= 1 << off
-			return o*64 + off
+	if t.nonzeros != 0 {
+		nzvo := (bits.Len64(t.nonzeros) - 1)
+		o := nzvo
+		v := t.vals[o]
+		off := bits.Len64(v) - 1
+		t.vals[o] ^= 1 << off
+		if t.vals[o] == 0 {
+			t.nonzeros &^= (1 << nzvo)
 		}
+		return o*64 + off
 	}
 	return -1
 }

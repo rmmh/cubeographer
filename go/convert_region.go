@@ -15,6 +15,110 @@ import (
 	"strings"
 )
 
+type regionState struct {
+	r      *region
+	dir    string
+	bm     *blockMapper
+	rx, rz int
+	cdata  [1024]chunkDatum
+	cadj   [16]*[1024]chunkDatum
+
+	nbs [6]uint16
+	nls [6]byte
+	nsl [6]byte
+}
+
+func (rs *regionState) get(x, y, z int) (uint16, uint8, byte, byte) {
+	if y < 0 {
+		return 7, 0, 0xf, 0 // bedrock
+	}
+	var chunk *chunkDatum
+	if (x|z)&512 != 0 {
+		key := (uint(x>>9)&3)<<2 | uint(z>>9)&3
+		if rs.cadj[key] == nil {
+			ox := rs.rx
+			oz := rs.rz
+			wanted := make([]int, 0, 32)
+			if x < 0 {
+				ox--
+				for i := 0; i < 32; i++ {
+					wanted = append(wanted, 31+i*32)
+				}
+			} else if x >= 512 {
+				ox++
+				for i := 0; i < 32; i++ {
+					wanted = append(wanted, i*32)
+				}
+			} else if z < 0 {
+				oz--
+				for i := 0; i < 32; i++ {
+					wanted = append(wanted, i+31*32)
+				}
+			} else if z >= 512 {
+				oz++
+				for i := 0; i < 32; i++ {
+					wanted = append(wanted, i)
+				}
+			}
+			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
+			r, err := makeRegion(ap, rs.bm)
+			if err != nil {
+				rs.cadj[key] = &[1024]chunkDatum{}
+				return 0, 0, 0xf, 0
+			}
+			chunks, err := r.readChunks(wanted)
+			if err != nil {
+				rs.cadj[key] = &[1024]chunkDatum{}
+				return 0, 0, 0xf, 0
+			}
+			rs.cadj[key] = &chunks
+		}
+		chunk = &rs.cadj[key][((x&511)>>4)+((z&511)>>4)*32]
+	} else {
+		chunk = &rs.cdata[(x>>4)+(z>>4)*32]
+	}
+	ys := y >> 4
+	if ys >= len(chunk.blocks) {
+		return 0, 0, 0, 0xf
+	}
+	o := x&15 + (z&15)*16 + (y&15)*256
+	s := (x & 1) << 2
+	b := chunk.blocks[ys][o]
+	bs := chunk.blockState[ys][o]
+	if ys >= len(chunk.lights) {
+		if ys >= len(chunk.lightsSky) {
+			return b, bs, 0xf, 0xf
+		}
+		return b, bs, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+	} else if ys >= len(chunk.lightsSky) {
+		return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
+	}
+	return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+}
+
+func (rs *regionState) getLight(x, y, z int) byte {
+	chunk := &rs.cdata[(x>>4)+(z>>4)*32]
+	ys := y >> 4
+	if ys >= len(chunk.lights) || ys >= len(chunk.lightsSky) {
+		return 15
+	}
+	o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
+	s := (x & 1) << 2
+	return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
+}
+
+func (rs *regionState) neighs(x, y, z int) ([]uint16, []byte, []byte) {
+	// NOTE: the order of this return value is critical
+	// for the vertex shader to reject hidden faces
+	rs.nbs[0], _, rs.nls[0], rs.nsl[0] = rs.get(x-1, y, z)
+	rs.nbs[1], _, rs.nls[1], rs.nsl[1] = rs.get(x+1, y, z)
+	rs.nbs[2], _, rs.nls[2], rs.nsl[2] = rs.get(x, y, z+1)
+	rs.nbs[3], _, rs.nls[3], rs.nsl[3] = rs.get(x, y, z-1)
+	rs.nbs[4], _, rs.nls[4], rs.nsl[4] = rs.get(x, y+1, z)
+	rs.nbs[5], _, rs.nls[5], rs.nsl[5] = rs.get(x, y-1, z)
+	return rs.nbs[:], rs.nls[:], rs.nsl[:]
+}
+
 func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) error {
 	if !strings.HasSuffix(file.Name(), ".mca") {
 		return errors.New("file has wrong suffix (not .mca): " + file.Name())
@@ -37,109 +141,21 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		return err
 	}
 
-	cadj := map[uint][1024]chunkDatum{}
-
-	get := func(x, y, z int) (uint16, uint8, byte, byte) {
-		if y < 0 {
-			return 7, 0, 0xf, 0 // bedrock
-		}
-		var chunk chunkDatum
-		if (x|z)&512 != 0 {
-			key := (uint(x>>9)&3)<<2 | uint(z>>9)&3
-			if _, ok := cadj[key]; !ok {
-				ox := rx
-				oz := rz
-				wanted := make([]int, 0, 32)
-				if x < 0 {
-					ox--
-					for i := 0; i < 32; i++ {
-						wanted = append(wanted, 31+i*32)
-					}
-				} else if x >= 512 {
-					ox++
-					for i := 0; i < 32; i++ {
-						wanted = append(wanted, i*32)
-					}
-				} else if z < 0 {
-					oz--
-					for i := 0; i < 32; i++ {
-						wanted = append(wanted, i+31*32)
-					}
-				} else if z >= 512 {
-					oz++
-					for i := 0; i < 32; i++ {
-						wanted = append(wanted, i)
-					}
-				}
-				ap := path.Join(dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
-				r, err := makeRegion(ap, bm)
-				if err != nil {
-					cadj[key] = [1024]chunkDatum{}
-					return 0, 0, 0xf, 0
-				}
-				cadj[key], err = r.readChunks(wanted)
-				if err != nil {
-					cadj[key] = [1024]chunkDatum{}
-					return 0, 0, 0xf, 0
-				}
-			}
-			chunk = cadj[key][((x&511)>>4)+((z&511)>>4)*32]
-		} else {
-			chunk = cdata[(x>>4)+(z>>4)*32]
-		}
-		ys := y >> 4
-		if ys >= len(chunk.blocks) {
-			return 0, 0, 0, 0xf
-		}
-		o := x&15 + (z&15)*16 + (y&15)*256
-		s := (x & 1) << 2
-		b := chunk.blocks[ys][o]
-		bs := chunk.blockState[ys][o]
-		if ys >= len(chunk.lights) {
-			if ys >= len(chunk.lightsSky) {
-				return b, bs, 0xf, 0xf
-			}
-			return b, bs, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
-		} else if ys >= len(chunk.lightsSky) {
-			return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
-		}
-		return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+	rs := regionState{
+		dir:   dir,
+		bm:    bm,
+		rx:    rx,
+		rz:    rz,
+		cdata: cdata,
 	}
 
-	getLight := func(x, y, z int) byte {
-		chunk := cdata[(x>>4)+(z>>4)*32]
-		ys := y >> 4
-		if ys >= len(chunk.lights) || ys >= len(chunk.lightsSky) {
-			return 15
-		}
-		o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
-		s := (x & 1) << 2
-		return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
-	}
-
-	neighs := func(x, y, z int) ([]uint16, []byte, []byte) {
-		// NOTE: the order of this return value is critical
-		// for the vertex shader to reject hidden faces
-		bs := make([]uint16, 6)
-		ls := make([]byte, 6)
-		sl := make([]byte, 6)
-		bs[0], _, ls[0], sl[0] = get(x-1, y, z)
-		bs[1], _, ls[1], sl[1] = get(x+1, y, z)
-		bs[2], _, ls[2], sl[2] = get(x, y, z+1)
-		bs[3], _, ls[3], sl[3] = get(x, y, z-1)
-		bs[4], _, ls[4], sl[4] = get(x, y+1, z)
-		bs[5], _, ls[5], sl[5] = get(x, y-1, z)
-		return bs, ls, sl
-	}
-
-	getLight(0, 0, 0)
 	// does this 4*4*4 regions have at least one lit block?
 	const lr = 4
 	lit := make([]bool, (256*512*512)/(lr*lr*lr))
 	for y := 0; y < 63; y++ {
 		for x := 0; x < 512; x++ {
 			for z := 0; z < 512; z++ {
-				if getLight(x, y, z) > 0 {
+				if rs.getLight(x, y, z) > 0 {
 					lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr] = true
 				}
 			}
@@ -163,27 +179,27 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 	blockCounts := make([]int, len(bm.tmpl))
 
 	for y := 0; y < 256; y++ {
-		for x := 0; x < 512; x++ {
-			for z := 0; z < 512; z++ {
-				chunkletVis := chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
+		for z := 0; z < 512; z++ {
+			for x := 0; x < 512; x++ {
+				chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
 
 				if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
 					// cavey-elimination
 					// continue
 				}
 
-				chunk := cdata[(x>>4)+(z>>4)*32]
+				chunk := &cdata[(x>>4)+(z>>4)*32]
 				if len(chunk.blocks) < y>>4 {
 					continue
 				}
 
-				b, bs, bl, bsl := get(x, y, z)
+				b, bs, bl, bsl := rs.get(x, y, z)
 
 				if b == 0 {
 					continue
 				}
 
-				ns, nl, nsl := neighs(x, y, z)
+				ns, nl, nsl := rs.neighs(x, y, z)
 
 				sideVis := uint32(0)
 				sideLight := uint32(0)
@@ -234,7 +250,8 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 
 	nameBase := path.Join(outdir, strings.TrimSuffix(path.Base(file.Name()), ".mca"))
 	outLen := 0
-	for bi, bs := range bufs {
+	for bi := range bufs {
+		bs := &bufs[bi]
 		out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
 		outBuf := bufio.NewWriterSize(out, 1<<20)
 		if err != nil {
