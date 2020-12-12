@@ -119,18 +119,27 @@ func (rs *regionState) neighs(x, y, z int) ([]uint16, []byte, []byte) {
 	return rs.nbs[:], rs.nls[:], rs.nsl[:]
 }
 
-func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) error {
-	if !strings.HasSuffix(file.Name(), ".mca") {
-		return errors.New("file has wrong suffix (not .mca): " + file.Name())
+type scanRegionConfig struct {
+	dir, outdir string
+	file        os.FileInfo
+	bm          *blockMapper
+
+	pruneCaves bool
+}
+
+func scanRegion(conf *scanRegionConfig) error {
+	if !strings.HasSuffix(conf.file.Name(), ".mca") {
+		return errors.New("file has wrong suffix (not .mca): " + conf.file.Name())
 	}
 
-	r, err := makeRegion(path.Join(dir, file.Name()), bm)
+	bm := conf.bm
+	r, err := makeRegion(path.Join(conf.dir, conf.file.Name()), bm)
 	if err != nil {
 		return err
 	}
 
 	var rx, rz int
-	regionMatch := regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`).FindStringSubmatch(file.Name())
+	regionMatch := regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`).FindStringSubmatch(conf.file.Name())
 	if regionMatch != nil {
 		rx, _ = strconv.Atoi(regionMatch[1])
 		rz, _ = strconv.Atoi(regionMatch[2])
@@ -142,27 +151,31 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 	}
 
 	rs := regionState{
-		dir:   dir,
+		dir:   conf.dir,
 		bm:    bm,
 		rx:    rx,
 		rz:    rz,
 		cdata: cdata,
 	}
 
-	// does this 4*4*4 regions have at least one lit block?
+	var chunkVis *chunkVis
+	var lit []bool
 	const lr = 4
-	lit := make([]bool, (256*512*512)/(lr*lr*lr))
-	for y := 0; y < 63; y++ {
-		for x := 0; x < 512; x++ {
+
+	if conf.pruneCaves {
+		// does each 4*4*4 region have at least one lit block?
+		lit = make([]bool, (256*512*512)/(lr*lr*lr))
+		for y := 0; y < 64; y++ {
 			for z := 0; z < 512; z++ {
-				if rs.getLight(x, y, z) > 0 {
-					lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr] = true
+				for x := 0; x < 512; x++ {
+					if rs.getLight(x, y, z) > 0 {
+						lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr] = true
+					}
 				}
 			}
 		}
+		chunkVis = makeChunkvis(cdata, bm)
 	}
-
-	chunkVis := makeChunkvis(cdata, bm)
 
 	var bufs [4][numRenderLayers]bytes.Buffer
 
@@ -181,11 +194,12 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 	for y := 0; y < 256; y++ {
 		for z := 0; z < 512; z++ {
 			for x := 0; x < 512; x++ {
-				chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
-
-				if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
-					// cavey-elimination
-					// continue
+				if conf.pruneCaves {
+					chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
+					if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
+						// cavey-elimination
+						continue
+					}
 				}
 
 				chunk := &cdata[(x>>4)+(z>>4)*32]
@@ -248,7 +262,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		}
 	}
 
-	nameBase := path.Join(outdir, strings.TrimSuffix(path.Base(file.Name()), ".mca"))
+	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file.Name()), ".mca"))
 	outLen := 0
 	for bi := range bufs {
 		bs := &bufs[bi]
@@ -272,7 +286,7 @@ func scanRegion(dir string, outdir string, file os.FileInfo, bm *blockMapper) er
 		out.Close()
 	}
 
-	fmt.Println(dir, file.Name(), outLen/1024, "KiB")
+	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB")
 
 	presentBlocks := []uint16{}
 	for bid, count := range blockCounts {

@@ -14,7 +14,7 @@ import (
 	"sync"
 )
 
-func convert(numProcs int, regionDir, outDir string, filters []string) {
+func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves bool) {
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
@@ -35,7 +35,13 @@ func convert(numProcs int, regionDir, outDir string, filters []string) {
 	for i := 0; i < numProcs; i++ {
 		go func() {
 			for file := range work {
-				err = scanRegion(regionDir, outDir, file, bm)
+				err = scanRegion(&scanRegionConfig{
+					dir:        regionDir,
+					outdir:     outDir,
+					file:       file,
+					bm:         bm,
+					pruneCaves: hideCaves,
+				})
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -72,6 +78,7 @@ func main() {
 	gen := flag.String("gen", "", "generate texture atlas & data files from jar")
 	numProcs := flag.Int("threads", runtime.NumCPU(), "number of parallel threads to use")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
+	hideCaves := flag.Bool("nocave", false, "attempt to hide invisible caves")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -93,10 +100,12 @@ func main() {
 		return
 	}
 
+	var filters []string
 	if len(args) > 2 {
-		convert(*numProcs, args[0], args[1], args[2:])
-	} else if len(args) == 2 {
-		convert(*numProcs, args[0], args[1], nil)
+		filters = args[2:]
+	}
+	if len(args) > 1 {
+		convert(*numProcs, args[0], args[1], filters, *hideCaves)
 	} else {
 		usage()
 	}
