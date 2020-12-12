@@ -840,6 +840,7 @@ export type AttribInfo = {
     buffer?: WebGLBuffer, //the buffer that contains the data for this attribute
     divisor?: number, // for instanced attributes, the divisor
     update?: boolean, // whether it needs to be updated again
+    data?: ArrayBufferLike,
 };
 
 
@@ -894,6 +895,9 @@ export function createAttribsFromArrays(gl: WebGLRenderingContext, arrays: {[nam
             };
             if (origArray.divisor) {
                 attribs[attribName].divisor = origArray.divisor;
+            }
+            if (origArray.retain) {
+                attribs[attribName].data = origArray.data.buffer;
             }
         }
     });

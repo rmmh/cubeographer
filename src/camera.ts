@@ -352,7 +352,7 @@ class OrbitControls extends EventDispatcher {
         let right = vec3.cross(vec3.create(), forward, vec3.fromValues(0, 1, 0));
         // vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
         let v = vec3.cross(vec3.create(), forward, vec3.normalize(right, right));
-        
+
         /*
         if (this.screenSpacePanning === true) {
             vec3.set(v, objectMatrix[4], objectMatrix[5], objectMatrix[6]);

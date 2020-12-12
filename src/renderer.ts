@@ -49,6 +49,18 @@ export class Geometry {
     }
 }
 
+
+export class Mesh {
+    position: vec3
+
+    constructor(
+        public geometry: Geometry,
+        public material: Material,
+    ) {
+        this.position = vec3.create();
+    }
+}
+
 export class InstancedMesh {
     position: vec3
 
@@ -72,10 +84,20 @@ export class InstancedLayer {
 
 export class Chunk {
     position: vec3
+    minY: number
+    maxY: number
     layers: { [name: string]: webgl_utils.AttribInfo }
+    occluded: boolean
+    query: WebGLQuery
+    queryInProgress: boolean
 
     constructor(public gl: WebGLRenderingContext) {
         this.position = vec3.create();
+        this.query = null;
+        this.queryInProgress = false;
+        this.occluded = false;
+        this.minY = 0
+        this.maxY = 255
     }
 
     setLayers(arrays: { [name: string]: any }) {
@@ -92,6 +114,10 @@ export class Chunk {
         }
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.layers[name].buffer);
         this.gl.bufferSubData(this.gl.ARRAY_BUFFER, offset || 0, array);
+        if (this.layers[name].data) {
+            let buf = new Uint8Array(this.layers[name].data);
+            buf.set(array, offset);
+        }
     }
 }
 
@@ -215,9 +241,11 @@ export class PerspectiveCamera implements Camera {
 
     update() {
         mat4.perspective(this.proj, glMatrix.toRadian(this.fov), this.aspect, this.near, this.far);
+        // TODO: add ortho mode with correct zooming, shaders (flipping is broken), etc
+        // const orthoscale = 128;
+        // mat4.ortho(this.proj, -orthoscale * this.aspect, orthoscale * this.aspect, -orthoscale, orthoscale, -5000, 5000)
         mat4.lookAt(this.view, this.position, this.target, vec3.fromValues(0, 1, 0));
         mat4.getRotation(this.quaternion, this.view);
-        // this.matrix.compose(this.position, this.quaternion, this.scale);
     }
 
     getProjection(): mat4 {
@@ -229,7 +257,83 @@ export class PerspectiveCamera implements Camera {
     }
 }
 
-export function render(context: Context, camera: PerspectiveCamera, scene: Set<Chunk>, layers: InstancedLayer[]) {
+function sphereCone(sphereCenter: vec3, sphereRadius: number,
+                    coneOrigin: vec3, coneNormal: vec3,
+                    sinAngle: number, tanAngleSqPlusOne: number): boolean {
+    const diff = vec3.sub(vec3.create(), sphereCenter, coneOrigin);
+
+    // this code is somehow broken. unfortunate. this approximation helps slightly.
+    let cos = Math.sqrt(1 - sinAngle * sinAngle);
+    return vec3.dot(coneNormal, vec3.scaleAndAdd(vec3.create(), diff, coneNormal, sphereRadius * sinAngle)) > cos;
+
+    // translated from https://github.com/mosra/magnum/blob/master/src/Magnum/Math/Intersection.h#L539-L565
+
+    /* Point - cone test */
+    // if (Math:: dot(diff - sphereRadius * sinAngle * coneNormal, coneNormal) > T(0)) {
+
+    let dot = vec3.dot(coneNormal, vec3.scaleAndAdd(vec3.create(),
+        diff, coneNormal, -sphereRadius * sinAngle));
+    if (dot > 0) {
+        // const Vector3<T>c = sinAngle * diff + coneNormal * sphereRadius;
+        const c = vec3.scale(vec3.create(), diff, sinAngle);
+        vec3.scaleAndAdd(c, c, coneNormal, sphereRadius);
+
+        // const T lenA = Math:: dot(c, coneNormal);
+        const lenA = vec3.dot(c, coneNormal);
+
+        console.log(`cone test, dot=${dot} lenA=${lenA} c=${c}`);
+
+        // return c.dot() <= lenA * lenA * tanAngleSqPlusOne;
+        return vec3.sqrLen(c) <= lenA * lenA * tanAngleSqPlusOne;
+    // } else return diff.dot() <= sphereRadius * sphereRadius;
+    } else {
+        console.log("near fallback", dot, coneNormal,
+            vec3.scaleAndAdd(vec3.create(),
+                diff, coneNormal, -sphereRadius * sinAngle),
+        diff, vec3.len(diff), sphereRadius);
+        return vec3.sqrLen(diff) <= sphereRadius * sphereRadius;
+    }
+}
+
+class Frustum {
+    coneOrigin: vec3
+    coneNormal: vec3
+    coneAngle: number // radians
+
+    constructor(
+        public camera: PerspectiveCamera,
+    ) {
+        this.coneOrigin = vec3.copy(vec3.create(), camera.position);
+        this.coneNormal = vec3.sub(vec3.create(), camera.target, camera.position);
+        vec3.normalize(this.coneNormal, this.coneNormal);
+        const vFovRad = camera.fov * Math.PI / 180;
+        const hFovRad = 2 * Math.atan(Math.tan(vFovRad/2) * camera.aspect);
+        this.coneAngle = 2 * Math.atan(Math.sqrt(hFovRad*hFovRad + vFovRad * vFovRad));
+    }
+
+    intersects(c: Chunk): boolean {
+        // TODO: center this more conservatively based on observed y-height?
+        let sphereCenter = vec3.fromValues(128, 128, 128);
+        vec3.add(sphereCenter, sphereCenter, c.position);
+        let sphereRadius = Math.sqrt(3 * 128 * 128);
+
+        const halfAngle = this.coneAngle * .5;
+
+
+        const sinAngle = Math.sin(halfAngle);
+        const tanAngle = Math.tan(halfAngle);
+        const tanAngleSqPlusOne = 1 + tanAngle * tanAngle;
+
+        if (!sphereCone(sphereCenter, sphereRadius, this.coneOrigin, this.coneNormal,
+            sinAngle, tanAngleSqPlusOne)) {
+            return false;
+        }
+        return true;
+
+    }
+}
+
+export function render(context: Context, camera: PerspectiveCamera, scene: Set<Chunk>, layers: InstancedLayer[], cube: Mesh) {
     const gl = context.gl;
 
     if (!(gl.canvas instanceof HTMLCanvasElement))
@@ -255,31 +359,99 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
     // Compute the projection matrix
     var projectionMatrix = camera.getProjection();
 
-    // TODO:
-    // * sort meshes
-    // * frustum cull meshes
+    const frustum = new Frustum(camera);
+
+    let culledChunks: Chunk[] = [];
+
+    for (const chunk of scene) {
+        if (frustum.intersects(chunk)) {
+            culledChunks.push(chunk);
+        }
+    }
+
+    culledChunks.sort((a, b) => {
+        const apos = vec3.fromValues(128, 128, 128);
+        const bpos = vec3.fromValues(128, 128, 128);
+        vec3.add(apos, apos, a.position);
+        vec3.add(bpos, bpos, b.position);
+        return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
+    })
+
+
+    culledChunks = culledChunks.slice(0, 32);
+
     var activeProgram: WebGLProgram
+    function bind(mat: Material, geo: Geometry) {
+        if (mat.program != activeProgram) {
+            activeProgram = mat.program;
+            gl.useProgram(mat.program);
+            if (mat.uniformSetters.projectionMatrix)
+                mat.uniformSetters.projectionMatrix(projectionMatrix);
+            if (mat.uniformSetters.cameraPosition)
+                mat.uniformSetters.cameraPosition(camera.position);
+            for (const [key, value] of Object.entries(geo.attributes)) {
+                mat.attribSetters[key](value);
+            }
+        }
+    }
+
     for (const layer of layers) {
         if (!layer) continue;
         let mat = layer.material;
 
-        if (mat.program != activeProgram) {
-            activeProgram = mat.program;
-            gl.useProgram(mat.program);
-            mat.uniformSetters.projectionMatrix(projectionMatrix);
-            if (mat.uniformSetters.cameraPosition)
-            mat.uniformSetters.cameraPosition(camera.position);
-            mat.uniformSetters.atlas(layer.texture);
-            for (const [key, value] of Object.entries(layer.geometry.attributes)) {
-                mat.attribSetters[key](value);
-            }
-        }
+        bind(mat, layer.geometry)
 
-        for (const chunk of scene) {
+        mat.uniformSetters.atlas(layer.texture);
+
+        let chunkNum = 0;
+        for (const chunk of culledChunks) {
+            chunkNum++;
             const chunkLayer = chunk.layers[layer.name];
             if (!chunkLayer || chunkLayer.size == 0) {
                 continue;
             }
+
+            if (layer.name == 'CUBE' && chunkNum >= 5) {
+                // inspired by https://tsherif.github.io/webgl2examples/occlusion.html
+                if (chunk.query === null) {
+                    chunk.query = gl.createQuery();
+                }
+                if (chunk.queryInProgress && gl.getQueryParameter(chunk.query, gl.QUERY_RESULT_AVAILABLE)) {
+                    chunk.occluded = !gl.getQueryParameter(chunk.query, gl.QUERY_RESULT);
+                    chunk.queryInProgress = false;
+                }
+                if (!chunk.queryInProgress) {
+                    let mat = cube.material;
+                    bind(cube.material, cube.geometry);
+                    mat.uniformSetters.modelViewMatrix(camera.getView());
+                    mat.uniformSetters.scale(vec3.fromValues(256, 1 + chunk.maxY - chunk.minY, 256));
+
+                    gl.enable(gl.CULL_FACE);
+                    gl.colorMask(false, false, false, false);
+                    gl.depthMask(false);
+
+                    gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, chunk.query);
+                    const offset = vec3.fromValues(0, chunk.minY, 0);
+                    vec3.add(offset, offset, chunk.position);
+                    mat.uniformSetters.offset(offset);
+                    gl.drawArrays(gl.TRIANGLES, 0, 12 * 3);
+                    gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
+
+                    gl.colorMask(true, true, true, true);
+                    gl.depthMask(true);
+                    gl.disable(gl.CULL_FACE);
+
+                    chunk.queryInProgress = true;
+
+                    bind(layer.material, layer.geometry);
+                    layer.material.uniformSetters.atlas(layer.texture);
+                }
+            }
+
+            if (chunkNum >= 5 && chunk.occluded) {
+                continue;
+            }
+
             mat.attribSetters.attr(chunkLayer);
             if (mat.uniformSetters.offset)
                 mat.uniformSetters.offset(chunk.position);

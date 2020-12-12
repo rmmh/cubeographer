@@ -5,14 +5,13 @@ steal from https://shlegeris.com/2017/01/06/hash-maps.html
 
 */
 
-import { vec3 } from 'gl-matrix';
+import { mat4, vec3 } from 'gl-matrix';
 
 var vertexShader = require('./cube_vertex.glsl');
 var fragmentShader = require('./cube_fragment.glsl');
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
-
 
 const context = new renderer.Context(document.querySelector('#canvas'));
 context.setSize(window.innerWidth, window.innerHeight);
@@ -52,7 +51,7 @@ context.setClearColor(0x7e, 0xab, 0xff);
 // TODO: replace these controls with block-based ones,
 // i.e. rotate around the click target
 let controls = new OrbitControls(camera, context.canvas);
-controls.addEventListener( 'change', render ); // call this only in static scenes (i.e., if there is no animation loop)
+controls.addEventListener('change', render); // call this only in static scenes (i.e., if there is no animation loop)
 controls.screenSpacePanning = true;
 controls.minDistance = 1;
 controls.maxDistance = space * 2;
@@ -293,6 +292,91 @@ function makeCrossLayer(name: string, texturePath: string, defines?: {[name: str
     return new renderer.InstancedLayer(geometry, material, texture, name);
 }
 
+function makeCube() {
+    const stride = 12;
+    const stridef = (stride / 4) | 0;
+    const tris = 12;  // 6 faces * 2 tris each
+    const cubeBuffer = new ArrayBuffer(stride * tris * 3);
+
+    // the following typed arrays share the same buffer
+    const bf32 = new Float32Array(cubeBuffer);
+
+    function addTri(pA: vec3, pB: vec3, pC: vec3, i: number) {
+        let o = i * stridef * 3;
+        bf32[o++] = pA[0];
+        bf32[o++] = pA[1];
+        bf32[o++] = pA[2];
+        bf32[o++] = pB[0];
+        bf32[o++] = pB[1];
+        bf32[o++] = pB[2];
+        bf32[o++] = pC[0];
+        bf32[o++] = pC[1];
+        bf32[o++] = pC[2];
+    }
+
+    function addQuad(pA: vec3, pB: vec3, pC: vec3, pD: vec3, i: number) {
+        addTri(pA, pB, pC, i);
+        addTri(pC, pD, pA, i + 1);
+    }
+
+    const FLD = vec3.create(), FLU = vec3.create(),
+        FRD = vec3.create(), FRU = vec3.create(),
+        BLD = vec3.create(), BLU = vec3.create(),
+        BRD = vec3.create(), BRU = vec3.create();
+
+    // cubes have 8 vertices
+    // OpenGL/Minecraft: +X = East, +Y = Up, +Z = South
+    // Front/Back, Left/Right, Up/Down
+    vec3.set(FLD, 0, 0, 1);
+    vec3.set(FLU, 0, 1, 1);
+    vec3.set(FRD, 1, 0, 1);
+    vec3.set(FRU, 1, 1, 1);
+    vec3.set(BLD, 0, 0, 0);
+    vec3.set(BLU, 0, 1, 0);
+    vec3.set(BRD, 1, 0, 0);
+    vec3.set(BRU, 1, 1, 0);
+
+    // Note: "front face" is CCW
+    addQuad(FLU, BLU, BLD, FLD, 0);  // L
+    addQuad(FRD, BRD, BRU, FRU, 2);  // R
+    addQuad(FRU, FLU, FLD, FRD, 4);  // F
+    addQuad(BRD, BLD, BLU, BRU, 6);  // B
+    addQuad(FLU, FRU, BRU, BLU, 8);  // U
+    addQuad(BLD, BRD, FRD, FLD, 10); // D
+
+    let geometry = context.Geometry();
+
+    geometry.setAttributes({
+        position: { data: bf32, numComponents: 3, offset: 0 },
+    });
+
+    let material = context.Material(
+        `
+    attribute vec3 position;
+    uniform vec3 scale;
+    uniform vec3 offset;
+    uniform mat4 modelViewMatrix;
+    uniform mat4 projectionMatrix;
+    varying lowp vec4 vColor;
+    void main(void) {
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position * scale + offset, 1);
+      vColor = vec4(1.0);
+    }
+  `,
+        `
+    varying lowp vec4 vColor;
+    void main(void) {
+      gl_FragColor = vColor;
+    }
+  `
+    );
+
+    return new renderer.Mesh(geometry, material);
+
+}
+
+let cube = makeCube();
+
 
 const layerNames = ["CUBE", "CROSS", "CUBE_FALLBACK"]
 let layers = [
@@ -312,15 +396,26 @@ function render() {
 }
 
 
+let lastView = mat4.create();
+let rerenderTimer: number;
 function renderFrame() {
     willRender = false;
     if (!ONDEMAND) render();
-
     stats.begin();
 
     controls.update();
 
-    renderer.render(context, camera, scene, layers);
+    if (!mat4.exactEquals(lastView, camera.view)) {
+        // trigger a rerender for trailing occlusion queries
+        // when the camera has moved
+        if (rerenderTimer)
+            clearTimeout(rerenderTimer);
+        rerenderTimer = window.setTimeout(render, 100);
+    }
+    mat4.copy(lastView, camera.view);
+
+
+    renderer.render(context, camera, scene, layers, cube);
 
     stats.end();
 };
@@ -350,7 +445,7 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     }
 }
 
-function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) {
+function fetchRegion(x: number, z: number, off: number) {
     const controller = new AbortController();
     const { signal } = controller;
     fetch(`map/r.${x}.${z}.${off}.cmt`, { signal }).then(
@@ -377,26 +472,17 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
 
             let chunk = context.Chunk();
 
-            vec3.set(chunk.position, (x + xo) * 512 + (off&1) * 256, 0, (z + zo) * 512 + (off&2) * 128);
+            vec3.set(chunk.position, x * 512 + (off&1) * 256, 0, z * 512 + (off&2) * 128);
 
             chunk.setLayers({
-                CUBE: { data: new Uint32Array(sectionLengths[0]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CROSS: { data: new Uint32Array(sectionLengths[1]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CUBE_FALLBACK: { data: new Uint32Array(sectionLengths[2]/4), numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CUBE: { data: new Uint32Array(sectionLengths[0]/4), retain: true,
+                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CROSS: { data: new Uint32Array(sectionLengths[1]/4), retain: true,
+                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
+                CUBE_FALLBACK: { data: new Uint32Array(sectionLengths[2]/4), retain: true,
+                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
             });
 
-            /*
-            // TODO: center this more conservatively based on observed y-height?
-            let center = new THREE.Vector3(128, 128, 128);
-            let dist = center.distanceTo(new THREE.Vector3(0,0,0));
-            mesh.geometry.boundingSphere = new THREE.Sphere(center, dist);
-            mesh.frustumCulled = true;
-            let sph = new THREE.SphereGeometry(mesh.geometry.boundingSphere.radius, 10, 10);
-            let smesh = new THREE.Mesh(sph, new THREE.MeshBasicMaterial({wireframe: true}));
-            smesh.position.add(center);
-            smesh.position.add(mesh.position);
-            // scene.add(smesh);
-            */
             scene.add(chunk);
 
             let offset = 0;
@@ -426,7 +512,22 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
                 }
                 render();
             }
-            console.debug("done streaming", response.url, chunk.layers);
+
+            let minY = 255, maxY = 0;
+            for (const [name, value] of Object.entries(chunk.layers)) {
+                if (value.data) {
+                    const buf = new Uint8Array(value.data);
+                    for (let o = 0; o < buf.length; o += value.stride) {
+                        let y = buf[o];
+                        minY = Math.min(minY, y);
+                        maxY = Math.max(maxY, y);
+                    }
+                    value.data = null;
+                }
+            }
+            chunk.minY = minY;
+            chunk.maxY = maxY;
+            console.debug("done streaming", response.url, minY, maxY);
         },
         reason => console.log("rejected", reason)
     );
@@ -437,44 +538,27 @@ function fetchRegion(x: number, z: number, off: number, xo: number, zo: number) 
 
 // fetchRegion(1,1,0,-1.2,-1.2);
 
-if (0)
-for (let x = -1; x <= 1; x++) {
-    for (let z = -1; z <= 1; z++) {
-        for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, 0, 0)
+function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: number, xo: number, zo: number) {
+    for (let x = xs; x <= xe; x++) {
+        for (let z = zs; z <= ze; z++) {
+            for (let o = 0; o < 4; o++) {
+                fetchRegion(x, z, o);
+            }
+        }
     }
+    vec3.copy(camera.position, vec3.fromValues(xo * 512, 120, zo * 512));
+    vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
+    controls.update();
+
 }
 
+if (0)
+fetchRange(-1, 1, -1, 1, 90, 0, 0);
 
+if (1) // novigrad (FULL)
+fetchRange(0, 3, 0, 3, 130, 2.3, 3.4);
+else if (0)
+fetchRange(1, 1, 1, 1, 130, 2.3, 3.4);
+else
 if (1) // novigrad (TEST)
-for (let x = 1; x <= 2; x++) {
-    for (let z = 1; z <= 3; z++) {
-        for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, -1.9, -2.8)
-    }
-}
-
-
-if (0)
-for (let x = 4; x <= 7; x++) {
-    for (let z = 24; z <= 26; z++) {
-        for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, -5, -25)
-    }
-}
-
-if(0)
-for (let x = 0; x <= 3; x++) {
-    for (let z = 0; z <= 3; z++) {
-        for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, -1.9, -3.1)
-    }
-}
-
-if(0)
-for (let x = -2; x <= 1; x++) {
-    for (let z = -2; z <= 1; z++) {
-        for (let o = 0; o < 4; o++)
-            fetchRegion(x, z, o, 0, 0)
-    }
-}
+fetchRange(1, 2, 1, 3, 130, 2.3, 3.4);
