@@ -344,7 +344,7 @@ class OrbitControls extends EventDispatcher {
         let forward = vec3.sub(vec3.create(), this.object.position, this.object.target);
         let right = vec3.cross(vec3.create(), forward, vec3.fromValues(0, 1, 0));
         // vec3.set(v, objectMatrix[0], objectMatrix[1], objectMatrix[2]);
-        vec3.scale(right, right, distance * .5 * vec3.len(forward) / this.domElement.clientWidth);
+        vec3.scale(right, right, distance * 10  / this.domElement.clientWidth);
         vec3.add(this.panOffset, this.panOffset, right);
     }
     private panUp(distance: number) {
@@ -361,7 +361,7 @@ class OrbitControls extends EventDispatcher {
             vec3.cross(v, v, this.object.up);
         }
         */
-        vec3.scale(v, v, -distance * .5 * vec3.len(forward) / this.domElement.clientHeight);
+        vec3.scale(v, v, -distance * 10 / this.domElement.clientHeight);
         vec3.add(this.panOffset, this.panOffset, v);
     }
     // deltaX and deltaY are in pixels; right and down are positive
@@ -574,7 +574,7 @@ class OrbitControls extends EventDispatcher {
         vec2.scale(this.rotateDelta, this.rotateDelta, this.rotateSpeed);
         var element = this.domElement;
         this.rotateLeft(2 * Math.PI * this.rotateDelta[0] / element.clientHeight); // yes, height
-        this.rotateUp(2 * Math.PI * this.rotateDelta[0] / element.clientHeight);
+        this.rotateUp(2 * Math.PI * this.rotateDelta[1] / element.clientHeight);
         vec2.copy(this.rotateStart, this.rotateEnd);
     }
     private handleTouchMovePan(event: TouchEvent) {
