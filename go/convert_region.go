@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -264,29 +264,34 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file.Name()), ".mca"))
 	outLen := 0
+	outLenComp := int64(0)
+	// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
+	outComp := gzip.NewWriter(nil)
 	for bi := range bufs {
 		bs := &bufs[bi]
 		out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
-		outBuf := bufio.NewWriterSize(out, 1<<20)
+		outComp.Reset(out)
 		if err != nil {
 			log.Println("unable to open dest file")
 			return err
 		}
 
-		outBuf.Write([]byte("COMTE00\n"))
+		outComp.Write([]byte("COMTE00\n"))
 		for _, obuf := range bs {
 			binary.LittleEndian.PutUint32(buf, uint32(obuf.Len()))
 			outLen += obuf.Len()
-			outBuf.Write(buf[:4])
+			outComp.Write(buf[:4])
 		}
 		for _, obuf := range bs {
-			outBuf.Write(obuf.Bytes())
+			outComp.Write(obuf.Bytes())
 		}
-		outBuf.Flush()
+		outComp.Flush()
+		outComp.Close()
+		outLenComp, _ = out.Seek(0, os.SEEK_CUR)
 		out.Close()
 	}
 
-	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB")
+	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB =>", outLenComp/1024, "KiB (gzip)")
 
 	presentBlocks := []uint16{}
 	for bid, count := range blockCounts {

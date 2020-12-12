@@ -1,14 +1,13 @@
 /*
 TODO: open addressing for block insertion/deletion
 steal from https://shlegeris.com/2017/01/06/hash-maps.html
-
-
 */
 
 import { mat4, vec3 } from 'gl-matrix';
 
-var vertexShader = require('./cube_vertex.glsl');
-var fragmentShader = require('./cube_fragment.glsl');
+const vertexShader = require('./cube_vertex.glsl');
+const fragmentShader = require('./cube_fragment.glsl');
+import { Data, Inflate } from 'pako';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
@@ -431,10 +430,30 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
 
     // assumption: the header is in the first chunk returned here
     {
-        const { done, value } = await reader.read();
-        const headerLen = 8 + 4 * 3;
-        yield value.subarray(0, headerLen);
-        yield value.subarray(headerLen);
+        let { done, value } = await reader.read();
+        if (value[0] == 0x1f && value[1] == 0x8b) {
+            // GZIP-compressed
+            let decomp = new Inflate();
+            let chunks: Uint8Array[] = [];
+            let streamDone = false;
+            decomp.onData = (chunk: Uint8Array) => chunks.push(chunk);
+            decomp.onEnd = () => streamDone = true;
+
+            decomp.push(value, done);
+
+            yield* chunks;
+            chunks = [];
+
+            while (!done) {
+                ({ done, value } = await reader.read());
+                decomp.push(value, done);
+                yield* chunks;
+                chunks = [];
+            }
+            console.log(done, streamDone);
+            return;
+        }
+        yield value;
     }
     while (true) {
         const { done, value } = await reader.read();
@@ -462,11 +481,13 @@ function fetchRegion(x: number, z: number, off: number) {
                 controller.abort();
                 return;
             }
-            const sectionLengths = new Uint32Array(header.slice(8).buffer);
+            const sectionLengths = new Uint32Array(header.slice(8, 8 + 4 * 3).buffer);
             let length = 0;
             for (const sectionLength of sectionLengths) {
                 length += sectionLength;
             }
+            let value = header.subarray(8 + 4 * 3);
+            let done = false;
 
             console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", Array.from(sectionLengths).toString());
 
@@ -488,9 +509,7 @@ function fetchRegion(x: number, z: number, off: number) {
             let offset = 0;
             let layerNumber = 0;
 
-            let { value, done } = await stream.next();
-            while (true) {
-                if (done) break;
+            while (!done) {
                 if (value.length == 0) {
                     ({value, done} = await stream.next());
                     continue;
