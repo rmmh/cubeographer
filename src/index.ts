@@ -433,8 +433,8 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     {
         const { done, value } = await reader.read();
         const headerLen = 8 + 4 * 3;
-        yield value.slice(0, headerLen);
-        yield value.slice(headerLen);
+        yield value.subarray(0, headerLen);
+        yield value.subarray(headerLen);
     }
     while (true) {
         const { done, value } = await reader.read();
@@ -456,7 +456,7 @@ function fetchRegion(x: number, z: number, off: number) {
 
             const stream = asyncIterableFromStream(response.body);
             const header = (await stream.next()).value;
-            const magic = new TextDecoder("utf-8").decode(header.slice(0, 8));
+            const magic = new TextDecoder("utf-8").decode(header.subarray(0, 8));
             if (magic != "COMTE00\n") {
                 console.error(`invalid comte data file (expected magic "COMTE00\\n", got "${magic}"`);
                 controller.abort();
@@ -497,8 +497,8 @@ function fetchRegion(x: number, z: number, off: number) {
                 }
 
                 let wanted = Math.min(value.length, sectionLengths[layerNumber] - offset);
-                let tail = value.slice(wanted);
-                value = value.slice(0, wanted);
+                let tail = value.subarray(wanted);
+                value = value.subarray(0, wanted);
 
                 chunk.updateAttribute(layerNames[layerNumber], value, offset);
                 offset += value.length;
