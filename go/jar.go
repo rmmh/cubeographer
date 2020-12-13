@@ -18,6 +18,12 @@ import (
 
 const numRenderLayers = 3
 
+var layerNames = []string{
+	"CUBE",
+	"CROSS",
+	"CUBE_FALLBACK",
+}
+
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {

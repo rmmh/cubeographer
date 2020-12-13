@@ -428,7 +428,7 @@ function sleep(ms: number) {
 async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): AsyncIterator<Uint8Array, Uint8Array> {
     const reader = stream.getReader();
 
-    // assumption: the header is in the first chunk returned here
+    // transparently decompress GZIP by checking the magic bytes first
     {
         let { done, value } = await reader.read();
         if (value[0] == 0x1f && value[1] == 0x8b) {
@@ -450,7 +450,6 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
                 yield* chunks;
                 chunks = [];
             }
-            console.log(done, streamDone);
             return;
         }
         yield value;
@@ -481,28 +480,28 @@ function fetchRegion(x: number, z: number, off: number) {
                 controller.abort();
                 return;
             }
-            const sectionLengths = new Uint32Array(header.slice(8, 8 + 4 * 3).buffer);
-            let length = 0;
-            for (const sectionLength of sectionLengths) {
-                length += sectionLength;
-            }
-            let value = header.subarray(8 + 4 * 3);
+            const headerLength = new Uint32Array(header.slice(8, 8 + 4).buffer)[0];
+            let meta = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
+
+            let sectionLengths : Array<number> = meta.layers.map((x: {length: number}) => x.length);
+            let length = sectionLengths.reduce((a, b) => a + b);
+
+            let value = header.subarray(12 + headerLength);
             let done = false;
 
-            console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", Array.from(sectionLengths).toString());
+            console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", meta, sectionLengths);
 
             let chunk = context.Chunk();
 
             vec3.set(chunk.position, x * 512 + (off&1) * 256, 0, z * 512 + (off&2) * 128);
 
-            chunk.setLayers({
-                CUBE: { data: new Uint32Array(sectionLengths[0]/4), retain: true,
-                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CROSS: { data: new Uint32Array(sectionLengths[1]/4), retain: true,
-                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-                CUBE_FALLBACK: { data: new Uint32Array(sectionLengths[2]/4), retain: true,
-                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 },
-            });
+            let layerSpecs: any = {};
+            for (const layer of meta.layers) {
+                layerSpecs[layer.name] = { data: new Uint32Array(layer.length/4), retain: true,
+                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 };
+            }
+
+            chunk.setLayers(layerSpecs);
 
             scene.add(chunk);
 

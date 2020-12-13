@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -277,12 +278,28 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 
 		outComp.Write([]byte("COMTE00\n"))
-		for _, obuf := range bs {
-			binary.LittleEndian.PutUint32(buf, uint32(obuf.Len()))
-			outLen += obuf.Len()
-			outComp.Write(buf[:4])
+
+		var header (struct {
+			Layers [numRenderLayers]struct {
+				Length int    `json:"length"`
+				Name   string `json:"name"`
+			} `json:"layers"`
+		})
+
+		for i, obuf := range bs {
+			header.Layers[i].Length = obuf.Len()
+			header.Layers[i].Name = layerNames[i]
 		}
+		headerJSON, err := json.Marshal(header)
+		if err != nil {
+			log.Fatal(err)
+		}
+		binary.LittleEndian.PutUint32(buf, uint32(len(headerJSON)))
+		outComp.Write(buf[:4])
+		outComp.Write(headerJSON)
+
 		for _, obuf := range bs {
+			outLen += obuf.Len()
 			outComp.Write(obuf.Bytes())
 		}
 		outComp.Flush()
@@ -291,7 +308,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		out.Close()
 	}
 
-	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB =>", outLenComp/1024, "KiB (gzip)")
+	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB =>", outLenComp/1024, "KiB")
 
 	presentBlocks := []uint16{}
 	for bid, count := range blockCounts {
