@@ -12,17 +12,27 @@ import (
 	"log"
 	"os"
 	"path"
+	"reflect"
 	"sort"
 	"strings"
 )
 
-const numRenderLayers = 3
-
 var layerNames = []string{
 	"CUBE",
+	"VOXEL",
 	"CROSS",
 	"CUBE_FALLBACK",
 }
+
+type layerNumber int
+
+const (
+	layerCube layerNumber = iota
+	layerVoxel
+	layerCross
+	layerCubeFallback
+	numRenderLayers
+)
 
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
@@ -150,28 +160,30 @@ func unmarshalBlockState(buf []byte, b *blockState) error {
 	return nil
 }
 
+type blockModelFace struct {
+	UV        []float64 `json:"uv"`
+	Texture   string    `json:"texture"`
+	CullFace  string    `json:"cullface,omitempty"`
+	Rotation  int       `json:"rotation,omitempty"`
+	TintIndex *int      `json:"tintindex,omitempty"`
+}
+
 type blockModel struct {
 	Parent           string `json:"parent"`
-	AmbientOcclusion *bool  `json:"ambientocclusion"`
+	AmbientOcclusion *bool  `json:"ambientocclusion,omitempty"`
 	/* omitted: display */
 	Textures map[string]string `json:"textures"`
 	Elements []struct {
 		From     []float64 `json:"from"`
 		To       []float64 `json:"to"`
 		Rotation struct {
-			Origin  []float64 `json:"origin"`
-			Axis    string    `json:"axis"`
+			Origin  []float64 `json:"origin,omitempty"`
+			Axis    string    `json:"axis,omitempty"`
 			Angle   float64   `json:"angle"`
-			Rescale *bool     `json:"rescale"`
+			Rescale *bool     `json:"rescale,omitempty"`
 		} `json:"rotation"`
-		Shade *bool `json:"shade"`
-		Faces map[string]struct {
-			UV        []float64 `json:"uv"`
-			Texture   string    `json:"texture"`
-			CullFace  string    `json:"cullface"`
-			Rotation  int       `json:"rotation"`
-			TintIndex *int      `json:"tintindex"`
-		}
+		Shade *bool                     `json:"shade,omitempty"`
+		Faces map[string]blockModelFace `json:"faces"`
 	} `json:"elements"`
 }
 
@@ -183,9 +195,9 @@ func removeDefaultPrefix(s string) string {
 }
 
 type modelEntry struct {
-	Layer    int      `json:"layer"`
-	Textures []string `json:"textures,omitempty"`
-	Template []uint32 `json:"tmpl,omitempty"`
+	Layer    layerNumber `json:"layer"`
+	Textures []string    `json:"textures,omitempty"`
+	Template []uint32    `json:"tmpl,omitempty"`
 }
 
 type blockEntry struct {
@@ -280,61 +292,134 @@ func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
 	return out, tinted
 }
 
+func (s *stateConverter) resolveInheritance(model *blockModel) {
+	parentName := model.Parent
+	for parentName != "" {
+		parent := s.models[removeDefaultPrefix(parentName)]
+		if model.AmbientOcclusion == nil {
+			model.AmbientOcclusion = parent.AmbientOcclusion
+		}
+		if len(model.Elements) == 0 {
+			model.Elements = parent.Elements
+		}
+		if model.Textures == nil {
+			model.Textures = map[string]string{}
+		}
+		if parent.Textures != nil {
+			for k, v := range parent.Textures {
+				if _, ok := model.Textures[k]; !ok {
+					model.Textures[k] = v
+				}
+			}
+		}
+		parentName = parent.Parent
+	}
+}
+
+func (m *blockModel) getCubeFaces(faces [6]blockModelFace) ([]string, bool) {
+	ret := []string{}
+	tintCount := 0
+	for _, face := range faces {
+		if face.Texture == "" || face.CullFace == "" || face.Rotation != 0 || (face.UV != nil && !reflect.DeepEqual(face.UV, []float64{0, 0, 16, 16})) {
+			return nil, false
+		}
+		if face.TintIndex != nil {
+			if *face.TintIndex != 0 {
+				return nil, false
+			}
+			tintCount++
+		}
+		tex := face.Texture
+		for tex[0] == byte('#') {
+			tex = m.Textures[tex[1:]]
+		}
+		ret = append(ret, tex)
+	}
+	if tintCount != 0 && tintCount != 6 {
+		return nil, false
+	}
+	return ret, tintCount == 6
+}
+
+func (m *blockModel) renderCube() *modelEntry {
+	if len(m.Elements) != 1 {
+		return nil
+	}
+	el := m.Elements[0]
+	if !reflect.DeepEqual(el.From, []float64{0, 0, 0}) || !reflect.DeepEqual(el.To, []float64{16, 16, 16}) {
+		return nil
+	}
+	if el.Shade != nil || el.Rotation.Angle != 0 {
+		return nil
+	}
+	texs, tint := m.getCubeFaces([...]blockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]})
+	if texs == nil {
+		return nil
+	}
+	if texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
+		return nil
+	}
+
+	meta := uint32(0b111111)
+	if tint {
+		meta |= 1 << 31
+	}
+	if texs[0] != texs[1] || texs[0] != texs[5] {
+		return &modelEntry{
+			Layer:    layerCube,
+			Textures: []string{texs[1], texs[0], texs[5]},
+			Template: []uint32{0, meta | 1<<30},
+		}
+	}
+
+	return &modelEntry{
+		Layer:    layerCube,
+		Textures: []string{texs[0]},
+		Template: []uint32{0, meta},
+	}
+}
+
 func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry {
 	modelName := removeDefaultPrefix(ms.Model)
+	// TODO: check for modelspec X/Y rotations etc
 	model := s.models[modelName]
-	if model.Parent == "minecraft:block/cube_all" {
-		tex := model.Textures["all"]
-		fmt.Println("CUBE_ALL", name, tex)
+	s.resolveInheritance(model)
+
+	cubeSpec := model.renderCube()
+	if cubeSpec != nil {
+		fmt.Printf("CUBE %#v\n", cubeSpec)
+		return *cubeSpec
+	}
+
+	if name == "grass_block" {
+		// render grass blocks as two cubes:
+		// * the dirt sides and bottom (no top)
+		// * the tinted grass top and side overlay (no bottom)
 		return modelEntry{
-			Layer:    0,
-			Textures: []string{tex},
-			Template: []uint32{0, 0}}
-	} else if model.Parent == "minecraft:block/leaves" {
-		tex := model.Textures["all"]
-		fmt.Println("CUBE_LEAVES", name, tex)
-		return modelEntry{
-			Layer:    0,
-			Textures: []string{tex},
-			Template: []uint32{0, 1 << 31}}
-	} else if model.Parent == "minecraft:block/cube_column" {
-		side := model.Textures["side"]
-		end := model.Textures["end"]
-		if s.columnTops[side] == "" {
-			s.columnTops[side] = end
-			fmt.Println("CUBE_COLUMN", name, side, end)
-			return modelEntry{
-				Layer:    0,
-				Textures: []string{side, end},
-				Template: []uint32{0, 1 << 30}}
+			Layer:    layerCube,
+			Textures: []string{model.Textures["side"], model.Textures["bottom"], model.Textures["overlay"], model.Textures["top"]},
+			Template: []uint32{0, 0b101111 | 1<<30, 0, 0b011111 | 3<<30},
 		}
-	} else if model.Parent == "minecraft:block/cube_bottom_top" {
-		side := model.Textures["side"]
-		top := model.Textures["top"]
-		bottom := model.Textures["bottom"]
-		if s.columnTops[side] == "" {
-			s.columnTops[side] = top
-			fmt.Println("CUBE_BOTTOM_TOP", name, side, top, bottom)
-			return modelEntry{
-				Layer:    0,
-				Textures: []string{side, top, bottom},
-				Template: []uint32{0, 1 << 30}}
-		}
-	} else if model.Parent == "minecraft:block/cross" {
+	}
+
+	if model.Parent == "minecraft:block/cross" {
 		tex := model.Textures["cross"]
 		fmt.Println("CROSS", name, tex)
 		return modelEntry{
-			Layer:    1,
+			Layer:    layerCross,
 			Textures: []string{tex},
-			Template: []uint32{0, 0}}
+			Template: []uint32{0, 0b1111111}}
 	} else if model.Parent == "minecraft:block/tinted_cross" {
 		tex := model.Textures["cross"]
 		fmt.Println("TINTED_CROSS", name, tex)
 		return modelEntry{
-			Layer:    1,
+			Layer:    layerCross,
 			Textures: []string{tex},
-			Template: []uint32{0, 1 << 31}}
+			Template: []uint32{0, 0b111111 | 1<<31}}
 	}
+
+	modelJ, _ := json.MarshalIndent(model, "", "  ")
+	fmt.Printf("FALLBACK %#v %s\n", ms, string(modelJ))
 
 	// fallback
 	textures, tinted := s.referencedTexturesModel(model)
@@ -343,11 +428,11 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 		if tex[0] == '#' {
 			continue
 		}
-		tint := uint32(0)
+		meta := uint32(0b111111)
 		if tinted {
-			tint |= 1 << 31
+			meta |= 1 << 31
 		}
-		return modelEntry{Layer: 2, Textures: []string{tex}, Template: []uint32{0, tint}}
+		return modelEntry{Layer: layerCubeFallback, Textures: []string{tex}, Template: []uint32{0, meta}}
 	}
 
 	return modelEntry{Layer: -1}
@@ -356,7 +441,6 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 func (s *stateConverter) render(name string, st *blockState) blockEntry {
 	slist := st.buildStateList()
 	smap := buildStateMap(slist)
-	fmt.Println("STATEMAP:", slist, smap)
 	if st.Variants[""] != nil {
 		model := s.renderModelSpec(name, &st.Variants[""][0])
 		if model.Layer >= 0 {
@@ -378,12 +462,12 @@ func (s *stateConverter) render(name string, st *blockState) blockEntry {
 		if tex[0] == '#' {
 			continue
 		}
-		tint := uint32(0)
+		tint := uint32(0b111111)
 		if tinted {
 			tint |= 1 << 31
 		}
 		return blockEntry{Name: name, States: slist, Templates: []modelEntry{
-			{Layer: 2, Textures: []string{tex}, Template: []uint32{0, tint}}}}
+			{Layer: layerCubeFallback, Textures: []string{tex}, Template: []uint32{0, tint}}}}
 	}
 
 	return blockEntry{}
@@ -528,7 +612,7 @@ func generate(outDir string) {
 	atlases := []*image.RGBA{}
 	texIDs := []map[string]int{}
 
-	for i := 0; i < numRenderLayers; i++ {
+	for i := 0; i < int(numRenderLayers); i++ {
 		atlas := image.NewRGBA(image.Rect(0, 0, 512, 512))
 
 		draw.Draw(atlas, atlas.Bounds(), &image.Uniform{color.RGBA{255, 255, 255, 64}},
@@ -545,8 +629,6 @@ func generate(outDir string) {
 		atlases = append(atlases, atlas)
 		texIDs = append(texIDs, map[string]int{"air": 0})
 	}
-
-	fmt.Println("BLOCKENTRIES", blockEntries)
 
 	// sort blocks so that blocks with assigned block IDs
 	// come first in the correct order
@@ -569,7 +651,7 @@ func generate(outDir string) {
 
 	for i := range *blockEntries {
 		ent := &(*blockEntries)[i]
-		splatTexture := func(layer int, name string, place int) {
+		splatTexture := func(layer layerNumber, name string, place int) {
 			if place == 0 {
 				place = texIDs[layer][name]
 			}
@@ -595,11 +677,14 @@ func generate(outDir string) {
 			}
 
 			layer := model.Layer
-			if layer == 0 { // first layer handles columns specially (top/bottom)
+			if layer == layerCube {
 				splatTexture(layer, model.Textures[0], 0)
 				if len(model.Textures) > 1 {
 					splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+256)
-					if len(model.Textures) == 3 {
+					if len(model.Textures) == 4 { // grass_block
+						splatTexture(layer, model.Textures[2], 0)
+						splatTexture(layer, model.Textures[3], texIDs[layer][model.Textures[2]]+256)
+					} else if len(model.Textures) == 3 {
 						splatTexture(layer, model.Textures[2], texIDs[layer][model.Textures[0]]+512)
 					} else {
 						splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+512)
@@ -612,13 +697,13 @@ func generate(outDir string) {
 			}
 
 			tid := texIDs[layer][model.Textures[0]]
-			if tid >= 256 && layer == 0 {
+			if tid >= 256 && layer == layerCube {
 				panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
 			}
 			if tid >= 512 {
 				panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
 			}
-			if layer == 0 || layer == 2 {
+			if layer == layerCube || layer == layerCubeFallback {
 				solid := true
 				for _, tex := range model.Textures {
 					if textureClasses[tex] != texOpaque {
@@ -631,11 +716,17 @@ func generate(outDir string) {
 			}
 			model.Template[0] |= uint32(tid) << 24
 			model.Template[1] |= uint32(tid>>8) << 30
+			if ent.Name == "grass_block" && len(model.Template) == 4 {
+				// render grass blocks as two cubes:
+				// * the dirt sides and bottom (no top)
+				// * & len(model.Template) == 4 {the tinted grass top and side overlay (no bottom)
+				model.Template[2] |= uint32(texIDs[layer][model.Textures[2]]) << 24
+			}
 			if ent.Name == "water" {
 				model.Template[1] |= 1 << 31
 			}
-			fmt.Printf("%s %v=%d %v %08x %08x\n",
-				ent.Name, model.Textures, tid, textures[model.Textures[0]].Bounds(),
+			fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
+				layer, ent.Name, model.Textures, tid, textures[model.Textures[0]].Bounds(),
 				model.Template[0], model.Template[1])
 		}
 	}

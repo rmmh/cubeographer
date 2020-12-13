@@ -377,11 +377,12 @@ function makeCube() {
 let cube = makeCube();
 
 
-const layerNames = ["CUBE", "CROSS", "CUBE_FALLBACK"]
+const layerNames = ["CUBE", "VOXEL", "CROSS", "CUBE_FALLBACK"]
 let layers = [
     makeCubeLayer("CUBE", "textures/atlas0.png"),
-    makeCrossLayer("CROSS", "textures/atlas1.png", {CROSS: 1}),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas2.png", {WATER_ID: 2, FALLBACK: 1})
+    makeCubeLayer("VOXEL", "textures/atlas1.png", {VOXEL: 1}),
+    makeCrossLayer("CROSS", "textures/atlas2.png", {CROSS: 1}),
+    makeCubeLayer("CUBE_FALLBACK", "textures/atlas3.png", {WATER_ID: 1, FALLBACK: 1})
 ];
 
 let willRender = false;
@@ -518,13 +519,14 @@ function fetchRegion(x: number, z: number, off: number) {
                 let tail = value.subarray(wanted);
                 value = value.subarray(0, wanted);
 
-                chunk.updateAttribute(layerNames[layerNumber], value, offset);
+                let layerName = meta.layers[layerNumber].name;
+                chunk.updateAttribute(layerName, value, offset);
                 offset += value.length;
-                chunk.layers[layerNames[layerNumber]].size = Math.floor(offset / (CUBE_ATTRIB_STRIDE * 4));
+                chunk.layers[layerName].size = Math.floor(offset / (CUBE_ATTRIB_STRIDE * 4));
 
                 value = tail;
 
-                if (offset == sectionLengths[layerNumber]) {
+                while (offset === sectionLengths[layerNumber]) {
                     offset = 0;
                     layerNumber++;
                 }

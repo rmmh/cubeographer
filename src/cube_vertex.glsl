@@ -70,8 +70,7 @@ void main()	{
 #else
     bool sideSpecial = face >= 4 && (attr.y & (1u<<30)) != 0u;
 #endif
-    vColor = sideSpecial ? vec4(sideLight, sideLight, sideLight, 1.0) :
-             vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
+    vColor = vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
     gl_Position = projectionMatrix * modelViewMatrix *
         vec4((shouldFlip ? vec3(1) - position : position) + unpackedPos, 1.0 );
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);

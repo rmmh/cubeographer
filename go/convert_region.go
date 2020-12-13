@@ -180,7 +180,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	var bufs [4][numRenderLayers]bytes.Buffer
 
-	buf := make([]byte, 12)
+	buf := make([]byte, 16)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
 
 	const subScale = 16
@@ -253,11 +253,21 @@ func scanRegion(conf *scanRegionConfig) error {
 						tmpl = bm.tmpl[b][0]
 						layer = bm.layer[b][0]
 					}
-					// x: 8b z: 8b y: 8b   8+8+8=24b
-					binary.LittleEndian.PutUint32(buf, tmpl[0]|uint32((x&255)<<16|(z&255)<<8|y))
-					binary.LittleEndian.PutUint32(buf[4:], tmpl[1]|sideLight<<6|sideVis)
-					bs := &bufs[x>>8+2*(z>>8)]
-					bs[layer].Write(buf[:8])
+
+					pos := uint32((x&255)<<16 | (z&255)<<8 | y)
+					blen := 0
+
+					for i := 0; i < len(tmpl); i += 2 {
+						// x: 8b z: 8b y: 8b   8+8+8=24b
+						if sideVis&tmpl[i+1] != 0 {
+							binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
+							binary.LittleEndian.PutUint32(buf[blen+4:], tmpl[i+1]&^0b111111|sideLight<<6|(sideVis&tmpl[i+1]))
+							blen += 8
+						}
+					}
+					if blen > 0 {
+						bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
+					}
 				}
 			}
 		}
@@ -324,7 +334,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		if blockCounts[bid] < 100 {
 			continue
 		}
-		if bm.layer[bid][0] == 2 {
+		if layerNumber(bm.layer[bid][0]) == layerCubeFallback {
 			fmt.Println(bm.nidToName[bid], blockCounts[bid])
 		}
 	}
