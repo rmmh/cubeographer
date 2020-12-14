@@ -194,7 +194,20 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	for y := 0; y < 256; y++ {
 		for z := 0; z < 512; z++ {
-			for x := 0; x < 512; x++ {
+			// skipping empty rows is a significant speedup for empty regions
+			minX := 0
+			for minX < 512 && cdata[(minX>>4)+(z>>4)*32].blocks == nil {
+				minX += 16
+			}
+			if minX == 512 {
+				z += 15
+				continue
+			}
+			for x := minX; x < 512; x++ {
+				if cdata[(x>>4)+(z>>4)*32].blocks == nil {
+					x += 15
+				}
+
 				if conf.pruneCaves {
 					chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
 					if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
