@@ -572,10 +572,9 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
 
 }
 
-if (0)
+if (1)
 fetchRange(-1, 1, -1, 1, 90, 0, 0);
-
-if (1) // novigrad (FULL)
+else if (1) // novigrad (FULL)
 fetchRange(0, 3, 0, 3, 130, 2.3, 3.4);
 else if (0)
 fetchRange(1, 1, 1, 1, 130, 2.3, 3.4);

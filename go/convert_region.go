@@ -200,7 +200,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 				if conf.pruneCaves {
 					chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
-					if chunkletVis.dirReachable == 0 && (y < 40 || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
+					if chunkletVis.dirReachable == 0 && (y < 64) { // || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
 						// cavey-elimination
 						continue
 					}

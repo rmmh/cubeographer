@@ -5,7 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -109,7 +109,13 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 		return r.offsets[seqChunks[i]] < r.offsets[seqChunks[j]]
 	})
 
+	// allocating these once per region saves memory
 	chunkBuf := make([]byte, 4096*maxSectors)
+	chunkDecompressed := bytes.NewBuffer(make([]byte, 0, 4*(1<<20)))
+	palNids := make([]uint16, 0, 64)
+	palStates := make([]uint8, 0, 64)
+	var zr io.ReadCloser
+	var zrr zlib.Resetter
 
 	for _, chunkNum := range seqChunks {
 		f.Seek(int64(r.offsets[chunkNum]>>8)*4096, os.SEEK_SET)
@@ -129,14 +135,27 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			log.Println("unhandled compression type", chunkBuf[4])
 			continue
 		}
-		zr, err := zlib.NewReader(bytes.NewReader(chunkBuf[5 : chunkLen+4]))
+
+		chunkReader := bytes.NewReader(chunkBuf[5 : chunkLen+4])
+		if zr == nil {
+			zr, err = zlib.NewReader(chunkReader)
+			var ok bool
+			zrr, ok = zr.(zlib.Resetter)
+			if !ok {
+				panic("zlib.NewReader MUST be resettable")
+			}
+		} else {
+			err = zrr.Reset(chunkReader, nil)
+		}
 		if err != nil {
 			return cdata, err
 		}
-		chunk, err := ioutil.ReadAll(zr)
+		chunkDecompressed.Reset()
+		_, err = chunkDecompressed.ReadFrom(zr)
 		if err != nil {
 			return cdata, err
 		}
+
 		dataVersion := 0
 		blocks := [][]byte{}
 		blockData := [][]byte{}
@@ -148,7 +167,7 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
-		err = nbtWalk(chunk, func(path []string, idxes []int, ty nbtType, value []byte) {
+		err = nbtWalk(chunkDecompressed.Bytes(), func(path []string, idxes []int, ty nbtType, value []byte) {
 			//fmt.Println(path, ty, len(value), value)
 			if len(path) == 2 && ty == tagInt {
 				if path[1] == "xPos" {
@@ -233,6 +252,13 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			}
 		} else if len(blockStates) > 0 {
 			for bi, bs := range blockStates {
+				palNids = palNids[:0]
+				palStates = palStates[:0]
+				for i := range palettes[bi] {
+					nid := r.bm.nameToNid[palettes[bi][i].name]
+					palNids = append(palNids, nid)
+					palStates = append(palStates, r.bm.nidToSmap[nid].getStateList(palettes[bi][i].props))
+				}
 				if len(bs) == 0 {
 					// empty segment
 					nblocks = append(nblocks, make([]uint16, 16*16*16))
@@ -252,8 +278,8 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 					vals = blockstatesToShorts116(bs)
 				}
 				for i, v := range vals {
-					vals[i] = r.bm.nameToNid[palettes[bi][v].name]
-					states[i] = r.bm.nidToSmap[vals[i]].getStateList(palettes[bi][v].props)
+					vals[i] = palNids[v]
+					states[i] = palStates[v]
 				}
 				nblocks = append(nblocks, vals)
 				nstates = append(nstates, states)
@@ -270,17 +296,28 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 
 // 1.16 64-bit BlockState long array to uint16 array
 func blockstatesToShorts116(value []byte) []uint16 {
+	bpb := (64 * (len(value) / 8)) / 4096
+	if bpb < 4 {
+		bpb = 4
+	}
+
+	ret := make([]uint16, 4096)
+	if bpb == 4 {
+		// fast case: a nibble
+		for i := 0; i < 4096; i += 2 {
+			b := uint16(value[(i/2)&^7+7-(i/2)&7])
+			ret[i] = b & 0xf
+			ret[i+1] = b >> 4
+		}
+		return ret
+	}
+
 	larr := make([]uint64, len(value)/8)
 	for i, v := range value {
 		larr[i>>3] |= uint64(v) << ((7 - (i & 7)) * 8)
 	}
-	bpb := (64 * len(larr)) / 4096
-	if bpb < 4 {
-		bpb = 4
-	}
 	bmask := uint64(1<<bpb) - 1
 	bpe := 64 / bpb
-	ret := make([]uint16, 4096)
 	for bsi, v := range larr {
 		for i := 0; i < bpe; i++ {
 			index := (v >> (i * bpb)) & bmask
