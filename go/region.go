@@ -9,11 +9,14 @@ import (
 	"log"
 	"math"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 )
 
 type region struct {
 	path       string
+	rx, rz     int
 	bm         *blockMapper
 	offsets    [1024]uint32
 	timestamps [1024]uint32
@@ -24,6 +27,8 @@ type paletteEntry struct {
 	props []string
 }
 
+var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
+
 func makeRegion(path string, bm *blockMapper) (*region, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -31,7 +36,16 @@ func makeRegion(path string, bm *blockMapper) (*region, error) {
 	}
 	defer f.Close()
 
-	r := &region{path: path, bm: bm}
+	var rx, rz int
+	m := regionMatchRE.FindStringSubmatch(path)
+	if m != nil {
+		rx, _ = strconv.Atoi(m[1])
+		rz, _ = strconv.Atoi(m[2])
+	} else {
+		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
+	}
+
+	r := &region{path: path, bm: bm, rx: rx, rz: rz}
 
 	var buf [4096]uint8
 	_, err = f.Read(buf[:])
@@ -123,26 +137,29 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 		if err != nil {
 			return cdata, err
 		}
+		dataVersion := 0
 		blocks := [][]byte{}
 		blockData := [][]byte{}
-		blockStates := [][]byte{}
+		blockStates := make([][]byte, 17)
 		palettes := make([][]paletteEntry, 17)
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []byte{}
-		xPos, zPos := int(chunkNum&31), int(chunkNum>>5)
+		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
 		err = nbtWalk(chunk, func(path []string, idxes []int, ty nbtType, value []byte) {
-			// fmt.Println(path, ty, len(value))
-			if ty == tagByte {
+			//fmt.Println(path, ty, len(value), value)
+			if len(path) == 2 && ty == tagInt {
 				if path[1] == "xPos" {
-					chunkXPos = int(value[0])
+					chunkXPos = int(int32(binary.BigEndian.Uint32(value)))
 				} else if path[1] == "zPos" {
-					chunkZPos = int(value[0])
+					chunkZPos = int(int32(binary.BigEndian.Uint32(value)))
 				}
 			}
-			if len(path) > 1 && path[1] == "Sections" {
+			if len(path) == 1 && path[0] == "DataVersion" {
+				dataVersion = int(binary.BigEndian.Uint32(value))
+			} else if len(path) > 1 && path[1] == "Sections" {
 				last := path[len(path)-1]
 				if len(idxes) == 2 && len(path) > 4 && path[3] == "Palette" {
 					cpal := &palettes[idxes[0]]
@@ -169,7 +186,7 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 					}
 				} else if ty == tagLongArray {
 					if last == "BlockStates" {
-						blockStates = append(blockStates, value)
+						blockStates[idxes[0]] = value
 						// fmt.Println("BLOCKSTATES", path, last, idxes, len(value), 8*len(value)/4096)
 					}
 				} else if ty == tagByte && last == "Y" {
@@ -184,6 +201,10 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 		if len(ys) > 1 && ys[0] == 255 {
 			ys = ys[1:]
 			palettes = palettes[1:]
+			blockStates = blockStates[1:]
+		}
+		for len(blockStates) > 0 && len(blockStates[len(blockStates)-1]) == 0 {
+			blockStates = blockStates[:len(blockStates)-1]
 		}
 		if !sort.SliceIsSorted(ys, func(i, j int) bool { return ys[i] < ys[j] }) {
 			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
@@ -212,16 +233,30 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 			}
 		} else if len(blockStates) > 0 {
 			for bi, bs := range blockStates {
+				if len(bs) == 0 {
+					// empty segment
+					nblocks = append(nblocks, make([]uint16, 16*16*16))
+					nstates = append(nstates, make([]uint8, 16*16*16))
+					continue
+				}
 				if bi >= len(palettes) {
 					fmt.Println("wtf, a blockstate without an associated palette?")
 					break
 				}
-				// TODO: handle 1.13-1.15 packing
-				vals := blockstatesToShorts116(bs)
+				var vals []uint16
+				states := make([]uint8, 16*16*16)
+				if dataVersion < 2529 {
+					// before 1.16 snapshot 20w17a
+					vals = blockstatesToShortsPacked(bs)
+				} else {
+					vals = blockstatesToShorts116(bs)
+				}
 				for i, v := range vals {
 					vals[i] = r.bm.nameToNid[palettes[bi][v].name]
+					states[i] = r.bm.nidToSmap[vals[i]].getStateList(palettes[bi][v].props)
 				}
 				nblocks = append(nblocks, vals)
+				nstates = append(nstates, states)
 			}
 		}
 		cdata[chunkNum] = chunkDatum{nblocks, nstates, lights, lightsSky}
@@ -256,5 +291,34 @@ func blockstatesToShorts116(value []byte) []uint16 {
 			ret[nido] = uint16(index)
 		}
 	}
+	return ret
+}
+
+// pre-1.16, blockstates are packed to use every bit possible
+func blockstatesToShortsPacked(value []byte) []uint16 {
+	bpb := (64 * (len(value) / 8)) / 4096
+	if 64%bpb == 0 {
+		// simple case: the state bits fit into longs with no slop
+		return blockstatesToShorts116(value)
+	}
+
+	bmask := uint32(1<<bpb) - 1
+	ret := make([]uint16, 4096)
+	var bitbuf uint32
+	bits := 0
+	vptr := 0
+	for i := 0; i < 4096; i++ {
+		for bits < bpb {
+			// n.b.: value is a representation of *big endian* longs
+			// this bit twiddling reads it in the right order
+			bitbuf |= (uint32(value[vptr&^7+(7-vptr&7)]) << bits)
+			bits += 8
+			vptr++
+		}
+		ret[i] = uint16(bitbuf & bmask)
+		bitbuf >>= bpb
+		bits -= bpb
+	}
+
 	return ret
 }

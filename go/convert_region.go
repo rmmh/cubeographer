@@ -10,9 +10,7 @@ import (
 	"log"
 	"os"
 	"path"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -138,14 +136,6 @@ func scanRegion(conf *scanRegionConfig) error {
 	if err != nil {
 		return err
 	}
-
-	var rx, rz int
-	regionMatch := regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`).FindStringSubmatch(conf.file.Name())
-	if regionMatch != nil {
-		rx, _ = strconv.Atoi(regionMatch[1])
-		rz, _ = strconv.Atoi(regionMatch[2])
-	}
-
 	cdata, err := r.readChunks(nil)
 	if err != nil {
 		return err
@@ -154,8 +144,8 @@ func scanRegion(conf *scanRegionConfig) error {
 	rs := regionState{
 		dir:   conf.dir,
 		bm:    bm,
-		rx:    rx,
-		rz:    rz,
+		rx:    r.rx,
+		rz:    r.rz,
 		cdata: cdata,
 	}
 
