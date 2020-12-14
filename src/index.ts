@@ -572,12 +572,9 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
 
 }
 
-if (1)
-fetchRange(-1, 1, -1, 1, 90, 0, 0);
-else if (1) // novigrad (FULL)
-fetchRange(0, 3, 0, 3, 130, 2.3, 3.4);
-else if (0)
-fetchRange(1, 1, 1, 1, 130, 2.3, 3.4);
-else
-if (1) // novigrad (TEST)
-fetchRange(1, 2, 1, 3, 130, 2.3, 3.4);
+const choice: string = 'novitest';
+switch (choice) {
+    case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
+    case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4);  break;
+    default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
+}

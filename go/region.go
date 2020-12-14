@@ -199,9 +199,15 @@ func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
 					} else if last == "Data" {
 						blockData = append(blockData, value)
 					} else if last == "BlockLight" {
-						lights = append(lights, value)
+						// lights and lightsky are the only values that escape this
+						// function-- don't reference the reused chunk data buffer!
+						light := make([]byte, len(value))
+						copy(light, value)
+						lights = append(lights, light)
 					} else if last == "SkyLight" {
-						lightsSky = append(lightsSky, value)
+						light := make([]byte, len(value))
+						copy(light, value)
+						lightsSky = append(lightsSky, light)
 					}
 				} else if ty == tagLongArray {
 					if last == "BlockStates" {
