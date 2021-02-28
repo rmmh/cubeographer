@@ -79,6 +79,7 @@ func main() {
 	numProcs := flag.Int("threads", runtime.NumCPU(), "number of parallel threads to use")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	hideCaves := flag.Bool("nocave", false, "attempt to hide invisible caves")
+	doConvert := flag.Bool("convert", false, "convert region files for web display")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -104,8 +105,16 @@ func main() {
 	if len(args) > 2 {
 		filters = args[2:]
 	}
+	if *doConvert {
+		if len(args) > 1 {
+			convert(*numProcs, args[0], args[1], filters, *hideCaves)
+		} else {
+			usage()
+			return
+		}
+	}
 	if len(args) > 1 {
-		convert(*numProcs, args[0], args[1], filters, *hideCaves)
+		serve(*numProcs, args[0], args[1])
 	} else {
 		usage()
 	}
