@@ -1114,7 +1114,7 @@ function createBuffersFromArrays(gl: WebGLRenderingContext, arrays: {[name: stri
     };
     Object.keys(arrays).forEach(function (key) {
         const type = key === 'indices' ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER;
-        const array = makeTypedArray(arrays[key], name);
+        const array = makeTypedArray(arrays[key], key);
         buffers[key] = createBufferFromTypedArray(gl, array, type);
     });
 
