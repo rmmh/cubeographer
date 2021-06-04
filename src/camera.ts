@@ -203,7 +203,6 @@ class OrbitControls extends EventDispatcher {
 
     // this method is exposed, but perhaps it would be better if we can make it private...
 
-
     private offset = vec3.create();
     // so camera.up is the orbit axis
     private rot = quat.fromEuler(quat.create(), 0, 1, 0);

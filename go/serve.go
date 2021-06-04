@@ -16,17 +16,18 @@ import (
 )
 
 var (
-	cmtRe = regexp.MustCompile(`^/map/r\.(\d+)\.(\d+)\.\d+\.cmt$`)
+	cmtRe = regexp.MustCompile(`([^/]+)/map/r\.(\d+)\.(\d+)\.\d+\.cmt$`)
 )
 
 type workItem struct {
-	rx   int
-	rz   int
-	done chan<- struct{}
+	world string
+	rx    int
+	rz    int
+	done  chan<- struct{}
 }
 
 type server struct {
-	regionDir  string
+	regionDir  map[string]string
 	dataDir    string
 	pruneCaves bool
 
@@ -78,8 +79,8 @@ func (s *server) mapWorker() {
 			continue
 		}
 		scanRegion(&scanRegionConfig{
-			dir:        s.regionDir,
-			outdir:     path.Join(s.dataDir, "map"),
+			dir:        s.regionDir[item.world],
+			outdir:     path.Join(s.dataDir, item.world, "map"),
 			file:       fmt.Sprintf("r.%d.%d.mca", item.rx, item.rz),
 			bm:         s.bm,
 			pruneCaves: s.pruneCaves,
@@ -94,17 +95,22 @@ func (s *server) mapWorker() {
 }
 
 func (s *server) awaitUpdate(filename string) {
-	m := regionMatchRE.FindStringSubmatch(filename)
+	m := cmtRe.FindStringSubmatch(filename)
 	if len(m) == 0 {
 		return
 	}
-	rx, _ := strconv.Atoi(m[1])
-	rz, _ := strconv.Atoi(m[2])
+	world := m[1]
+	if s.regionDir[world] == "" {
+		return
+	}
+	rx, _ := strconv.Atoi(m[2])
+	rz, _ := strconv.Atoi(m[3])
 	done := make(chan struct{})
 	work := &workItem{
-		rx:   rx,
-		rz:   rz,
-		done: done,
+		world: world,
+		rx:    rx,
+		rz:    rz,
+		done:  done,
 	}
 	s.workQueue <- work
 	<-done
@@ -115,11 +121,16 @@ func (s *server) mapHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Encoding", "gzip")
 	}
 	w.Header().Add("Cache-Control", "no-cache")
-	log.Println(r.URL.Path, s.isStale(r.URL.Path))
+	log.Printf("%s stale=%v", r.URL.Path, s.isStale(r.URL.Path))
 	if s.isStale(r.URL.Path) {
 		s.awaitUpdate(r.URL.Path)
 	}
 	http.ServeFile(w, r, path.Join(s.dataDir, r.URL.Path))
+}
+
+func (s *server) worldRedirHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println(r.URL.Path[strings.IndexByte(r.URL.Path[1:], '/')+2:])
+	http.Redirect(w, r, r.URL.Path[strings.IndexByte(r.URL.Path[1:], '/')+1:], http.StatusFound)
 }
 
 func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
@@ -129,10 +140,18 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	}
 
 	bm, err := makeBlockMapper(dataDir)
+	if err != nil {
+		log.Println("regenerating block mapping")
+		generate(dataDir)
+	}
+	bm, err = makeBlockMapper(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	r := mux.NewRouter()
 	s := &server{
-		regionDir:  regionDir,
+		regionDir:  map[string]string{"0": regionDir},
 		dataDir:    dataDir,
 		pruneCaves: pruneCaves,
 		bm:         bm,
@@ -149,6 +168,11 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	r.HandleFunc("/index.js", s.indexJsHandler)
 	r.HandleFunc("/textures/{texture}", s.textureHandler)
 	r.HandleFunc("/map/{path}", s.mapHandler)
+
+	r.HandleFunc("/{world}/", s.indexHandler)
+	r.HandleFunc("/{world}/map/{path}", s.mapHandler)
+	r.HandleFunc("/{world}/index.js", s.worldRedirHandler)
+	r.HandleFunc("/{world}/textures/{texture}", s.worldRedirHandler)
 
 	srv := &http.Server{
 		Handler:      r,

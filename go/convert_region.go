@@ -276,6 +276,10 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 	}
 
+	if _, err := os.Stat(conf.outdir); os.IsNotExist(err) {
+		os.MkdirAll(conf.outdir, 0755)
+	}
+
 	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file), ".mca"))
 	outLen := 0
 	outLenComp := int64(0)
@@ -284,12 +288,12 @@ func scanRegion(conf *scanRegionConfig) error {
 	for bi := range bufs {
 		bs := &bufs[bi]
 		out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
-		outComp.Reset(out)
 		if err != nil {
 			log.Println("unable to open dest file")
 			return err
 		}
 
+		outComp.Reset(out)
 		outComp.Write([]byte("COMTE00\n"))
 
 		var header (struct {
