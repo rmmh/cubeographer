@@ -22,6 +22,13 @@ type region struct {
 	timestamps [1024]uint32
 }
 
+type RegionOpener func(path string, bm *blockMapper) (Region, error)
+type Region interface {
+	ReadChunks(wanted []int) ([1024]chunkDatum, error)
+	Rx() int
+	Rz() int
+}
+
 type paletteEntry struct {
 	name  string
 	props []string
@@ -29,7 +36,7 @@ type paletteEntry struct {
 
 var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
 
-func makeRegion(path string, bm *blockMapper) (*region, error) {
+func makeRegion(path string, bm *blockMapper) (Region, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -73,7 +80,10 @@ type chunkDatum struct {
 	lights, lightsSky [][]byte
 }
 
-func (r *region) readChunks(wanted []int) ([1024]chunkDatum, error) {
+func (r *region) Rx() int { return r.rx }
+func (r *region) Rz() int { return r.rz }
+
+func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	var cdata [1024]chunkDatum
 
 	f, err := os.Open(r.path)

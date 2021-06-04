@@ -15,12 +15,13 @@ import (
 )
 
 type regionState struct {
-	r      *region
-	dir    string
-	bm     *blockMapper
-	rx, rz int
-	cdata  [1024]chunkDatum
-	cadj   [16]*[1024]chunkDatum
+	r          *region
+	openRegion RegionOpener
+	dir        string
+	bm         *blockMapper
+	rx, rz     int
+	cdata      [1024]chunkDatum
+	cadj       [16]*[1024]chunkDatum
 
 	nbs [6]uint16
 	nls [6]byte
@@ -60,12 +61,12 @@ func (rs *regionState) get(x, y, z int) (uint16, uint8, byte, byte) {
 				}
 			}
 			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
-			r, err := makeRegion(ap, rs.bm)
+			r, err := rs.openRegion(ap, rs.bm)
 			if err != nil {
 				rs.cadj[key] = &[1024]chunkDatum{}
 				return 0, 0, 0xf, 0
 			}
-			chunks, err := r.readChunks(wanted)
+			chunks, err := r.ReadChunks(wanted)
 			if err != nil {
 				rs.cadj[key] = &[1024]chunkDatum{}
 				return 0, 0, 0xf, 0
@@ -122,6 +123,7 @@ type scanRegionConfig struct {
 	dir, outdir string
 	file        string
 	bm          *blockMapper
+	openRegion  RegionOpener
 
 	pruneCaves bool
 }
@@ -131,22 +133,28 @@ func scanRegion(conf *scanRegionConfig) error {
 		return errors.New("file has wrong suffix (not .mca): " + conf.file)
 	}
 
+	openRegion := makeRegion
+	if conf.openRegion != nil {
+		openRegion = conf.openRegion
+	}
+
 	bm := conf.bm
-	r, err := makeRegion(path.Join(conf.dir, conf.file), bm)
+	r, err := openRegion(path.Join(conf.dir, conf.file), bm)
 	if err != nil {
 		return err
 	}
-	cdata, err := r.readChunks(nil)
+	cdata, err := r.ReadChunks(nil)
 	if err != nil {
 		return err
 	}
 
 	rs := regionState{
-		dir:   conf.dir,
-		bm:    bm,
-		rx:    r.rx,
-		rz:    r.rz,
-		cdata: cdata,
+		dir:        conf.dir,
+		bm:         bm,
+		rx:         r.Rx(),
+		rz:         r.Rz(),
+		cdata:      cdata,
+		openRegion: openRegion,
 	}
 
 	var chunkVis *chunkVis
