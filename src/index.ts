@@ -47,10 +47,69 @@ document.body.appendChild(stats.dom);
 
 context.setClearColor(0x7e, 0xab, 0xff);
 
+let urlTimer = 0;
+
+// https://stackoverflow.com/a/13419367/3694
+function parseQuery(queryString: string) {
+    const query: {[name: string]: string} = {};
+    const pairs = (queryString[0] === '?' ? queryString.substr(1) : queryString).split('&');
+    for (let i = 0; i < pairs.length; i++) {
+        const pair = pairs[i].split('=');
+        query[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+    }
+    return query;
+}
+
+function maybeSetCameraFromLocstring() {
+    let q = parseQuery(document.location.search);
+    if (q['L']) {
+        cameraFromLocstring(q['L']);
+        camera.update();
+    }
+}
+
+function cameraFromLocstring(loc: string) {
+    const m = /(-?\d+)\.(-?\d+):(-?\d+),(-?\d+),(-?\d+):(-?\d+),(-?\d+),(-?\d+)/.exec(loc);
+    if (!m)
+        return;
+    const [_, rx, rz, lx, y, lz, ox, oy, oz] = m.map(x => +x);
+
+    let newPos = vec3.fromValues(rx * 512 + lx, y, rz * 512 + lz);
+    let newTarget = vec3.add(vec3.create(), newPos, vec3.fromValues(ox, oy, oz));
+
+    vec3.copy(camera.position, newPos);
+    vec3.copy(controls.target, newTarget);
+}
+
+function cameraMove() {
+    if (history) {
+        if (urlTimer) clearTimeout(urlTimer)
+        let pos = camera.position;
+        let off = vec3.sub(vec3.create(), controls.target, pos);
+        off[0] = Math.round(off[0]),
+        off[1] = Math.round(off[1]),
+        off[2] = Math.round(off[2]);
+        let rx = pos[0] >> 9;
+        let rz = pos[2] >> 9;
+        let y = pos[1] | 0;
+        let lx = (pos[0] | 0) - rx * 512;
+        let lz = (pos[2] | 0) - rz * 512;
+
+        const locString = `${rx}.${rz}:${lx},${y},${lz}:${off[0]},${off[1]},${off[2]}`;
+
+        urlTimer = window.setTimeout(() => {
+            history.replaceState(null, null, `?L=${locString}`);
+            // for debugging:
+            // cameraFromLocstring(locString); render();
+        }, 100);
+    }
+    render();
+}
+
 // TODO: replace these controls with block-based ones,
 // i.e. rotate around the click target
 let controls = new OrbitControls(camera, context.canvas);
-controls.addEventListener('change', render); // call this only in static scenes (i.e., if there is no animation loop)
+controls.addEventListener('change', cameraMove); // call this only in static scenes (i.e., if there is no animation loop)
 controls.screenSpacePanning = true;
 controls.minDistance = 1;
 controls.maxDistance = space * 2;
@@ -563,11 +622,10 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
         for (let x = xs; x <= xe; x++) {
             for (let z = zs; z <= ze; z++) {
                     fetchRegion(x, z, o);
-                }
             }
         }
     }
-    vec3.copy(camera.position, vec3.fromValues(xo * 512, 120, zo * 512));
+    vec3.set(camera.position, xo * 512, 120, zo * 512);
     vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
     controls.update();
 }
@@ -579,4 +637,6 @@ setTimeout(function() {
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
         default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
     }
+
+    maybeSetCameraFromLocstring();
 }, 500)
