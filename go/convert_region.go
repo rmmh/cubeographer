@@ -120,19 +120,19 @@ func (rs *regionState) neighs(x, y, z int) ([]uint16, []byte, []byte) {
 
 type scanRegionConfig struct {
 	dir, outdir string
-	file        os.FileInfo
+	file        string
 	bm          *blockMapper
 
 	pruneCaves bool
 }
 
 func scanRegion(conf *scanRegionConfig) error {
-	if !strings.HasSuffix(conf.file.Name(), ".mca") {
-		return errors.New("file has wrong suffix (not .mca): " + conf.file.Name())
+	if !strings.HasSuffix(conf.file, ".mca") {
+		return errors.New("file has wrong suffix (not .mca): " + conf.file)
 	}
 
 	bm := conf.bm
-	r, err := makeRegion(path.Join(conf.dir, conf.file.Name()), bm)
+	r, err := makeRegion(path.Join(conf.dir, conf.file), bm)
 	if err != nil {
 		return err
 	}
@@ -276,7 +276,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 	}
 
-	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file.Name()), ".mca"))
+	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file), ".mca"))
 	outLen := 0
 	outLenComp := int64(0)
 	// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
@@ -321,7 +321,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		out.Close()
 	}
 
-	fmt.Println(conf.dir, conf.file.Name(), outLen/1024, "KiB =>", outLenComp/1024, "KiB")
+	fmt.Println(conf.dir, conf.file, outLen/1024, "KiB =>", outLenComp/1024, "KiB")
 
 	presentBlocks := []uint16{}
 	for bid, count := range blockCounts {

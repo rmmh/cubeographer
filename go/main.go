@@ -14,6 +14,14 @@ import (
 	"sync"
 )
 
+func makeBlockMapper(outDir string) (*blockMapper, error) {
+	blockmeta, err := ioutil.ReadFile(path.Join(outDir, "blockmeta.json"))
+	if err != nil {
+		return nil, err
+	}
+	return loadBlockMapper(blockmeta)
+}
+
 func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves bool) {
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
@@ -21,11 +29,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 
-	blockmeta, err := ioutil.ReadFile(path.Join(outDir, "..", "blockmeta.json"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	bm, err := loadBlockMapper(blockmeta)
+	bm, err := makeBlockMapper(path.Join(outDir, ".."))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,7 +42,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves
 				err = scanRegion(&scanRegionConfig{
 					dir:        regionDir,
 					outdir:     outDir,
-					file:       file,
+					file:       file.Name(),
 					bm:         bm,
 					pruneCaves: hideCaves,
 				})
@@ -114,7 +118,7 @@ func main() {
 		}
 	}
 	if len(args) > 1 {
-		serve(*numProcs, args[0], args[1])
+		serve(*numProcs, args[0], args[1], *hideCaves)
 	} else {
 		usage()
 	}

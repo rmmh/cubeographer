@@ -559,22 +559,24 @@ function fetchRegion(x: number, z: number, off: number) {
 // fetchRegion(1,1,0,-1.2,-1.2);
 
 function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: number, xo: number, zo: number) {
-    for (let x = xs; x <= xe; x++) {
-        for (let z = zs; z <= ze; z++) {
-            for (let o = 0; o < 4; o++) {
-                fetchRegion(x, z, o);
+    for (let o = 0; o < 4; o++) {
+        for (let x = xs; x <= xe; x++) {
+            for (let z = zs; z <= ze; z++) {
+                    fetchRegion(x, z, o);
+                }
             }
         }
     }
     vec3.copy(camera.position, vec3.fromValues(xo * 512, 120, zo * 512));
     vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
     controls.update();
-
 }
 
-const choice: string = 'novitest';
-switch (choice) {
-    case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
-    case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4);  break;
-    default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
-}
+setTimeout(function() {
+    const choice: string = 'novigrad';
+    switch (choice) {
+        case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
+        case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
+        default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
+    }
+}, 500)
