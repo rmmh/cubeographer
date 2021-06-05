@@ -28,8 +28,6 @@ func testWorldOpener(path string, bm *blockMapper) (Region, error) {
 func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	var cdata [1024]chunkDatum
 
-	fmt.Println(len(r.bm.blockstateToNid), len(r.bm.nidToName))
-
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
 		nstates := [][]uint8{}
@@ -46,7 +44,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 				for j := 0; j < 256; j++ {
 					x := j%16 + (cn%16)*16 + r.rx*512
 					z := j/16 + (cn/16)*16
-					if x < 0 || x >= len(r.bm.nidToName) || z > int(r.bm.nidToSmap[x].max()) {
+					if x < 0 || x >= len(r.bm.nidToName) || (z > 0 && z > int(r.bm.nidToSmap[x].max())) {
 						continue
 					}
 					nb[256+j] = uint16(x)

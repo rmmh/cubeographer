@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -16,6 +17,8 @@ import (
 	"sort"
 	"strings"
 )
+
+var genDebug = flag.String("gendebug", "", "debug specific block name (or \"all\")")
 
 var layerNames = []string{
 	"CUBE",
@@ -387,7 +390,9 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 
 	cubeSpec := model.renderCube()
 	if cubeSpec != nil {
-		fmt.Printf("CUBE %#v\n", cubeSpec)
+		if *genDebug == "all" || *genDebug == name {
+			fmt.Printf("CUBE %#v\n", cubeSpec)
+		}
 		return *cubeSpec
 	}
 
@@ -395,6 +400,9 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 		// render grass blocks as two cubes:
 		// * the dirt sides and bottom (no top)
 		// * the tinted grass top and side overlay (no bottom)
+		if *genDebug == "all" || *genDebug == name {
+			fmt.Println("CUBE(GRASS)", name)
+		}
 		return modelEntry{
 			Layer:    layerCube,
 			Textures: []string{model.Textures["side"], model.Textures["bottom"], model.Textures["overlay"], model.Textures["top"]},
@@ -404,22 +412,28 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 
 	if model.Parent == "minecraft:block/cross" {
 		tex := model.Textures["cross"]
-		fmt.Println("CROSS", name, tex)
+		if *genDebug == "all" || *genDebug == name {
+			fmt.Println("CROSS", name, tex)
+		}
 		return modelEntry{
 			Layer:    layerCross,
 			Textures: []string{tex},
 			Template: []uint32{0, 0b1111111}}
 	} else if model.Parent == "minecraft:block/tinted_cross" {
 		tex := model.Textures["cross"]
-		fmt.Println("TINTED_CROSS", name, tex)
+		if *genDebug == "all" || *genDebug == name {
+			fmt.Println("TINTED_CROSS", name, tex)
+		}
 		return modelEntry{
 			Layer:    layerCross,
 			Textures: []string{tex},
 			Template: []uint32{0, 0b111111 | 1<<31}}
 	}
 
-	modelJ, _ := json.MarshalIndent(model, "", "  ")
-	fmt.Printf("FALLBACK %#v %s\n", ms, string(modelJ))
+	if *genDebug == "all" || *genDebug == name {
+		modelJ, _ := json.MarshalIndent(model, "", "  ")
+		fmt.Printf("FALLBACK %#v %s\n", ms, string(modelJ))
+	}
 
 	// fallback
 	textures, tinted := s.referencedTexturesModel(model)
@@ -465,6 +479,10 @@ func (s *stateConverter) render(name string, st *blockState) blockEntry {
 		tint := uint32(0b111111)
 		if tinted {
 			tint |= 1 << 31
+		}
+		if *genDebug == "all" || *genDebug == name {
+			modelJ, _ := json.MarshalIndent(st, "", "  ")
+			fmt.Printf("FALLBACKMULTI %#v %s\n", name, string(modelJ))
 		}
 		return blockEntry{Name: name, States: slist, Templates: []modelEntry{
 			{Layer: layerCubeFallback, Textures: []string{tex}, Template: []uint32{0, tint}}}}
@@ -541,7 +559,9 @@ func generate(outDir string) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			fmt.Printf("BLOCKMODEL! %s\n%s\n", name, string(data)) //, models[name])
+			if *genDebug == "all" || *genDebug == name {
+				fmt.Printf("BLOCKMODEL! %s\n%s\n", name, string(data)) //, models[name])
+			}
 		}
 		if strings.HasPrefix(f.Name, "assets/minecraft/blockstates") {
 			name = strings.Replace(name, "assets/minecraft/blockstates/", "", 1)
@@ -551,7 +571,9 @@ func generate(outDir string) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			fmt.Println("BLOCKSTATES!", name, string(data)) //, blockStates[name], err)
+			if *genDebug == "all" || *genDebug == name {
+				fmt.Println("BLOCKSTATES!", name, string(data)) //, blockStates[name], err)
+			}
 		}
 	}
 
@@ -591,13 +613,11 @@ func generate(outDir string) {
 
 	for _, name := range stateNames {
 		st := blockStates[name]
-		model := blockModel{}
-
 		entry := converter.render(name, st)
 		if len(entry.Templates) > 0 {
 			*blockEntries = append(*blockEntries, entry)
 		} else {
-			fmt.Println("unhandled", name, model.Parent, st)
+			fmt.Println("unhandled", name, st)
 		}
 	}
 
@@ -725,9 +745,11 @@ func generate(outDir string) {
 			if ent.Name == "water" {
 				model.Template[1] |= 1 << 31
 			}
-			fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
-				layer, ent.Name, model.Textures, tid, textures[model.Textures[0]].Bounds(),
-				model.Template[0], model.Template[1])
+			if *genDebug == "all" || *genDebug == ent.Name {
+				fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
+					layer, ent.Name, model.Textures, tid, textures[model.Textures[0]].Bounds(),
+					model.Template[0], model.Template[1])
+			}
 		}
 	}
 
@@ -748,8 +770,8 @@ func generate(outDir string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	buf = []byte(strings.Replace(string(buf), "}", "}\n", -1))
-	fmt.Println(len(string(buf)))
+	buf = []byte(strings.Replace(strings.Replace(string(buf), "},", "},\n", -1), "\n{\"layer", "\n    {\"layer", -1))
+	fmt.Println("blockmeta.json size:", len(string(buf)))
 
 	f, err := os.Create(path.Join(outDir, "blockmeta.json"))
 	if err != nil {

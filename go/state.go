@@ -25,7 +25,6 @@ func (st *blockState) buildStateList() [][]string {
 				parts := strings.Split(pred, ",")
 				for _, part := range parts {
 					equiv := strings.SplitN(part, "=", 2)
-					fmt.Println(part, equiv)
 					if stringSliceSearch(attrs[equiv[0]], equiv[1]) == -1 {
 						attrs[equiv[0]] = append(attrs[equiv[0]], equiv[1])
 					}
@@ -73,7 +72,9 @@ func (st *blockState) buildStateList() [][]string {
 			}
 			return alist[i][0] < alist[j][0]
 		})
-		fmt.Println("STATEMAP", alist)
+		if false {
+			fmt.Println("STATEMAP", alist)
+		}
 		return alist
 	}
 
