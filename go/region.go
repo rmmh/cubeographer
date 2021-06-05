@@ -14,14 +14,6 @@ import (
 	"strconv"
 )
 
-type region struct {
-	path       string
-	rx, rz     int
-	bm         *blockMapper
-	offsets    [1024]uint32
-	timestamps [1024]uint32
-}
-
 type RegionOpener func(path string, bm *blockMapper) (Region, error)
 type Region interface {
 	ReadChunks(wanted []int) ([1024]chunkDatum, error)
@@ -35,6 +27,14 @@ type paletteEntry struct {
 }
 
 var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
+
+type region struct {
+	path       string
+	rx, rz     int
+	bm         *blockMapper
+	offsets    [1024]uint32
+	timestamps [1024]uint32
+}
 
 func makeRegion(path string, bm *blockMapper) (Region, error) {
 	f, err := os.Open(path)

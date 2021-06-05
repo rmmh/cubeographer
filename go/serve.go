@@ -27,9 +27,10 @@ type workItem struct {
 }
 
 type server struct {
-	regionDir  map[string]string
-	dataDir    string
-	pruneCaves bool
+	regionDir    map[string]string
+	regionOpener map[string]RegionOpener
+	dataDir      string
+	pruneCaves   bool
 
 	binaryTime time.Time
 	bm         *blockMapper
@@ -80,6 +81,7 @@ func (s *server) mapWorker() {
 		}
 		scanRegion(&scanRegionConfig{
 			dir:        s.regionDir[item.world],
+			openRegion: s.regionOpener[item.world],
 			outdir:     path.Join(s.dataDir, item.world, "map"),
 			file:       fmt.Sprintf("r.%d.%d.mca", item.rx, item.rz),
 			bm:         s.bm,
@@ -100,7 +102,7 @@ func (s *server) awaitUpdate(filename string) {
 		return
 	}
 	world := m[1]
-	if s.regionDir[world] == "" {
+	if s.regionDir[world] == "" && s.regionOpener == nil {
 		return
 	}
 	rx, _ := strconv.Atoi(m[2])
@@ -151,7 +153,10 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 
 	r := mux.NewRouter()
 	s := &server{
-		regionDir:  map[string]string{"0": regionDir},
+		regionDir: map[string]string{"0": regionDir},
+		regionOpener: map[string]RegionOpener{
+			"test": testWorldOpener,
+		},
 		dataDir:    dataDir,
 		pruneCaves: pruneCaves,
 		bm:         bm,
