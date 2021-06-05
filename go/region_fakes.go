@@ -44,10 +44,18 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 
 			if r.rx >= 0 {
 				for j := 0; j < 256; j++ {
-					x := j%16 + (cn%16)*16 + r.rx*512
-					z := j/16 + (cn/16)*16
+					x := j%16 + (cn%32)*16 + r.rx*512
+					z := j/16 + (cn/32)*16
 					if x < 0 || x >= len(r.bm.nidToName) || (z > 0 && z > int(r.bm.nidToSmap[x].max())) {
+						if z == 0 && x < len(r.bm.nidToName) {
+							fmt.Println("???", x, r.bm.nidToName[x])
+						}
 						continue
+					}
+					if x > 0 && r.bm.layer[x][0] != uint8(layerCubeFallback) {
+						nb[x%16+0x400] = r.bm.nameToNid["minecraft:gold_block"]
+					} else {
+						nb[x%16+0x400] = r.bm.nameToNid["minecraft:iron_block"]
 					}
 					nb[256+j] = uint16(x)
 					ns[256+j] = uint8(z)
