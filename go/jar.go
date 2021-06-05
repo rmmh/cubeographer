@@ -24,6 +24,7 @@ var layerNames = []string{
 	"CUBE",
 	"VOXEL",
 	"CROSS",
+	"CROP",
 	"CUBE_FALLBACK",
 }
 
@@ -33,6 +34,7 @@ const (
 	layerCube layerNumber = iota
 	layerVoxel
 	layerCross
+	layerCrop
 	layerCubeFallback
 	numRenderLayers
 )
@@ -428,6 +430,15 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 			Layer:    layerCross,
 			Textures: []string{tex},
 			Template: []uint32{0, 0b111111 | 1<<31}}
+	} else if model.Parent == "minecraft:block/crop" {
+		tex := model.Textures["crop"]
+		if *genDebug == "all" || *genDebug == name {
+			fmt.Println("CROP", name, tex)
+		}
+		return modelEntry{
+			Layer:    layerCrop,
+			Textures: []string{tex},
+			Template: []uint32{0, 0b1111111}}
 	}
 
 	if *genDebug == "all" || *genDebug == name {
@@ -752,6 +763,8 @@ func generate(outDir string) {
 			}
 		}
 	}
+
+	os.MkdirAll(path.Join(outDir, "textures"), 0755)
 
 	for layer, atlas := range atlases {
 		f, err := os.Create(path.Join(outDir, "textures", fmt.Sprintf("atlas%d.png", layer)))

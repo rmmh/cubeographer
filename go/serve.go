@@ -142,7 +142,7 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	}
 
 	bm, err := makeBlockMapper(dataDir)
-	if err != nil {
+	if err != nil || *genDebug == "force" {
 		log.Println("regenerating block mapping")
 		generate(dataDir)
 	}

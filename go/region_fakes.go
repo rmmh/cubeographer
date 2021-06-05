@@ -31,10 +31,12 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
 		nstates := [][]uint8{}
+		nsky := [][]byte{}
 
 		for layer := 0; layer < 1; layer++ {
 			nb := make([]uint16, 4096)
 			ns := make([]uint8, 4096)
+			nl := make([]byte, 4096)
 
 			for j := 0; j < 256; j++ {
 				nb[j] = r.bm.nameToNid["minecraft:grass_block"]
@@ -49,6 +51,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 					}
 					nb[256+j] = uint16(x)
 					ns[256+j] = uint8(z)
+					nl[256+j] = 255
 				}
 			}
 
@@ -59,6 +62,8 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		cdata[cn] = chunkDatum{
 			blocks:     nblocks,
 			blockState: nstates,
+			lightsSky:  nsky,
+			lights:     nsky,
 		}
 	}
 

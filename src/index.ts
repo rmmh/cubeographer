@@ -350,6 +350,105 @@ function makeCrossLayer(name: string, texturePath: string, defines?: {[name: str
     return new renderer.InstancedLayer(geometry, material, texture, name);
 }
 
+function makeCropLayer(name: string, texturePath: string, defines?: { [name: string]: any }) {
+    const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
+    const stridef = (stride / 4) | 0;
+    const tris = 8;  // 2 faces * 2 tris each (double-sided)
+    const cubeBuffer = new ArrayBuffer(stride * tris * 3);
+
+    // the following typed arrays share the same buffer
+    const bf32 = new Float32Array(cubeBuffer);
+    const bu8 = new Uint8Array(cubeBuffer);
+
+    const cb = vec3.create();
+    const ab = vec3.create();
+    function addTri(pA: vec3, pB: vec3, pC: vec3, i: number) {
+        // flat face normals
+        vec3.sub(cb, pC, pB);
+        vec3.sub(ab, pA, pB);
+        vec3.cross(cb, cb, ab);
+        vec3.normalize(cb, cb);
+        const nx = cb[0];
+        const ny = cb[1];
+        const nz = cb[2];
+
+        let o = i * stridef * 3;
+        bf32[o++] = pA[0];
+        bf32[o++] = pA[1];
+        bf32[o++] = pA[2];
+        bf32[o++] = nx;
+        bf32[o++] = ny;
+        bf32[o++] = nz;
+        o++;
+        bf32[o++] = pB[0];
+        bf32[o++] = pB[1];
+        bf32[o++] = pB[2];
+        bf32[o++] = nx;
+        bf32[o++] = ny;
+        bf32[o++] = nz;
+        o++;
+        bf32[o++] = pC[0];
+        bf32[o++] = pC[1];
+        bf32[o++] = pC[2];
+        bf32[o++] = nx;
+        bf32[o++] = ny;
+        bf32[o++] = nz;
+        o++;
+
+        o = i * stride * 3 + 24;
+        if (i % 2 == 0) {
+            bu8[o] = 0;
+            bu8[o + 1] = 255;
+            o += stride;
+            bu8[o] = 255;
+            bu8[o + 1] = 255;
+            o += stride;
+            bu8[o] = 255;
+            bu8[o + 1] = 0;
+        } else {
+            bu8[o] = 255;
+            bu8[o + 1] = 0;
+            o += stride;
+            bu8[o] = 0;
+            bu8[o + 1] = 0;
+            o += stride;
+            bu8[o] = 0;
+            bu8[o + 1] = 255;
+        }
+    }
+
+    function addQuad(pA: vec3, pB: vec3, pC: vec3, pD: vec3, i: number) {
+        addTri(pA, pB, pC, i);
+        addTri(pC, pD, pA, i + 1);
+    }
+
+    function v(x: number, y: number, z: number) {
+        return vec3.fromValues(x / 16, y / 16, z / 16);
+    }
+
+    // Note: "front face" is CCW
+    addQuad(v(4, 15, 16), v(4, 15, 0), v(4, -1, 0), v(4, -1, 16), 0);
+    addQuad(v(12, 15, 16), v(12, 15, 0), v(12, -1, 0), v(12, -1, 16), 2);
+    addQuad(v(16, 15, 4), v(0, 15, 4), v(0, -1, 4), v(16, -1, 4), 4);
+    addQuad(v(16, 15, 12), v(0, 15, 12), v(0, -1, 12), v(16, -1, 12), 6);
+
+    let geometry = context.Geometry();
+
+    geometry.setAttributes({
+        position: { data: bf32, numComponents: 3, stride: stride, offset: 0 },
+        normal: { data: bf32, numComponents: 3, stride: stride, offset: 12 },
+        uv: { data: bu8, numComponents: 2, stride: stride, offset: 24 },
+    });
+
+    geometry.verts = tris * 3;
+
+    let material = makeMaterial(defines);
+
+    let texture = context.loadTexture(texturePath, render);
+
+    return new renderer.InstancedLayer(geometry, material, texture, name);
+}
+
 function makeCube() {
     const stride = 12;
     const stridef = (stride / 4) | 0;
@@ -436,12 +535,13 @@ function makeCube() {
 let cube = makeCube();
 
 
-const layerNames = ["CUBE", "VOXEL", "CROSS", "CUBE_FALLBACK"]
+const layerNames = ["CUBE", "VOXEL", "CROSS", "CROP", "CUBE_FALLBACK"]
 let layers = [
     makeCubeLayer("CUBE", "textures/atlas0.png"),
     makeCubeLayer("VOXEL", "textures/atlas1.png", {VOXEL: 1}),
     makeCrossLayer("CROSS", "textures/atlas2.png", {CROSS: 1}),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas3.png", {WATER_ID: 1, FALLBACK: 1})
+    makeCropLayer("CROP", "textures/atlas3.png", {CROSS: 1}),
+    makeCubeLayer("CUBE_FALLBACK", "textures/atlas4.png", {WATER_ID: 1, FALLBACK: 1})
 ];
 
 let willRender = false;
@@ -631,7 +731,7 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
 }
 
 setTimeout(function() {
-    const choice: string = 'test';
+    const choice: string = 'novigrad';
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;

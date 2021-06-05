@@ -29,7 +29,13 @@ func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 
-	bm, err := makeBlockMapper(path.Join(outDir, ".."))
+	dataDir := path.Join(outDir, "..")
+	bm, err := makeBlockMapper(dataDir)
+	if err != nil || *genDebug == "force" {
+		log.Println("regenerating block mapping")
+		generate(dataDir)
+	}
+	bm, err = makeBlockMapper(dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -112,6 +118,7 @@ func main() {
 	if *doConvert {
 		if len(args) > 1 {
 			convert(*numProcs, args[0], args[1], filters, *hideCaves)
+			return
 		} else {
 			usage()
 			return
