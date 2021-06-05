@@ -778,6 +778,13 @@ func generate(outDir string) {
 		}
 	}
 
+	// Wipe unneeded texture references
+	for _, b := range meta.Blocks {
+		for i, _ := range b.Templates {
+			b.Templates[i].Textures = nil
+		}
+	}
+
 	// Write out blockstate template metadata
 	buf, err := json.Marshal(meta)
 	if err != nil {
