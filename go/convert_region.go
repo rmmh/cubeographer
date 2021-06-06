@@ -178,7 +178,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	var bufs [4][numRenderLayers]bytes.Buffer
 
-	buf := make([]byte, 32)
+	buf := make([]byte, 64)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
 
 	const subScale = 16

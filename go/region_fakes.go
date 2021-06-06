@@ -22,7 +22,7 @@ func testWorldOpener(path string, bm *blockMapper) (Region, error) {
 		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
 	}
 
-	if rx < 0 || rz < 1 || rx > 1 || rz > 1 {
+	if rx != 0 || rz != 0 {
 		return nil, errors.New("out of bounds")
 	}
 
@@ -41,32 +41,9 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		for layer := 0; layer < 1; layer++ {
 			nb := make([]uint16, 4096)
 			ns := make([]uint8, 4096)
-			nl := make([]byte, 4096)
-
 			for j := 0; j < 256; j++ {
-				nb[j] = r.bm.nameToNid["minecraft:grass_block"]
+				nb[j+256] = r.bm.nameToNid["minecraft:grass_block"]
 			}
-
-			if r.rx >= 0 {
-				for j := 0; j < 256; j++ {
-					x := j%16 + (cn%32)*16 + r.rx*512
-					z := j/16 + (cn/32)*16
-					if x < 0 || x >= len(r.bm.nidToName) || (z > 0 && z > int(r.bm.nidToSmap[x].max())) {
-						if z == 0 && x < len(r.bm.nidToName) {
-							fmt.Println("???", x, r.bm.nidToName[x])
-						}
-						continue
-					}
-					if x > 0 {
-						nb[x%16+0x400] = r.bm.nameToNid["minecraft:"+[]string{
-							"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[x][0]]]
-					}
-					nb[256+j] = uint16(x)
-					ns[256+j] = uint8(z)
-					nl[256+j] = 255
-				}
-			}
-
 			nblocks = append(nblocks, nb)
 			nstates = append(nstates, ns)
 		}
@@ -77,6 +54,36 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 			lightsSky:  nsky,
 			lights:     nsky,
 		}
+	}
+
+	set := func(x, y, z int, b uint16, s uint8) {
+		if x < 0 || x >= 512 || z < 0 || z >= 512 {
+			panic(fmt.Sprintf("coord out of bounds (%d,%d)", x, z))
+		}
+		chunk := &cdata[x>>4+(z>>4)*32]
+		o := (x % 16) + (z%16)*16 + (y%16)*256
+		chunk.blocks[y/16][o] = b
+		chunk.blockState[y/16][o] = s
+	}
+
+	bx := 32
+	bz := 32
+
+	for b := 1; b < len(r.bm.nidToName); b++ {
+		ns := int(r.bm.nidToSmap[b].max())
+		nl := ns/6 + 1
+		if bx+nl >= 220 {
+			bx = 32
+			bz += 8
+		}
+		qualBlock := r.bm.nameToNid["minecraft:"+[]string{
+			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[b][0]]]
+		for i := 0; i <= ns; i++ {
+			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), uint8(i))
+			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
+		}
+		bx += nl
+		bx += 2
 	}
 
 	return cdata, nil
