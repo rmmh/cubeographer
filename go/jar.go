@@ -9,14 +9,22 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"reflect"
 	"sort"
 	"strings"
 )
+
+// in case we need to download client.jar to extract assets, here's a URL for it:
+// can be recomputed using the command:
+// curl -s $(curl -s https://launchermeta.mojang.com/mc/game/version_manifest.json |
+//     jq -r '.latest.release as $latest | .versions[] | select(.id==$latest).url') | jq -r .downloads.client.url
+const clientJarURL = "https://launcher.mojang.com/v1/objects/37fd3c903861eeff3bc24b71eed48f828b5269c8/client.jar"
 
 var genDebug = flag.String("gendebug", "", "debug specific block name (or \"all\")")
 
@@ -86,6 +94,29 @@ func findMinecraftJar() string {
 		}
 	}
 	return latestJar
+}
+
+func downloadMinecraftJar(dest string) error {
+	resp, err := http.Get(clientJarURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	size, err := io.Copy(out, resp.Body)
+	if err != nil {
+		os.Remove(dest)
+		return err
+	}
+	fmt.Printf("done, downloaded %.2fMiB\n", float64(size)/1024/1024)
+
+	return err
 }
 
 type modelSpec struct {
@@ -514,9 +545,17 @@ const (
 func generate(outDir string) {
 	fmt.Println("generating textures")
 	jarPath := findMinecraftJar()
+	backupPath := path.Join(outDir, "client.jar")
+	if _, err := os.Stat(backupPath); jarPath == "" && err == nil {
+		jarPath = backupPath
+	}
 	if jarPath == "" {
-		fmt.Println("couldn't find minecraft jar")
-		return
+		fmt.Println("couldn't find minecraft client jar, downloading")
+		err := downloadMinecraftJar(backupPath)
+		if err != nil {
+			fmt.Println("unable to downlaod minecraft jar:", err)
+		}
+		jarPath = backupPath
 	}
 	jar, err := zip.OpenReader(jarPath)
 	if err != nil {
