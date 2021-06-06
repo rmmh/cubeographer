@@ -356,7 +356,7 @@ func (m *blockModel) getCubeFaces(faces [6]blockModelFace) ([]string, bool) {
 	ret := []string{}
 	tintCount := 0
 	for _, face := range faces {
-		if face.Texture == "" || face.CullFace == "" || face.Rotation != 0 || (face.UV != nil && !reflect.DeepEqual(face.UV, []float64{0, 0, 16, 16})) {
+		if face.Texture == "" || face.CullFace == "" || /* face.Rotation != 0 || */ (face.UV != nil && !reflect.DeepEqual(face.UV, []float64{0, 0, 16, 16})) {
 			return nil, false
 		}
 		if face.TintIndex != nil {
@@ -392,8 +392,28 @@ func (m *blockModel) renderCube() *modelEntry {
 	if texs == nil {
 		return nil
 	}
-	if texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
-		return nil
+	if texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] || strings.Contains(texs[0], "_log") {
+		// grab texs again to match face visibility order
+		texs, _ = m.getCubeFaces([...]blockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
+		m := &modelEntry{
+			Layer: layerVoxel,
+		}
+		// one cube output per texture
+		for i, t := range texs {
+			if t == "" {
+				continue
+			}
+			tmpl := uint32(0)
+			for j := i; j < len(texs); j++ {
+				if texs[j] == t {
+					tmpl |= 1 << j
+					texs[j] = ""
+				}
+			}
+			m.Textures = append(m.Textures, t)
+			m.Template = append(m.Template, 0, tmpl)
+		}
+		return m
 	}
 
 	meta := uint32(0b111111)
@@ -730,6 +750,7 @@ func generate(outDir string) {
 				texIDs[layer][name] = place
 			}
 			tex := textures[name]
+			// fmt.Printf("PSL %v %v %v %v %#v\n", layer, name, place, ent.DisplayName, ent.Templates)
 			x0 := (place * 16) % 512
 			y0 := (place / 32) * 16
 			// fmt.Println("splat", name, place, tex.Bounds(), x0, y0)
@@ -768,7 +789,7 @@ func generate(outDir string) {
 
 			tid := texIDs[layer][model.Textures[0]]
 			if tid >= 256 && layer == layerCube {
-				panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
+				panic(fmt.Sprintf("texID too large! %#v: %v\n%v", ent, tid, texIDs))
 			}
 			if tid >= 512 {
 				panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
@@ -791,6 +812,12 @@ func generate(outDir string) {
 				// * the dirt sides and bottom (no top)
 				// * & len(model.Template) == 4 {the tinted grass top and side overlay (no bottom)
 				model.Template[2] |= uint32(texIDs[layer][model.Textures[2]]) << 24
+			} else if layer == layerVoxel && len(model.Textures) > 1 {
+				for i, t := range model.Textures {
+					tid := texIDs[layer][t]
+					model.Template[2*i] |= uint32(tid) << 24
+					model.Template[2*i+1] |= uint32(tid>>8) << 30
+				}
 			}
 			if ent.Name == "water" {
 				model.Template[1] |= 1 << 31
@@ -817,10 +844,13 @@ func generate(outDir string) {
 		}
 	}
 
-	// Wipe unneeded texture references
+	layerCounts := map[int]int{}
+
+	// Wipe unneeded texture references, and count layers for each block
 	for _, b := range meta.Blocks {
-		for i, _ := range b.Templates {
+		for i := range b.Templates {
 			b.Templates[i].Textures = nil
+			layerCounts[int(b.Templates[i].Layer)] += 1
 		}
 	}
 
@@ -831,6 +861,9 @@ func generate(outDir string) {
 	}
 	buf = []byte(strings.Replace(strings.Replace(string(buf), "},", "},\n", -1), "\n{\"layer", "\n    {\"layer", -1))
 	fmt.Println("blockmeta.json size:", len(string(buf)))
+	for i := 0; i < int(numRenderLayers); i++ {
+		fmt.Println("layer", layerNames[i], layerCounts[i])
+	}
 
 	f, err := os.Create(path.Join(outDir, "blockmeta.json"))
 	if err != nil {

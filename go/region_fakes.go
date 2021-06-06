@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -19,6 +20,10 @@ func testWorldOpener(path string, bm *blockMapper) (Region, error) {
 		rz, _ = strconv.Atoi(m[2])
 	} else {
 		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
+	}
+
+	if rx < 0 || rz < 1 || rx > 1 || rz > 1 {
+		return nil, errors.New("out of bounds")
 	}
 
 	r := &fakeRegion{path, rx, rz, bm}
@@ -52,10 +57,9 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 						}
 						continue
 					}
-					if x > 0 && r.bm.layer[x][0] != uint8(layerCubeFallback) {
-						nb[x%16+0x400] = r.bm.nameToNid["minecraft:gold_block"]
-					} else {
-						nb[x%16+0x400] = r.bm.nameToNid["minecraft:iron_block"]
+					if x > 0 {
+						nb[x%16+0x400] = r.bm.nameToNid["minecraft:"+[]string{
+							"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[x][0]]]
 					}
 					nb[256+j] = uint16(x)
 					ns[256+j] = uint8(z)
