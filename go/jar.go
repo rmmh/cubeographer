@@ -328,6 +328,43 @@ func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
 	return out, tinted
 }
 
+func (s *stateConverter) applyRotations(ms *modelSpec, model *blockModel) *blockModel {
+	// clone model
+	var m blockModel
+	buf, _ := json.Marshal(model)
+	json.Unmarshal(buf, &m)
+
+	// -Z north, -X west
+
+	for ms.X != 0 && ms.X%90 == 0 {
+		for i := range m.Elements {
+			e := &m.Elements[i]
+			/*
+				e.From[1], e.From[2] = e.From[2], -e.From[1]
+				e.To[1], e.To[2] = e.To[2], -e.To[1] */
+			e.Faces["north"], e.Faces["down"], e.Faces["south"], e.Faces["up"] =
+				e.Faces["down"], e.Faces["south"], e.Faces["up"], e.Faces["north"]
+		}
+		ms.X -= 90
+	}
+
+	for ms.Y != 0 && ms.Y%90 == 0 {
+		for i := range m.Elements {
+			e := &m.Elements[i]
+			/*
+				e.From[1], e.From[2] = e.From[2], -e.From[1]
+				e.To[1], e.To[2] = e.To[2], -e.To[1] */
+			e.Faces["north"], e.Faces["east"], e.Faces["south"], e.Faces["west"] =
+				e.Faces["west"], e.Faces["north"], e.Faces["east"], e.Faces["south"]
+		}
+		ms.Y -= 90
+	}
+
+	// fmt.Printf("ROT\n>> %#v\n>> %#v\n", model.Elements[0].Faces, m.Elements[0].Faces)
+
+	return &m
+}
+
 func (s *stateConverter) resolveInheritance(model *blockModel) {
 	parentName := model.Parent
 	for parentName != "" {
@@ -392,7 +429,7 @@ func (m *blockModel) renderCube() *modelEntry {
 	if texs == nil {
 		return nil
 	}
-	if texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] || strings.Contains(texs[0], "_log") {
+	if !tint { // texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
 		// grab texs again to match face visibility order
 		texs, _ = m.getCubeFaces([...]blockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
 		m := &modelEntry{
@@ -441,8 +478,18 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 	model := s.models[modelName]
 	s.resolveInheritance(model)
 
+	rotated := false
+
+	if ms.X != 0 || ms.Y != 0 {
+		model = s.applyRotations(ms, model)
+		rotated = true
+	}
+
 	cubeSpec := model.renderCube()
 	if cubeSpec != nil {
+		if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
+			cubeSpec.Layer = layerVoxel
+		}
 		if *genDebug == "all" || *genDebug == name {
 			fmt.Printf("CUBE %#v\n", cubeSpec)
 		}
@@ -789,12 +836,12 @@ func generate(outDir string) {
 
 			tid := texIDs[layer][model.Textures[0]]
 			if tid >= 256 && layer == layerCube {
-				panic(fmt.Sprintf("texID too large! %#v: %v\n%v", ent, tid, texIDs))
+				panic(fmt.Sprintf("texID too large! layer %d %#v: %v\n%v", layer, ent, tid, texIDs))
 			}
 			if tid >= 512 {
 				panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
 			}
-			if layer == layerCube || layer == layerCubeFallback {
+			if layer == layerCube || layer == layerVoxel || layer == layerCubeFallback {
 				solid := true
 				for _, tex := range model.Textures {
 					if textureClasses[tex] != texOpaque {
