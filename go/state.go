@@ -21,7 +21,7 @@ func (st *blockState) buildStateList() [][]string {
 
 	if st.Variants != nil {
 		for pred := range st.Variants {
-			if pred != "" {
+			if pred != "" && pred != "normal" {
 				parts := strings.Split(pred, ",")
 				for _, part := range parts {
 					equiv := strings.SplitN(part, "=", 2)
@@ -58,7 +58,7 @@ func (st *blockState) buildStateList() [][]string {
 			}
 			sort.Strings(values)
 			if len(values) == 1 {
-				fmt.Println("UNARY STATEMAP ???", values)
+				fmt.Printf("UNARY STATEMAP ??? %#v %#v\n", values, attrs)
 			}
 			alist = append(alist, append([]string{name}, values...))
 			bitsNeeded += bits.Len(uint(len(values) - 1))

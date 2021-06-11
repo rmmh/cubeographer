@@ -18,13 +18,12 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
-// in case we need to download client.jar to extract assets, here's a URL for it:
-// can be recomputed using the command:
-// curl -s $(curl -s https://launchermeta.mojang.com/mc/game/version_manifest.json |
-//     jq -r '.latest.release as $latest | .versions[] | select(.id==$latest).url') | jq -r .downloads.client.url
-const clientJarURL = "https://launcher.mojang.com/v1/objects/37fd3c903861eeff3bc24b71eed48f828b5269c8/client.jar"
+var clientJarPath = flag.String("jar", "", "use specific client jar")
+var clientJarVersion = flag.String("version", "latest", "specify client version to download")
 
 var genDebug = flag.String("gendebug", "", "debug specific block name (or \"all\")")
 
@@ -47,56 +46,53 @@ const (
 	numRenderLayers
 )
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
+func jsonGrab(url string, val interface{}) error {
+	resp, err := http.Get(url)
 	if err != nil {
-		return false
+		return err
 	}
-	return !info.IsDir()
-}
-
-func findMinecraftJar() string {
-	dirs := []string{
-		path.Join(os.Getenv("HOME"), ".minecraft/versions"),
-	}
-	latestJar := ""
-	latestTime := ""
-	for _, d := range dirs {
-		if st, err := os.Stat(d); err == nil && st.IsDir() {
-			files, err := ioutil.ReadDir(d)
-			if err != nil {
-				continue
-			}
-			for _, f := range files {
-				if !f.IsDir() {
-					continue
-				}
-				fp := path.Join(d, f.Name())
-				jp := path.Join(fp, f.Name()+".jar")
-				ip := path.Join(fp, f.Name()+".json")
-
-				if !fileExists(jp) || !fileExists(ip) {
-					continue
-				}
-				ib, err := ioutil.ReadFile(ip)
-				if err != nil {
-					continue
-				}
-				info := struct {
-					Time string `json:"time"`
-				}{}
-				json.Unmarshal(ib, &info)
-				if info.Time > latestTime {
-					latestTime = info.Time
-					latestJar = jp
-				}
-			}
-		}
-	}
-	return latestJar
+	defer resp.Body.Close()
+	return json.NewDecoder(resp.Body).Decode(val)
 }
 
 func downloadMinecraftJar(dest string) error {
+	manifest := struct {
+		Latest struct {
+			Release string `json:"release"`
+		} `json:"latest"`
+		Versions []struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		}
+	}{}
+	err := jsonGrab("https://launchermeta.mojang.com/mc/game/version_manifest.json", &manifest)
+	if err != nil {
+		return err
+	}
+	if *clientJarVersion == "latest" {
+		clientJarVersion = &manifest.Latest.Release
+		fmt.Println("downloading version", *clientJarVersion)
+	}
+	versionManifestURL := ""
+	for _, v := range manifest.Versions {
+		if v.ID == *clientJarVersion {
+			versionManifestURL = v.URL
+			break
+		}
+	}
+	if versionManifestURL == "" {
+		return fmt.Errorf("unable to find release version %s", *clientJarVersion)
+	}
+
+	versionManifest := struct {
+		Downloads map[string]struct {
+			URL string `json:"url"`
+		} `json:"downloads"`
+	}{}
+	jsonGrab(versionManifestURL, &versionManifest)
+
+	clientJarURL := versionManifest.Downloads["client"].URL
+
 	resp, err := http.Get(clientJarURL)
 	if err != nil {
 		return err
@@ -121,10 +117,10 @@ func downloadMinecraftJar(dest string) error {
 
 type modelSpec struct {
 	Model  string `json:"model"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-	UVLock bool   `json:"uvlock"`
-	Weight *int   `json:"weight"`
+	X      int    `json:"x,omitempty"`
+	Y      int    `json:"y,omitempty"`
+	UVLock bool   `json:"uvlock,omitempty"`
+	Weight *int   `json:"weight,omitempty"`
 }
 
 func (m *modelSpec) render(name string) {
@@ -145,7 +141,7 @@ type blockState struct {
 func unmarshalBlockState(buf []byte, b *blockState) error {
 	err := json.Unmarshal(buf, b)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "base unmarshal failed")
 	}
 	b.Variants = make(map[string][]modelSpec)
 	for k, v := range b.VariantRaw {
@@ -158,7 +154,7 @@ func unmarshalBlockState(buf []byte, b *blockState) error {
 			specs = append(specs, ms)
 		}
 		if err != nil {
-			return err
+			return errors.Wrap(err, "unmarshaling variant")
 		}
 		b.Variants[k] = specs
 		v = nil
@@ -168,13 +164,42 @@ func unmarshalBlockState(buf []byte, b *blockState) error {
 		mp := &b.Multipart[i]
 		for k, v := range mp.WhenRaw {
 			if v[0] == '[' { // OR
-				err = json.Unmarshal(v, &mp.When)
+				whenBase := []map[string]bool{} // <= 1.15
+				err = json.Unmarshal(v, &whenBase)
+				if err == nil {
+					for _, c := range whenBase {
+						m := map[string]string{}
+						for k, v := range c {
+							if v == true {
+								m[k] = "true"
+							} else {
+								m[k] = "false"
+							}
+						}
+						mp.When = append(mp.When, m)
+					}
+				} else {
+					err = json.Unmarshal(v, &mp.When)
+				}
 				if err != nil {
-					return err
+					return errors.Wrap(err, "unmarshaling Multipart.When: "+string(v))
 				}
 			} else {
+				var b bool
 				var s string
-				json.Unmarshal(v, &s)
+				err = json.Unmarshal(v, &b)
+				if err == nil {
+					if b {
+						s = "true"
+					} else {
+						s = "false"
+					}
+				} else {
+					err = json.Unmarshal(v, &s)
+				}
+				if err != nil {
+					return errors.Wrap(err, "unmarshaling Multipart.When: "+string(v))
+				}
 				mp.When = []map[string]string{{k: s}}
 			}
 		}
@@ -611,18 +636,18 @@ const (
 
 func generate(outDir string) {
 	fmt.Println("generating textures")
-	jarPath := findMinecraftJar()
-	backupPath := path.Join(outDir, "client.jar")
-	if _, err := os.Stat(backupPath); jarPath == "" && err == nil {
-		jarPath = backupPath
+	jarPath := path.Join(outDir, "client.jar")
+	if *clientJarPath != "" {
+		if _, err := os.Stat(*clientJarPath); err == nil {
+			jarPath = *clientJarPath
+		}
 	}
-	if jarPath == "" {
-		fmt.Println("couldn't find minecraft client jar, downloading")
-		err := downloadMinecraftJar(backupPath)
+	if _, err := os.Stat(jarPath); err != nil {
+		fmt.Println("downloading minecraft client jar")
+		err := downloadMinecraftJar(jarPath)
 		if err != nil {
 			fmt.Println("unable to downlaod minecraft jar:", err)
 		}
-		jarPath = backupPath
 	}
 	jar, err := zip.OpenReader(jarPath)
 	if err != nil {
@@ -686,10 +711,10 @@ func generate(outDir string) {
 			stateNames = append(stateNames, name)
 			err = unmarshalBlockState(data, blockStates[name])
 			if err != nil {
-				log.Fatal(err)
+				log.Fatalf("unable to parse %s: %v", f.Name, err)
 			}
 			if *genDebug == "all" || *genDebug == name {
-				fmt.Println("BLOCKSTATES!", name, string(data)) //, blockStates[name], err)
+				fmt.Printf("BLOCKSTATES! %s, %s => %v\n", name, string(data), blockStates[name])
 			}
 		}
 	}
