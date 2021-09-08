@@ -36,6 +36,9 @@ type region struct {
 	timestamps [1024]uint32
 }
 
+func (r *region) Rx() int { return r.rx }
+func (r *region) Rz() int { return r.rz }
+
 func makeRegion(path string, bm *blockMapper) (Region, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -79,9 +82,6 @@ type chunkDatum struct {
 	blockState        [][]uint8
 	lights, lightsSky [][]byte
 }
-
-func (r *region) Rx() int { return r.rx }
-func (r *region) Rz() int { return r.rz }
 
 func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	var cdata [1024]chunkDatum

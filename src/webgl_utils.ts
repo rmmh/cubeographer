@@ -1206,22 +1206,3 @@ function glEnumToString(gl: WebGLRenderingContext, v: any) {
         ? results.join(' | ')
         : `0x${v.toString(16)}`;
 }
-
-// Edge 20+
-const isEdge = !!window.StyleMedia;
-if (isEdge) {
-    // Hack for Edge. Edge's WebGL implmentation is crap still and so they
-    // only respond to "experimental-webgl". I don't want to clutter the
-    // examples with that so his hack works around it
-    HTMLCanvasElement.prototype.getContext = function (origFn) {
-        return function () {
-            let args = arguments;
-            const type = args[0];
-            if (type === 'webgl') {
-                args = [].slice.call(arguments);
-                args[0] = 'experimental-webgl';
-            }
-            return origFn.apply(this, args);
-        };
-    }(HTMLCanvasElement.prototype.getContext);
-}

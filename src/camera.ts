@@ -457,7 +457,7 @@ class OrbitControls extends EventDispatcher {
     private handleMouseUp(_event: MouseEvent) {
         // no-op
     }
-    private handleMouseWheel(event: MouseWheelEvent) {
+    private handleMouseWheel(event: WheelEvent) {
         if (event.deltaY < 0) {
             this.dollyIn(this.getZoomScale());
         } else if (event.deltaY > 0) {
