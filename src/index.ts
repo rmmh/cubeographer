@@ -7,7 +7,7 @@ import { mat4, vec3 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
-import { Data, Inflate } from 'pako';
+import { Inflate } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
@@ -595,10 +595,7 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
             // GZIP-compressed
             let decomp = new Inflate();
             let chunks: Uint8Array[] = [];
-            let streamDone = false;
-            decomp.onData = (chunk: Uint8Array) => chunks.push(chunk);
-            decomp.onEnd = () => streamDone = true;
-
+            decomp.ondata = (chunk: Uint8Array) => chunks.push(chunk);
             decomp.push(value, done);
 
             yield* chunks;

@@ -1,11 +1,10 @@
 {
   "dependencies": {
-    "pako": "^2.0.4",
+    "fflate": "^0.7.1",
     "stats.js": "^0.17.0"
   },
   "devDependencies": {
     "@types/lodash": "^4.14.172",
-    "@types/pako": "^1.0.2",
     "copy-webpack-plugin": "^6.4.1",
     "file-loader": "^6.2.0",
     "gl-matrix": "^3.3.0",
