@@ -248,6 +248,19 @@ type blockModel struct {
 	} `json:"elements"`
 }
 
+type mcItem struct {
+	Model *struct {
+		Type     string `json:"type"`
+		Base     string `json:"base"`
+		ModelRaw any    `json:"model"`
+		Tints    *[]struct {
+			Type        string   `json:"type"`
+			Downfall    *float64 `json:"downfall"`
+			Temperature *float64 `json:"temperature"`
+		} `json:"tints"`
+	} `json:"model"`
+}
+
 func removeDefaultPrefix(s string) string {
 	if strings.HasPrefix(s, "minecraft:") {
 		return s[len("minecraft:"):]
@@ -284,8 +297,10 @@ func (s *stateConverter) referencedTexturesModel(model *blockModel) ([]string, b
 
 	// fallback: draw ANY texture from ANY sub-model as a cube
 	if model.Textures != nil {
-		for _, tex := range model.Textures {
-			out = append(out, tex)
+		for key, tex := range model.Textures {
+			if key != "particle" {
+				out = append(out, tex)
+			}
 		}
 	}
 	for _, el := range model.Elements {
@@ -306,6 +321,23 @@ func (s *stateConverter) referencedTexturesModel(model *blockModel) ([]string, b
 		}
 	}
 	return out, tinted
+}
+
+func printMapSortedByValueDesc(m map[string]int) {
+	type kv struct {
+		Key   string
+		Value int
+	}
+	var ss []kv
+	for k, v := range m {
+		ss = append(ss, kv{k, v})
+	}
+	sort.Slice(ss, func(i, j int) bool {
+		return ss[i].Value > ss[j].Value
+	})
+	for _, pair := range ss {
+		fmt.Printf("%s: %d\n", pair.Key, pair.Value)
+	}
 }
 
 func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
@@ -658,8 +690,10 @@ func generate(outDir string) {
 	blockStates := map[string]*blockState{}
 	stateNames := []string{}
 	models := map[string]*blockModel{}
+	items := map[string]*mcItem{}
 	textures := map[string]image.Image{}
-	translations := map[string]string{}
+	translations := map[string]any{}
+	stringCounts := map[string]int{}
 
 	for _, f := range jar.File {
 		if strings.HasSuffix(f.Name, ".png") && strings.HasPrefix(f.Name, "assets/minecraft/textures/") {
@@ -675,7 +709,8 @@ func generate(outDir string) {
 			textures[name] = tex
 			continue
 		}
-		if !strings.HasSuffix(f.Name, ".json") {
+		isClass := strings.HasSuffix(f.Name, ".class")
+		if !strings.HasSuffix(f.Name, ".json") && !isClass {
 			continue
 		}
 		rc, err := f.Open()
@@ -687,12 +722,30 @@ func generate(outDir string) {
 			log.Fatal(err)
 		}
 		rc.Close()
+		if isClass {
+			walkClassForCounts(data, stringCounts)
+			continue
+		}
 		name := f.Name[:len(f.Name)-len(".json")]
+		fmt.Println("hum", name)
 		if strings.HasPrefix(f.Name, "assets/minecraft/lang/") {
+			if strings.HasSuffix(f.Name, "deprecated") {
+				continue
+			}
+			fmt.Println(string(data))
 			err = json.Unmarshal(data, &translations)
 			if err != nil {
 				log.Fatal(err)
 			}
+		}
+		if strings.HasPrefix(f.Name, "assets/minecraft/items/") {
+			name = strings.Replace(name, "assets/minecraft/items/", "", 1)
+			it := &mcItem{}
+			err = json.Unmarshal(data, &it)
+			if err != nil {
+				log.Fatal(err)
+			}
+			items[name] = it
 		}
 		if strings.HasPrefix(f.Name, "assets/minecraft/models/block") {
 			name = strings.Replace(name, "assets/minecraft/models/", "", 1)
@@ -717,6 +770,10 @@ func generate(outDir string) {
 				fmt.Printf("BLOCKSTATES! %s, %s => %v\n", name, string(data), blockStates[name])
 			}
 		}
+	}
+
+	if false {
+		printMapSortedByValueDesc(stringCounts)
 	}
 
 	// Classify textures as opaque, transparent (cutout), translucent
@@ -808,6 +865,10 @@ func generate(outDir string) {
 		} else if nameToOldID[b] > 0 {
 			return false
 		}
+		diff := (stringCounts[a] + stringCounts["minecraft:"+a]) - (stringCounts[b] + stringCounts["minecraft:"+b])
+		if diff != 0 {
+			return diff > 0
+		}
 		return a < b
 	})
 
@@ -822,14 +883,16 @@ func generate(outDir string) {
 				texIDs[layer][name] = place
 			}
 			tex := textures[name]
-			// fmt.Printf("PSL %v %v %v %v %#v\n", layer, name, place, ent.DisplayName, ent.Templates)
+			fmt.Printf("PSL %v %v %v %v %#v\n", layer, name, place, ent.DisplayName, ent.Templates)
 			x0 := (place * 16) % 512
 			y0 := (place / 32) * 16
-			// fmt.Println("splat", name, place, tex.Bounds(), x0, y0)
-			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.ZP, draw.Src)
+			// fmt.Println("splat", name, place, layer, tex.Bounds(), x0, y0)
+			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
-		ent.DisplayName = translations["block.minecraft."+ent.Name]
+		if tr, ok := translations["block.minecraft."+ent.Name].(string); ok {
+			ent.DisplayName = tr
+		}
 
 		for _, model := range ent.Templates {
 			if model.Textures == nil {
@@ -840,6 +903,10 @@ func generate(outDir string) {
 			}
 
 			layer := model.Layer
+			if len(model.Textures)+len(texIDs[layer]) >= 512 {
+				fmt.Println("warn: overrun for", ent.Name)
+				break
+			}
 			if layer == layerCube {
 				splatTexture(layer, model.Textures[0], 0)
 				if len(model.Textures) > 1 {
