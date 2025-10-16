@@ -35,12 +35,12 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
-		nstates := [][]uint8{}
+		nstates := [][]stateval{}
 		nsky := [][]byte{}
 
 		for layer := 0; layer < 1; layer++ {
 			nb := make([]uint16, 4096)
-			ns := make([]uint8, 4096)
+			ns := make([]stateval, 4096)
 			for j := 0; j < 256; j++ {
 				nb[j+256] = r.bm.nameToNid["minecraft:grass_block"]
 			}
@@ -56,7 +56,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		}
 	}
 
-	set := func(x, y, z int, b uint16, s uint8) {
+	set := func(x, y, z int, b uint16, s stateval) {
 		if x < 0 || x >= 512 || z < 0 || z >= 512 {
 			panic(fmt.Sprintf("coord out of bounds (%d,%d)", x, z))
 		}
@@ -79,7 +79,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		qualBlock := r.bm.nameToNid["minecraft:"+[]string{
 			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[b][0]]]
 		for i := 0; i <= ns; i++ {
-			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), uint8(i))
+			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), stateval(i))
 			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
 		}
 		bx += nl

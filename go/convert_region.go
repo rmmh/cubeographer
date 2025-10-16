@@ -28,7 +28,7 @@ type regionState struct {
 	nsl [6]byte
 }
 
-func (rs *regionState) get(x, y, z int) (uint16, uint8, byte, byte) {
+func (rs *regionState) get(x, y, z int) (uint16, stateval, byte, byte) {
 	if y < 0 {
 		return 7, 0, 0xf, 0 // bedrock
 	}

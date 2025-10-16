@@ -11,7 +11,7 @@ type blockMapper struct {
 	meta               blockentryMetadata
 	solid              []uint64
 	blockstateToNid    [4096]uint16
-	blockstateToNstate [4096]uint8
+	blockstateToNstate [4096]stateval
 	nameToNid          map[string]uint16
 	nidToName          []string
 	nidToSmap          []statemap
