@@ -12,6 +12,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/rmmh/cubeographer/go/render"
 )
 
 type regionState struct {
@@ -28,7 +30,7 @@ type regionState struct {
 	nsl [6]byte
 }
 
-func (rs *regionState) get(x, y, z int) (uint16, stateval, byte, byte) {
+func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 	if y < 0 {
 		return 7, 0, 0xf, 0 // bedrock
 	}
@@ -176,7 +178,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		chunkVis = makeChunkvis(cdata, bm)
 	}
 
-	var bufs [4][numRenderLayers]bytes.Buffer
+	var bufs [4][render.NumRenderLayers]bytes.Buffer
 
 	buf := make([]byte, 64)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
@@ -305,7 +307,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		outComp.Write([]byte("COMTE00\n"))
 
 		var header (struct {
-			Layers [numRenderLayers]struct {
+			Layers [render.NumRenderLayers]struct {
 				Length int    `json:"length"`
 				Name   string `json:"name"`
 			} `json:"layers"`
@@ -313,7 +315,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 		for i, obuf := range bs {
 			header.Layers[i].Length = obuf.Len()
-			header.Layers[i].Name = layerNames[i]
+			header.Layers[i].Name = render.LayerNames[i]
 		}
 		headerJSON, err := json.Marshal(header)
 		if err != nil {
@@ -349,7 +351,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		if blockCounts[bid] < 100 {
 			continue
 		}
-		if layerNumber(bm.layer[bid][0]) == layerCubeFallback {
+		if render.LayerNumber(bm.layer[bid][0]) == render.LayerCubeFallback {
 			fmt.Println(bm.nidToName[bid], blockCounts[bid])
 		}
 	}

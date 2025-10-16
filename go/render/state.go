@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"fmt"
@@ -96,19 +96,19 @@ func buildStateList(st *resourcepack.BlockState) [][]string {
 	return nil
 }
 
-type statemaskval uint32
-type stateval uint16
-type statemap map[string]statemaskval
+type Statemaskval uint32
+type Stateval uint16
+type Statemap map[string]Statemaskval
 
 // given a statelist input, like:
 // [[half bottom top] [open false true] [facing east north south west]]
 // return a map from a type (like half=bottom) to a uint16,
 // where the low byte is the value and the high byte is the mask
-func buildStateMap(sl [][]string) statemap {
+func BuildStateMap(sl [][]string) Statemap {
 	if len(sl) == 0 {
 		return nil
 	}
-	m := map[string]statemaskval{}
+	m := map[string]Statemaskval{}
 	offset := 0
 	for _, attrs := range sl {
 		attr := attrs[0]
@@ -117,31 +117,31 @@ func buildStateMap(sl [][]string) statemap {
 		if offset+attrBits > 16 {
 			panic(fmt.Sprintf("too many attr bits for statemap %d>8 %#v", offset+attrBits, sl))
 		}
-		attrMask := statemaskval((1<<attrBits)-1) << offset
+		attrMask := Statemaskval((1<<attrBits)-1) << offset
 		for n, name := range attrs {
-			m[attr+"="+name] = attrMask<<16 | statemaskval(n)<<offset
+			m[attr+"="+name] = attrMask<<16 | Statemaskval(n)<<offset
 		}
 		offset += attrBits
 	}
 	return m
 }
 
-func (s statemap) getState(properties string) stateval {
-	return s.getStateList(strings.Split(properties, ","))
+func (s Statemap) Get(properties string) Stateval {
+	return s.GetList(strings.Split(properties, ","))
 }
 
-func (s statemap) getStateList(props []string) stateval {
-	var state stateval
+func (s Statemap) GetList(props []string) Stateval {
+	var state Stateval
 	for _, pred := range props {
-		state |= stateval(s[pred])
+		state |= Stateval(s[pred])
 	}
 	return state
 }
 
-func (s statemap) max() stateval {
-	var state stateval
+func (s Statemap) Max() Stateval {
+	var state Stateval
 	for _, v := range s {
-		state |= stateval(v)
+		state |= Stateval(v)
 	}
 	return state
 }

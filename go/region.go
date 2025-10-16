@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+
+	"github.com/rmmh/cubeographer/go/render"
 )
 
 type RegionOpener func(path string, bm *blockMapper) (Region, error)
@@ -79,7 +81,7 @@ func makeRegion(path string, bm *blockMapper) (Region, error) {
 
 type chunkDatum struct {
 	blocks            [][]uint16
-	blockState        [][]stateval
+	blockState        [][]render.Stateval
 	lights, lightsSky [][]byte
 }
 
@@ -123,7 +125,7 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	chunkBuf := make([]byte, 4096*maxSectors)
 	chunkDecompressed := bytes.NewBuffer(make([]byte, 0, 4*(1<<20)))
 	palNids := make([]uint16, 0, 64)
-	palStates := make([]stateval, 0, 64)
+	palStates := make([]render.Stateval, 0, 64)
 	var zr io.ReadCloser
 	var zrr zlib.Resetter
 
@@ -246,14 +248,14 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 			continue
 		}
 		nblocks := [][]uint16{}
-		nstates := [][]stateval{}
+		nstates := [][]render.Stateval{}
 		if len(blocks) > 0 {
 			if len(blocks) != len(blockData) {
 				panic("blocks/blockData length mismatch in" + r.path)
 			}
 			for bi, bs := range blocks {
 				nb := make([]uint16, 4096)
-				ns := make([]stateval, 4096)
+				ns := make([]render.Stateval, 4096)
 				for i, ob := range bs {
 					o := uint16(ob)<<4 | uint16((blockData[bi][i>>1]>>((i&1)<<2))&0xf)
 					nb[i] = r.bm.blockstateToNid[o]
@@ -273,12 +275,12 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 				for i := range palettes[bi] {
 					nid := r.bm.nameToNid[palettes[bi][i].name]
 					palNids = append(palNids, nid)
-					palStates = append(palStates, r.bm.nidToSmap[nid].getStateList(palettes[bi][i].props))
+					palStates = append(palStates, r.bm.nidToSmap[nid].GetList(palettes[bi][i].props))
 				}
 				if len(bs) == 0 {
 					// empty segment
 					nblocks = append(nblocks, make([]uint16, 16*16*16))
-					nstates = append(nstates, make([]stateval, 16*16*16))
+					nstates = append(nstates, make([]render.Stateval, 16*16*16))
 					continue
 				}
 				if bi >= len(palettes) {
@@ -286,7 +288,7 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 					break
 				}
 				var vals []uint16
-				states := make([]stateval, 16*16*16)
+				states := make([]render.Stateval, 16*16*16)
 				if dataVersion < 2529 {
 					// before 1.16 snapshot 20w17a
 					vals = blockstatesToShortsPacked(bs)

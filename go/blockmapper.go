@@ -3,18 +3,19 @@ package main
 import (
 	"encoding/json"
 
+	"github.com/rmmh/cubeographer/go/render"
 	"github.com/rmmh/cubeographer/go/resourcepack"
 )
 
 // TODO: this should probably go back to AOS instead of this SOA form
 type blockMapper struct {
-	meta               blockentryMetadata
+	meta               render.BlockEntryMetadata
 	solid              []uint64
 	blockstateToNid    [4096]uint16
-	blockstateToNstate [4096]stateval
+	blockstateToNstate [4096]render.Stateval
 	nameToNid          map[string]uint16
 	nidToName          []string
-	nidToSmap          []statemap
+	nidToSmap          []render.Statemap
 	tmpl               [][][]uint32
 	layer              [][]uint8
 }
@@ -23,7 +24,7 @@ func loadBlockMapper(buf []byte) (*blockMapper, error) {
 	bm := &blockMapper{
 		nameToNid: map[string]uint16{},
 		nidToName: []string{""},
-		nidToSmap: []statemap{nil},
+		nidToSmap: []render.Statemap{nil},
 		solid:     []uint64{},
 		tmpl:      [][][]uint32{nil},
 		layer:     [][]uint8{nil},
@@ -43,7 +44,7 @@ func loadBlockMapper(buf []byte) (*blockMapper, error) {
 			count++
 		}
 		bm.nameToNid["minecraft:"+b.Name] = n
-		smap := buildStateMap(b.States)
+		smap := render.BuildStateMap(b.States)
 		if int(n) >= len(bm.nidToName) {
 			bm.nidToName = append(bm.nidToName, b.Name)
 			bm.nidToSmap = append(bm.nidToSmap, smap)
@@ -71,7 +72,7 @@ func loadBlockMapper(buf []byte) (*blockMapper, error) {
 	for blockstate, data := range resourcepack.BlockstateMap {
 		nid := bm.nameToNid["minecraft:"+data.Name]
 		bm.blockstateToNid[blockstate] = nid
-		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].getState(data.Properties)
+		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].Get(data.Properties)
 	}
 
 	return bm, nil

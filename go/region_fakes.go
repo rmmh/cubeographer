@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/rmmh/cubeographer/go/render"
 )
 
 type fakeRegion struct {
@@ -35,12 +37,12 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
-		nstates := [][]stateval{}
+		nstates := [][]render.Stateval{}
 		nsky := [][]byte{}
 
 		for layer := 0; layer < 1; layer++ {
 			nb := make([]uint16, 4096)
-			ns := make([]stateval, 4096)
+			ns := make([]render.Stateval, 4096)
 			for j := 0; j < 256; j++ {
 				nb[j+256] = r.bm.nameToNid["minecraft:grass_block"]
 			}
@@ -56,7 +58,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		}
 	}
 
-	set := func(x, y, z int, b uint16, s stateval) {
+	set := func(x, y, z int, b uint16, s render.Stateval) {
 		if x < 0 || x >= 512 || z < 0 || z >= 512 {
 			panic(fmt.Sprintf("coord out of bounds (%d,%d)", x, z))
 		}
@@ -70,7 +72,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	bz := 32
 
 	for b := 1; b < len(r.bm.nidToName); b++ {
-		ns := int(r.bm.nidToSmap[b].max())
+		ns := int(r.bm.nidToSmap[b].Max())
 		nl := ns/6 + 1
 		if bx+nl >= 220 {
 			bx = 32
@@ -79,7 +81,7 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		qualBlock := r.bm.nameToNid["minecraft:"+[]string{
 			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[b][0]]]
 		for i := 0; i <= ns; i++ {
-			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), stateval(i))
+			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
 			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
 		}
 		bx += nl
