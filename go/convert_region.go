@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -331,7 +332,8 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 		outComp.Flush()
 		outComp.Close()
-		outLenComp, _ = out.Seek(0, os.SEEK_CUR)
+		bufOutLen, _ := out.Seek(0, io.SeekEnd)
+		outLenComp += bufOutLen
 		out.Close()
 	}
 

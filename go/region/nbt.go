@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 type NbtType int
@@ -68,8 +67,6 @@ func NbtWalk(buf []byte, cb func(path []string, idxes []int, ty NbtType, value [
 			path = append(path[:depth], string(tag))
 			o += 3 + tagLen
 		}
-		jpath := strings.Join(path[1:], ".")
-		// fmt.Println(jpath, ty, listStack, depth, idxes)
 		switch ty {
 		case TagCompound:
 			cb(path[1:], idxes, ty, nil)
@@ -143,10 +140,10 @@ func NbtWalk(buf []byte, cb func(path []string, idxes []int, ty NbtType, value [
 				cb(path[1:], idxes, -lty, buf[start:o])
 			} else if len > 0 {
 				// TileEntities is length=0 and type=0 when empty?
-				return fmt.Errorf("unhandled TAG_List type: %d at %s (len %d)", lty, jpath, len)
+				return fmt.Errorf("unhandled TAG_List type: %d at %v (len %d)", lty, path, len)
 			}
 		default:
-			return fmt.Errorf("unhandled nbt tag type: %d at %s", ty, jpath)
+			return fmt.Errorf("unhandled nbt tag type: %d at %v", ty, path)
 		}
 
 	}

@@ -167,32 +167,38 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		if err != nil {
 			return cdata, err
 		}
+		chunkDecompressedBytes := chunkDecompressed.Bytes()
 
 		dataVersion := 0
 		blocks := [][]byte{}
 		blockData := [][]byte{}
-		blockStates := make([][]byte, 17)
-		palettes := make([][]paletteEntry, 17)
+		blockStates := make([][]byte, 24) // -64 to 320
+		palettes := make([][]paletteEntry, 24)
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
-		ys := []byte{}
+		ys := []int8{}
 		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
-		err = NbtWalk(chunkDecompressed.Bytes(), func(path []string, idxes []int, ty NbtType, value []byte) {
-			//fmt.Println(path, ty, len(value), value)
-			if len(path) == 2 && ty == TagInt {
-				if path[1] == "xPos" {
+
+		err = NbtWalk(chunkDecompressedBytes, func(path []string, idxes []int, ty NbtType, value []byte) {
+			if len(path) == 0 {
+				return
+			}
+			if len(path) <= 2 && ty == TagInt {
+				switch path[len(path)-1] {
+				case "xPos":
 					chunkXPos = int(int32(binary.BigEndian.Uint32(value)))
-				} else if path[1] == "zPos" {
+				case "zPos":
 					chunkZPos = int(int32(binary.BigEndian.Uint32(value)))
 				}
 			}
-			if len(path) == 1 && path[0] == "DataVersion" {
+			last := path[len(path)-1]
+			if last == "DataVersion" {
 				dataVersion = int(binary.BigEndian.Uint32(value))
-			} else if len(path) > 1 && path[1] == "Sections" {
-				last := path[len(path)-1]
-				if len(idxes) == 2 && len(path) > 4 && path[3] == "Palette" {
+			} else if path[0] == "sections" || len(path) > 1 && path[1] == "Sections" {
+				penult := path[len(path)-2]
+				if len(idxes) == 2 && len(path) > 4 && (path[3] == "Palette" || path[3] == "palette") {
 					cpal := &palettes[idxes[0]]
 					if idxes[1] >= len(*cpal) {
 						*cpal = append(*cpal, paletteEntry{})
@@ -200,10 +206,8 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 					entry := &(*cpal)[idxes[1]]
 					if last == "Name" {
 						entry.name = string(value)
-						// fmt.Println("PALNAME", path, idxes, string(value))
 					} else if len(path) == 7 && path[5] == "Properties" {
 						entry.props = append(entry.props, last+"="+string(value))
-						// fmt.Println("PALPROP", path, last, idxes, string(value))
 					}
 				} else if ty == TagByteArray {
 					if last == "Blocks" {
@@ -222,12 +226,11 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 						lightsSky = append(lightsSky, light)
 					}
 				} else if ty == TagLongArray {
-					if last == "BlockStates" {
+					if last == "BlockStates" || last == "data" && penult == "block_states" {
 						blockStates[idxes[0]] = value
-						// fmt.Println("BLOCKSTATES", path, last, idxes, len(value), 8*len(value)/4096)
 					}
 				} else if ty == TagByte && last == "Y" {
-					ys = append(ys, value[0])
+					ys = append(ys, int8(value[0]))
 				}
 			}
 		})
@@ -235,7 +238,8 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			log.Printf("chunk misplaced (corrupt region file?)-- expected %d,%d got %d,%d\n", xPos, zPos, chunkXPos, chunkZPos)
 			continue
 		}
-		if len(ys) > 1 && ys[0] == 255 {
+		for len(ys) > 1 && ys[0] < 0 {
+			// TODO: actually render negative Y
 			ys = ys[1:]
 			palettes = palettes[1:]
 			blockStates = blockStates[1:]
@@ -246,6 +250,10 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		if !sort.SliceIsSorted(ys, func(i, j int) bool { return ys[i] < ys[j] }) {
 			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
 			continue
+		}
+		if len(ys) > 1 && len(palettes[0]) > 1 {
+			// for pasting into https://www.brandonfowler.me/nbtreader/
+			// fmt.Println(base64.StdEncoding.EncodeToString(chunkDecompressedBytes))
 		}
 		nblocks := [][]uint16{}
 		nstates := [][]render.Stateval{}
@@ -273,7 +281,12 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 				palNids = palNids[:0]
 				palStates = palStates[:0]
 				for i := range palettes[bi] {
-					nid := r.bm.NameToNid[palettes[bi][i].name]
+					palName := palettes[bi][i].name
+					nid, ok := r.bm.NameToNid[palName]
+					if !ok {
+						fmt.Println(r.bm.NameToNid)
+						return cdata, fmt.Errorf("unable to map palette name %s to an id", palName)
+					}
 					palNids = append(palNids, nid)
 					palStates = append(palStates, r.bm.nidToSmap[nid].GetList(palettes[bi][i].props))
 				}

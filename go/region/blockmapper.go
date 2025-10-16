@@ -43,7 +43,7 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 		} else {
 			count++
 		}
-		bm.NameToNid["minecraft:"+b.Name] = n
+		bm.NameToNid[b.Name] = n
 		smap := render.BuildStateMap(b.States)
 		if int(n) >= len(bm.NidToName) {
 			bm.NidToName = append(bm.NidToName, b.Name)
