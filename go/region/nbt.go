@@ -1,4 +1,4 @@
-package main
+package region
 
 import (
 	"encoding/binary"
@@ -7,38 +7,38 @@ import (
 	"strings"
 )
 
-type nbtType int
+type NbtType int
 
 const (
-	tagEnd = iota
-	tagByte
-	tagShort
-	tagInt
-	tagLong
-	tagFloat
-	tagDouble
-	tagByteArray
-	tagString
-	tagList
-	tagCompound
-	tagIntArray
-	tagLongArray
+	TagEnd = iota
+	TagByte
+	TagShort
+	TagInt
+	TagLong
+	TagFloat
+	TagDouble
+	TagByteArray
+	TagString
+	TagList
+	TagCompound
+	TagIntArray
+	TagLongArray
 )
 
 type nbtList struct {
 	depth  int
-	ty     nbtType
+	ty     NbtType
 	length int
 	idx    int
 }
 
 // a stream-oriented zero-copy nbt parser
-func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value []byte)) error {
+func NbtWalk(buf []byte, cb func(path []string, idxes []int, ty NbtType, value []byte)) error {
 	path := []string{}
 	idxes := []int{}
 	listStack := []nbtList{}
 	depth := 0
-	var ty nbtType
+	var ty NbtType
 	for o := 0; o < len(buf); {
 		if len(listStack) > 0 && listStack[len(listStack)-1].depth == depth {
 			lt := &listStack[len(listStack)-1]
@@ -54,8 +54,8 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 				idxes = append(idxes[:len(listStack)-1], lt.idx-1)
 			}
 		} else {
-			ty = nbtType(buf[o])
-			if ty == tagEnd {
+			ty = NbtType(buf[o])
+			if ty == TagEnd {
 				o++
 				depth--
 				if depth < 0 {
@@ -71,70 +71,70 @@ func nbtWalk(buf []byte, cb func(path []string, idxes []int, ty nbtType, value [
 		jpath := strings.Join(path[1:], ".")
 		// fmt.Println(jpath, ty, listStack, depth, idxes)
 		switch ty {
-		case tagCompound:
+		case TagCompound:
 			cb(path[1:], idxes, ty, nil)
 			depth++
-		case tagByte:
+		case TagByte:
 			cb(path[1:], idxes, ty, buf[o:o+1])
 			o++
-		case tagShort:
+		case TagShort:
 			cb(path[1:], idxes, ty, buf[o:o+2])
 			o += 2
-		case tagInt:
+		case TagInt:
 			cb(path[1:], idxes, ty, buf[o:o+4])
 			o += 4
-		case tagLong:
+		case TagLong:
 			cb(path[1:], idxes, ty, buf[o:o+8])
 			o += 8
-		case tagFloat:
+		case TagFloat:
 			cb(path[1:], idxes, ty, buf[o:o+4])
 			o += 4
-		case tagDouble:
+		case TagDouble:
 			cb(path[1:], idxes, ty, buf[o:o+8])
 			o += 8
-		case tagByteArray:
+		case TagByteArray:
 			len := binary.BigEndian.Uint32(buf[o:])
 			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)])
 			o += 4 + int(len)
-		case tagString:
+		case TagString:
 			len := binary.BigEndian.Uint16(buf[o:])
 			cb(path[1:], idxes, ty, buf[o+2:o+2+int(len)])
 			o += 2 + int(len)
-		case tagIntArray:
+		case TagIntArray:
 			len := binary.BigEndian.Uint32(buf[o:])
 			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)*4])
 			o += 4 + int(len)*4
-		case tagLongArray:
+		case TagLongArray:
 			len := binary.BigEndian.Uint32(buf[o:])
 			cb(path[1:], idxes, ty, buf[o+4:o+4+int(len)*8])
 			o += 4 + int(len)*8
-		case tagList:
-			lty := nbtType(buf[o])
+		case TagList:
+			lty := NbtType(buf[o])
 			len := int(binary.BigEndian.Uint32(buf[o+1:]))
 			o += 5
-			if lty >= tagByte && lty <= tagDouble {
+			if lty >= TagByte && lty <= TagDouble {
 				ltyLen := int(lty)
 				if lty > 2 {
 					ltyLen = 4 + 4*int((lty-3)%2)
 				}
 				cb(path[1:], idxes, -lty, buf[o:o+len*ltyLen])
 				o += len * ltyLen
-			} else if lty == tagCompound {
+			} else if lty == TagCompound {
 				if len > 0 {
 					depth++
-					listStack = append(listStack, nbtList{depth: depth, ty: tagCompound, length: len, idx: 0})
+					listStack = append(listStack, nbtList{depth: depth, ty: TagCompound, length: len, idx: 0})
 				}
-			} else if lty == tagList {
+			} else if lty == TagList {
 				if len > 0 {
 					depth++
-					listStack = append(listStack, nbtList{depth: depth, ty: tagList, length: len, idx: 0})
+					listStack = append(listStack, nbtList{depth: depth, ty: TagList, length: len, idx: 0})
 				}
-			} else if lty == tagIntArray {
+			} else if lty == TagIntArray {
 				if len > 0 {
 					depth++
-					listStack = append(listStack, nbtList{depth: depth, ty: tagIntArray, length: len, idx: 0})
+					listStack = append(listStack, nbtList{depth: depth, ty: TagIntArray, length: len, idx: 0})
 				}
-			} else if lty == tagString {
+			} else if lty == TagString {
 				// e.g. Level.TileEntities.Items.tag.pages
 				start := o
 				for i := 0; i < len; i++ {

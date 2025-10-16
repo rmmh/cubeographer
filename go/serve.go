@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/rmmh/cubeographer/go/region"
 )
 
 var (
@@ -28,12 +29,12 @@ type workItem struct {
 
 type server struct {
 	regionDir    map[string]string
-	regionOpener map[string]RegionOpener
+	regionOpener map[string]region.RegionOpener
 	dataDir      string
 	pruneCaves   bool
 
 	binaryTime time.Time
-	bm         *blockMapper
+	bm         *region.BlockMapper
 
 	workQueue chan *workItem
 
@@ -141,12 +142,12 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 		log.Fatal(err)
 	}
 
-	bm, err := makeBlockMapper(dataDir)
+	_, err = makeBlockMapper(dataDir)
 	if err != nil || *genDebug == "force" {
 		log.Println("regenerating block mapping")
 		generate(dataDir)
 	}
-	bm, err = makeBlockMapper(dataDir)
+	bm, err := makeBlockMapper(dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -154,8 +155,8 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	r := mux.NewRouter()
 	s := &server{
 		regionDir: map[string]string{"0": regionDir},
-		regionOpener: map[string]RegionOpener{
-			"test": testWorldOpener,
+		regionOpener: map[string]region.RegionOpener{
+			"test": region.TestWorldOpener,
 		},
 		dataDir:    dataDir,
 		pruneCaves: pruneCaves,

@@ -13,17 +13,17 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rmmh/cubeographer/go/region"
 	"github.com/rmmh/cubeographer/go/render"
 )
 
 type regionState struct {
-	r          *region
-	openRegion RegionOpener
+	openRegion region.RegionOpener
 	dir        string
-	bm         *blockMapper
+	bm         *region.BlockMapper
 	rx, rz     int
-	cdata      [1024]chunkDatum
-	cadj       [16]*[1024]chunkDatum
+	cdata      [1024]region.ChunkDatum
+	cadj       [16]*[1024]region.ChunkDatum
 
 	nbs [6]uint16
 	nls [6]byte
@@ -34,7 +34,7 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 	if y < 0 {
 		return 7, 0, 0xf, 0 // bedrock
 	}
-	var chunk *chunkDatum
+	var chunk *region.ChunkDatum
 	if (x|z)&512 != 0 {
 		key := (uint(x>>9)&3)<<2 | uint(z>>9)&3
 		if rs.cadj[key] == nil {
@@ -65,12 +65,12 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
 			r, err := rs.openRegion(ap, rs.bm)
 			if err != nil {
-				rs.cadj[key] = &[1024]chunkDatum{}
+				rs.cadj[key] = &[1024]region.ChunkDatum{}
 				return 0, 0, 0xf, 0
 			}
 			chunks, err := r.ReadChunks(wanted)
 			if err != nil {
-				rs.cadj[key] = &[1024]chunkDatum{}
+				rs.cadj[key] = &[1024]region.ChunkDatum{}
 				return 0, 0, 0xf, 0
 			}
 			rs.cadj[key] = &chunks
@@ -80,33 +80,33 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 		chunk = &rs.cdata[(x>>4)+(z>>4)*32]
 	}
 	ys := y >> 4
-	if ys >= len(chunk.blocks) {
+	if ys >= len(chunk.Blocks) {
 		return 0, 0, 0, 0xf
 	}
 	o := x&15 + (z&15)*16 + (y&15)*256
 	s := (x & 1) << 2
-	b := chunk.blocks[ys][o]
-	bs := chunk.blockState[ys][o]
-	if ys >= len(chunk.lights) {
-		if ys >= len(chunk.lightsSky) {
+	b := chunk.Blocks[ys][o]
+	bs := chunk.BlockState[ys][o]
+	if ys >= len(chunk.Lights) {
+		if ys >= len(chunk.LightsSky) {
 			return b, bs, 0xf, 0xf
 		}
-		return b, bs, 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
-	} else if ys >= len(chunk.lightsSky) {
-		return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, 0xf
+		return b, bs, 0xf, (chunk.LightsSky[ys][o/2] >> s) & 0xf
+	} else if ys >= len(chunk.LightsSky) {
+		return b, bs, (chunk.Lights[ys][o/2] >> s) & 0xf, 0xf
 	}
-	return b, bs, (chunk.lights[ys][o/2] >> s) & 0xf, (chunk.lightsSky[ys][o/2] >> s) & 0xf
+	return b, bs, (chunk.Lights[ys][o/2] >> s) & 0xf, (chunk.LightsSky[ys][o/2] >> s) & 0xf
 }
 
 func (rs *regionState) getLight(x, y, z int) byte {
 	chunk := &rs.cdata[(x>>4)+(z>>4)*32]
 	ys := y >> 4
-	if ys >= len(chunk.lights) || ys >= len(chunk.lightsSky) {
+	if ys >= len(chunk.Lights) || ys >= len(chunk.LightsSky) {
 		return 15
 	}
 	o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
 	s := (x & 1) << 2
-	return chunk.lights[ys][o]>>s + chunk.lightsSky[ys][o]>>s
+	return chunk.Lights[ys][o]>>s + chunk.LightsSky[ys][o]>>s
 }
 
 func (rs *regionState) neighs(x, y, z int) ([]uint16, []byte, []byte) {
@@ -124,8 +124,8 @@ func (rs *regionState) neighs(x, y, z int) ([]uint16, []byte, []byte) {
 type scanRegionConfig struct {
 	dir, outdir string
 	file        string
-	bm          *blockMapper
-	openRegion  RegionOpener
+	bm          *region.BlockMapper
+	openRegion  region.RegionOpener
 
 	pruneCaves bool
 }
@@ -135,7 +135,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		return errors.New("file has wrong suffix (not .mca): " + conf.file)
 	}
 
-	openRegion := makeRegion
+	openRegion := region.MakeRegion
 	if conf.openRegion != nil {
 		openRegion = conf.openRegion
 	}
@@ -188,15 +188,15 @@ func scanRegion(conf *scanRegionConfig) error {
 	// iterate bottom-to-top so that transparency (i.e. ocean water)
 	// has a chance to render the bottom THEN the surface
 
-	waterID := bm.nameToNid["minecraft:water"]
+	waterID := bm.NameToNid["minecraft:water"]
 
-	blockCounts := make([]int, len(bm.tmpl))
+	blockCounts := make([]int, len(bm.Tmpl))
 
 	for y := 0; y < 256; y++ {
 		for z := 0; z < 512; z++ {
 			// skipping empty rows is a significant speedup for empty regions
 			minX := 0
-			for minX < 512 && cdata[(minX>>4)+(z>>4)*32].blocks == nil {
+			for minX < 512 && cdata[(minX>>4)+(z>>4)*32].Blocks == nil {
 				minX += 16
 			}
 			if minX == 512 {
@@ -204,7 +204,7 @@ func scanRegion(conf *scanRegionConfig) error {
 				continue
 			}
 			for x := minX; x < 512; x++ {
-				if cdata[(x>>4)+(z>>4)*32].blocks == nil {
+				if cdata[(x>>4)+(z>>4)*32].Blocks == nil {
 					x += 15
 				}
 
@@ -217,7 +217,7 @@ func scanRegion(conf *scanRegionConfig) error {
 				}
 
 				chunk := &cdata[(x>>4)+(z>>4)*32]
-				if len(chunk.blocks) < y>>4 {
+				if len(chunk.Blocks) < y>>4 {
 					continue
 				}
 
@@ -233,10 +233,10 @@ func scanRegion(conf *scanRegionConfig) error {
 				sideLight := uint32(0)
 				for i, nb := range ns {
 					if b == waterID {
-						if nb == 0 || (nb != waterID && !bm.isSolid(nb)) {
+						if nb == 0 || (nb != waterID && !bm.IsSolid(nb)) {
 							sideVis |= 1 << i
 						}
-					} else if !bm.isSolid(nb) {
+					} else if !bm.IsSolid(nb) {
 						sideVis |= 1 << i
 					}
 					l := nsl[i]
@@ -259,12 +259,12 @@ func scanRegion(conf *scanRegionConfig) error {
 					// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
 					var tmpl []uint32
 					var layer uint8
-					if int(bs) < len(bm.tmpl[b]) {
-						tmpl = bm.tmpl[b][bs]
-						layer = bm.layer[b][bs]
+					if int(bs) < len(bm.Tmpl[b]) {
+						tmpl = bm.Tmpl[b][bs]
+						layer = bm.Layer[b][bs]
 					} else {
-						tmpl = bm.tmpl[b][0]
-						layer = bm.layer[b][0]
+						tmpl = bm.Tmpl[b][0]
+						layer = bm.Layer[b][0]
 					}
 
 					pos := uint32((x&255)<<16 | (z&255)<<8 | y)
@@ -351,8 +351,8 @@ func scanRegion(conf *scanRegionConfig) error {
 		if blockCounts[bid] < 100 {
 			continue
 		}
-		if render.LayerNumber(bm.layer[bid][0]) == render.LayerCubeFallback {
-			fmt.Println(bm.nidToName[bid], blockCounts[bid])
+		if render.LayerNumber(bm.Layer[bid][0]) == render.LayerCubeFallback {
+			fmt.Println(bm.NidToName[bid], blockCounts[bid])
 		}
 	}
 

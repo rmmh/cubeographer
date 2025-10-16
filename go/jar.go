@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/rmmh/cubeographer/go/region"
 	"github.com/rmmh/cubeographer/go/render"
 	rp "github.com/rmmh/cubeographer/go/resourcepack"
 )
@@ -92,5 +93,9 @@ func generate(outDir string) {
 		log.Fatal(err)
 	}
 
-	loadBlockMapper(buf)
+	// ensure it can load
+	_, err = region.LoadBlockMapper(buf)
+	if err != nil {
+		log.Fatal(err)
+	}
 }

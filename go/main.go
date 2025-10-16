@@ -12,14 +12,16 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/rmmh/cubeographer/go/region"
 )
 
-func makeBlockMapper(outDir string) (*blockMapper, error) {
+func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 	blockmeta, err := ioutil.ReadFile(path.Join(outDir, "blockmeta.json"))
 	if err != nil {
 		return nil, err
 	}
-	return loadBlockMapper(blockmeta)
+	return region.LoadBlockMapper(blockmeta)
 }
 
 func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves bool) {

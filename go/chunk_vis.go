@@ -2,6 +2,8 @@ package main
 
 import (
 	"math/bits"
+
+	"github.com/rmmh/cubeographer/go/region"
 )
 
 type chunkVis [32 * 32 * (256 / 16)]struct {
@@ -46,10 +48,10 @@ func (t *tinybitset) pop() int {
 	return -1
 }
 
-func computeConnected(chunklet []uint16, bm *blockMapper) int64 {
+func computeConnected(chunklet []uint16, bm *region.BlockMapper) int64 {
 	var passable tinybitset
 	for i, b := range chunklet {
-		if !bm.isSolid(b) {
+		if !bm.IsSolid(b) {
 			passable.set(i)
 		}
 	}
@@ -126,12 +128,12 @@ func computeConnected(chunklet []uint16, bm *blockMapper) int64 {
 	return conn
 }
 
-func makeChunkvis(chunks [1024]chunkDatum, bm *blockMapper) *chunkVis {
+func makeChunkvis(chunks [1024]region.ChunkDatum, bm *region.BlockMapper) *chunkVis {
 	var cv chunkVis
 
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
-			for ys, chunklet := range chunks[cx+cz*32].blocks {
+			for ys, chunklet := range chunks[cx+cz*32].Blocks {
 				cv[cx+cz*32+ys*1024].connected = computeConnected(chunklet, bm)
 			}
 		}
@@ -141,11 +143,11 @@ func makeChunkvis(chunks [1024]chunkDatum, bm *blockMapper) *chunkVis {
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
 			chunk := chunks[cx+cz*32]
-			if len(chunk.blocks) == 0 {
+			if len(chunk.Blocks) == 0 {
 				continue
 			}
 			mask := 0b111101 // top chunklet reachable every dir but below
-			cv[cx+cz*32+(len(chunk.blocks)-1)*1024].dirReachable |= mask
+			cv[cx+cz*32+(len(chunk.Blocks)-1)*1024].dirReachable |= mask
 			if cx == 0 {
 				mask &^= 1 << 2
 			} else if cx == 31 {
@@ -159,7 +161,7 @@ func makeChunkvis(chunks [1024]chunkDatum, bm *blockMapper) *chunkVis {
 			if mask == 0b111101 { // i.e., not on edge
 				continue
 			}
-			for ys := 0; ys < len(chunk.blocks); ys++ {
+			for ys := 0; ys < len(chunk.Blocks); ys++ {
 				cv[cx+cz*32+ys*1024].dirReachable |= mask // side chunklet reachable every dir
 			}
 		}
@@ -169,7 +171,7 @@ func makeChunkvis(chunks [1024]chunkDatum, bm *blockMapper) *chunkVis {
 	// ...or it would be, but we end up mostly just following straight down, oh well
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
-			for ys := len(chunks[cx+cz*32].blocks) - 1; ys >= 0; ys-- {
+			for ys := len(chunks[cx+cz*32].Blocks) - 1; ys >= 0; ys-- {
 				ccv := &cv[cx+cz*32+ys*1024]
 				ccv.dirReachable |= 1 << 1
 				if ys > 3 {

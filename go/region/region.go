@@ -1,4 +1,4 @@
-package main
+package region
 
 import (
 	"bytes"
@@ -16,9 +16,9 @@ import (
 	"github.com/rmmh/cubeographer/go/render"
 )
 
-type RegionOpener func(path string, bm *blockMapper) (Region, error)
-type Region interface {
-	ReadChunks(wanted []int) ([1024]chunkDatum, error)
+type RegionOpener func(path string, bm *BlockMapper) (Regioner, error)
+type Regioner interface {
+	ReadChunks(wanted []int) ([1024]ChunkDatum, error)
 	Rx() int
 	Rz() int
 }
@@ -30,18 +30,18 @@ type paletteEntry struct {
 
 var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
 
-type region struct {
+type Region struct {
 	path       string
 	rx, rz     int
-	bm         *blockMapper
+	bm         *BlockMapper
 	offsets    [1024]uint32
 	timestamps [1024]uint32
 }
 
-func (r *region) Rx() int { return r.rx }
-func (r *region) Rz() int { return r.rz }
+func (r *Region) Rx() int { return r.rx }
+func (r *Region) Rz() int { return r.rz }
 
-func makeRegion(path string, bm *blockMapper) (Region, error) {
+func MakeRegion(path string, bm *BlockMapper) (Regioner, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func makeRegion(path string, bm *blockMapper) (Region, error) {
 		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
 	}
 
-	r := &region{path: path, bm: bm, rx: rx, rz: rz}
+	r := &Region{path: path, bm: bm, rx: rx, rz: rz}
 
 	var buf [4096]uint8
 	_, err = f.Read(buf[:])
@@ -79,14 +79,14 @@ func makeRegion(path string, bm *blockMapper) (Region, error) {
 	return r, nil
 }
 
-type chunkDatum struct {
-	blocks            [][]uint16
-	blockState        [][]render.Stateval
-	lights, lightsSky [][]byte
+type ChunkDatum struct {
+	Blocks            [][]uint16
+	BlockState        [][]render.Stateval
+	Lights, LightsSky [][]byte
 }
 
-func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
-	var cdata [1024]chunkDatum
+func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
+	var cdata [1024]ChunkDatum
 
 	f, err := os.Open(r.path)
 	if err != nil {
@@ -179,9 +179,9 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
-		err = nbtWalk(chunkDecompressed.Bytes(), func(path []string, idxes []int, ty nbtType, value []byte) {
+		err = NbtWalk(chunkDecompressed.Bytes(), func(path []string, idxes []int, ty NbtType, value []byte) {
 			//fmt.Println(path, ty, len(value), value)
-			if len(path) == 2 && ty == tagInt {
+			if len(path) == 2 && ty == TagInt {
 				if path[1] == "xPos" {
 					chunkXPos = int(int32(binary.BigEndian.Uint32(value)))
 				} else if path[1] == "zPos" {
@@ -205,7 +205,7 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 						entry.props = append(entry.props, last+"="+string(value))
 						// fmt.Println("PALPROP", path, last, idxes, string(value))
 					}
-				} else if ty == tagByteArray {
+				} else if ty == TagByteArray {
 					if last == "Blocks" {
 						blocks = append(blocks, value)
 					} else if last == "Data" {
@@ -221,12 +221,12 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 						copy(light, value)
 						lightsSky = append(lightsSky, light)
 					}
-				} else if ty == tagLongArray {
+				} else if ty == TagLongArray {
 					if last == "BlockStates" {
 						blockStates[idxes[0]] = value
 						// fmt.Println("BLOCKSTATES", path, last, idxes, len(value), 8*len(value)/4096)
 					}
-				} else if ty == tagByte && last == "Y" {
+				} else if ty == TagByte && last == "Y" {
 					ys = append(ys, value[0])
 				}
 			}
@@ -273,7 +273,7 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 				palNids = palNids[:0]
 				palStates = palStates[:0]
 				for i := range palettes[bi] {
-					nid := r.bm.nameToNid[palettes[bi][i].name]
+					nid := r.bm.NameToNid[palettes[bi][i].name]
 					palNids = append(palNids, nid)
 					palStates = append(palStates, r.bm.nidToSmap[nid].GetList(palettes[bi][i].props))
 				}
@@ -303,7 +303,7 @@ func (r *region) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 				nstates = append(nstates, states)
 			}
 		}
-		cdata[chunkNum] = chunkDatum{nblocks, nstates, lights, lightsSky}
+		cdata[chunkNum] = ChunkDatum{nblocks, nstates, lights, lightsSky}
 		if err != nil {
 			return cdata, err
 		}

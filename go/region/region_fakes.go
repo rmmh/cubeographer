@@ -1,4 +1,4 @@
-package main
+package region
 
 import (
 	"errors"
@@ -8,13 +8,13 @@ import (
 	"github.com/rmmh/cubeographer/go/render"
 )
 
-type fakeRegion struct {
+type FakeRegion struct {
 	path   string
 	rx, rz int
-	bm     *blockMapper
+	bm     *BlockMapper
 }
 
-func testWorldOpener(path string, bm *blockMapper) (Region, error) {
+func TestWorldOpener(path string, bm *BlockMapper) (Regioner, error) {
 	m := regionMatchRE.FindStringSubmatch(path)
 	var rx, rz int
 	if m != nil {
@@ -28,12 +28,12 @@ func testWorldOpener(path string, bm *blockMapper) (Region, error) {
 		return nil, errors.New("out of bounds")
 	}
 
-	r := &fakeRegion{path, rx, rz, bm}
+	r := &FakeRegion{path, rx, rz, bm}
 	return r, nil
 }
 
-func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
-	var cdata [1024]chunkDatum
+func (r *FakeRegion) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
+	var cdata [1024]ChunkDatum
 
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
@@ -44,17 +44,17 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 			nb := make([]uint16, 4096)
 			ns := make([]render.Stateval, 4096)
 			for j := 0; j < 256; j++ {
-				nb[j+256] = r.bm.nameToNid["minecraft:grass_block"]
+				nb[j+256] = r.bm.NameToNid["minecraft:grass_block"]
 			}
 			nblocks = append(nblocks, nb)
 			nstates = append(nstates, ns)
 		}
 
-		cdata[cn] = chunkDatum{
-			blocks:     nblocks,
-			blockState: nstates,
-			lightsSky:  nsky,
-			lights:     nsky,
+		cdata[cn] = ChunkDatum{
+			Blocks:     nblocks,
+			BlockState: nstates,
+			LightsSky:  nsky,
+			Lights:     nsky,
 		}
 	}
 
@@ -64,22 +64,22 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 		}
 		chunk := &cdata[x>>4+(z>>4)*32]
 		o := (x % 16) + (z%16)*16 + (y%16)*256
-		chunk.blocks[y/16][o] = b
-		chunk.blockState[y/16][o] = s
+		chunk.Blocks[y/16][o] = b
+		chunk.BlockState[y/16][o] = s
 	}
 
 	bx := 32
 	bz := 32
 
-	for b := 1; b < len(r.bm.nidToName); b++ {
+	for b := 1; b < len(r.bm.NidToName); b++ {
 		ns := int(r.bm.nidToSmap[b].Max())
 		nl := ns/6 + 1
 		if bx+nl >= 220 {
 			bx = 32
 			bz += 8
 		}
-		qualBlock := r.bm.nameToNid["minecraft:"+[]string{
-			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.layer[b][0]]]
+		qualBlock := r.bm.NameToNid["minecraft:"+[]string{
+			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.Layer[b][0]]]
 		for i := 0; i <= ns; i++ {
 			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
 			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
@@ -91,5 +91,5 @@ func (r *fakeRegion) ReadChunks(wanted []int) ([1024]chunkDatum, error) {
 	return cdata, nil
 }
 
-func (r *fakeRegion) Rx() int { return r.rx }
-func (r *fakeRegion) Rz() int { return r.rz }
+func (r *FakeRegion) Rx() int { return r.rx }
+func (r *FakeRegion) Rz() int { return r.rz }
