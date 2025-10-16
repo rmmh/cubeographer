@@ -45,13 +45,6 @@ const (
 	numRenderLayers
 )
 
-func removeDefaultPrefix(s string) string {
-	if strings.HasPrefix(s, "minecraft:") {
-		return s[len("minecraft:"):]
-	}
-	return s
-}
-
 type modelEntry struct {
 	Layer    layerNumber `json:"layer"`
 	Textures []string    `json:"textures,omitempty"`
@@ -94,7 +87,7 @@ func (s *stateConverter) referencedTexturesModel(model *rp.Model) ([]string, boo
 			}
 		}
 	}
-	parent := s.models[removeDefaultPrefix(model.Parent)]
+	parent := s.models[rp.RemoveDefaultPrefix(model.Parent)]
 	if parent != nil {
 		for _, el := range parent.Elements {
 			for _, face := range el.Faces {
@@ -114,7 +107,7 @@ func (s *stateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 	// fallback: draw ANY texture from ANY sub-model as a cube
 	for _, vs := range st.Variants {
 		for _, v := range vs {
-			model := s.models[removeDefaultPrefix(v.Model)]
+			model := s.models[rp.RemoveDefaultPrefix(v.Model)]
 			if model.Textures != nil {
 				for _, tex := range model.Textures {
 					out = append(out, tex)
@@ -127,7 +120,7 @@ func (s *stateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 					}
 				}
 			}
-			parent := s.models[removeDefaultPrefix(model.Parent)]
+			parent := s.models[rp.RemoveDefaultPrefix(model.Parent)]
 			if parent != nil {
 				for _, el := range parent.Elements {
 					for _, face := range el.Faces {
@@ -141,7 +134,7 @@ func (s *stateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 	}
 	for _, m := range st.Multipart {
 		for _, v := range m.Apply {
-			model := s.models[removeDefaultPrefix(v.Model)]
+			model := s.models[rp.RemoveDefaultPrefix(v.Model)]
 			if model.Textures != nil {
 				for _, tex := range model.Textures {
 					out = append(out, tex)
@@ -192,7 +185,7 @@ func (s *stateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 func (s *stateConverter) resolveInheritance(model *rp.Model) {
 	parentName := model.Parent
 	for parentName != "" {
-		parent := s.models[removeDefaultPrefix(parentName)]
+		parent := s.models[rp.RemoveDefaultPrefix(parentName)]
 		if model.AmbientOcclusion == nil {
 			model.AmbientOcclusion = parent.AmbientOcclusion
 		}
@@ -297,7 +290,7 @@ func renderCube(m *rp.Model) *modelEntry {
 }
 
 func (s *stateConverter) renderModelSpec(name string, ms *rp.ModelSpec) modelEntry {
-	modelName := removeDefaultPrefix(ms.Model)
+	modelName := rp.RemoveDefaultPrefix(ms.Model)
 	// TODO: check for modelspec X/Y rotations etc
 	model := s.models[modelName]
 	if model == nil {
@@ -494,7 +487,7 @@ func generate(outDir string) {
 	converter := stateConverter{
 		columnTops: map[string]string{},
 		models: lo.MapEntries(pack.Models, func(key string, m *rp.Model) (string, *rp.Model) {
-			return removeDefaultPrefix(key), m
+			return rp.RemoveDefaultPrefix(key), m
 		}),
 	}
 
@@ -586,7 +579,7 @@ func generate(outDir string) {
 				continue
 			}
 			for ti := range model.Textures {
-				model.Textures[ti] = removeDefaultPrefix(model.Textures[ti])
+				model.Textures[ti] = rp.RemoveDefaultPrefix(model.Textures[ti])
 			}
 
 			layer := model.Layer

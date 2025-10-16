@@ -409,3 +409,10 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 
 	return rj, nil
 }
+
+func RemoveDefaultPrefix(s string) string {
+	if strings.HasPrefix(s, "minecraft:") {
+		return s[len("minecraft:"):]
+	}
+	return s
+}
