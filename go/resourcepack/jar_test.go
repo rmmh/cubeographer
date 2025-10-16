@@ -42,6 +42,7 @@ func TestBlockstateUnmarshal(t *testing.T) {
 }
 
 func TestJarFromZip(t *testing.T) {
+	t.Parallel()
 	for _, ver := range MajorMCVersions {
 		t.Run(ver, func(t *testing.T) {
 			t.Parallel()

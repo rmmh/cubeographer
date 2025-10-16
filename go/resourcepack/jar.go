@@ -340,7 +340,7 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 			if err != nil {
 				return nil, err
 			}
-			rj.Textures[name] = tex
+			rj.Textures[RemoveDefaultPrefix(name)] = tex
 		}
 		if ext == "json" {
 			rc, err := f.Open()

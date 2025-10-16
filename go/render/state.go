@@ -78,7 +78,7 @@ func buildStateList(st *resourcepack.BlockState) [][]string {
 			alist = append(alist, append([]string{name}, values...))
 			bitsNeeded += bits.Len(uint(len(values) - 1))
 		}
-		if bitsNeeded > 8 {
+		if bitsNeeded > 16 {
 			fmt.Printf("STATEMAP TOO BIG: %d %#v\n%#v\n", bitsNeeded, attrs, st)
 		}
 		sort.Slice(alist, func(i, j int) bool {
