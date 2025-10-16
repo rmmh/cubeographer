@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+
+	"github.com/rmmh/cubeographer/go/resourcepack"
 )
 
 // TODO: this should probably go back to AOS instead of this SOA form
@@ -66,10 +68,10 @@ func loadBlockMapper(buf []byte) (*blockMapper, error) {
 		}
 	}
 
-	for blockstate, data := range blockstateMap {
-		nid := bm.nameToNid["minecraft:"+data.name]
+	for blockstate, data := range resourcepack.BlockstateMap {
+		nid := bm.nameToNid["minecraft:"+data.Name]
 		bm.blockstateToNid[blockstate] = nid
-		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].getState(data.properties)
+		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].getState(data.Properties)
 	}
 
 	return bm, nil

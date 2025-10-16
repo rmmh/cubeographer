@@ -9,17 +9,16 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"reflect"
 	"sort"
 	"strings"
 
-	"github.com/pkg/errors"
+	"github.com/samber/lo"
+
+	rp "github.com/rmmh/cubeographer/go/resourcepack"
 )
 
 var clientJarPath = flag.String("jar", "", "use specific client jar")
@@ -45,221 +44,6 @@ const (
 	layerCubeFallback
 	numRenderLayers
 )
-
-func jsonGrab(url string, val interface{}) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(val)
-}
-
-func downloadMinecraftJar(dest string) error {
-	manifest := struct {
-		Latest struct {
-			Release string `json:"release"`
-		} `json:"latest"`
-		Versions []struct {
-			ID  string `json:"id"`
-			URL string `json:"url"`
-		}
-	}{}
-	err := jsonGrab("https://launchermeta.mojang.com/mc/game/version_manifest.json", &manifest)
-	if err != nil {
-		return err
-	}
-	if *clientJarVersion == "latest" {
-		clientJarVersion = &manifest.Latest.Release
-		fmt.Println("downloading version", *clientJarVersion)
-	}
-	versionManifestURL := ""
-	for _, v := range manifest.Versions {
-		if v.ID == *clientJarVersion {
-			versionManifestURL = v.URL
-			break
-		}
-	}
-	if versionManifestURL == "" {
-		return fmt.Errorf("unable to find release version %s", *clientJarVersion)
-	}
-
-	versionManifest := struct {
-		Downloads map[string]struct {
-			URL string `json:"url"`
-		} `json:"downloads"`
-	}{}
-	jsonGrab(versionManifestURL, &versionManifest)
-
-	clientJarURL := versionManifest.Downloads["client"].URL
-
-	resp, err := http.Get(clientJarURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	size, err := io.Copy(out, resp.Body)
-	if err != nil {
-		os.Remove(dest)
-		return err
-	}
-	fmt.Printf("done, downloaded %.2fMiB\n", float64(size)/1024/1024)
-
-	return err
-}
-
-type modelSpec struct {
-	Model  string `json:"model"`
-	X      int    `json:"x,omitempty"`
-	Y      int    `json:"y,omitempty"`
-	UVLock bool   `json:"uvlock,omitempty"`
-	Weight *int   `json:"weight,omitempty"`
-}
-
-func (m *modelSpec) render(name string) {
-
-}
-
-type blockState struct {
-	Variants   map[string][]modelSpec
-	VariantRaw map[string]json.RawMessage `json:"variants"`
-	Multipart  []struct {
-		When     []map[string]string
-		WhenRaw  map[string]json.RawMessage `json:"when"`
-		Apply    []modelSpec
-		ApplyRaw json.RawMessage `json:"apply"`
-	}
-}
-
-func unmarshalBlockState(buf []byte, b *blockState) error {
-	err := json.Unmarshal(buf, b)
-	if err != nil {
-		return errors.Wrap(err, "base unmarshal failed")
-	}
-	b.Variants = make(map[string][]modelSpec)
-	for k, v := range b.VariantRaw {
-		specs := []modelSpec{}
-		if v[0] == '[' {
-			err = json.Unmarshal(v, &specs)
-		} else {
-			ms := modelSpec{}
-			err = json.Unmarshal(v, &ms)
-			specs = append(specs, ms)
-		}
-		if err != nil {
-			return errors.Wrap(err, "unmarshaling variant")
-		}
-		b.Variants[k] = specs
-		v = nil
-	}
-	b.VariantRaw = nil
-	for i := range b.Multipart {
-		mp := &b.Multipart[i]
-		for k, v := range mp.WhenRaw {
-			if v[0] == '[' { // OR
-				whenBase := []map[string]bool{} // <= 1.15
-				err = json.Unmarshal(v, &whenBase)
-				if err == nil {
-					for _, c := range whenBase {
-						m := map[string]string{}
-						for k, v := range c {
-							if v == true {
-								m[k] = "true"
-							} else {
-								m[k] = "false"
-							}
-						}
-						mp.When = append(mp.When, m)
-					}
-				} else {
-					err = json.Unmarshal(v, &mp.When)
-				}
-				if err != nil {
-					return errors.Wrap(err, "unmarshaling Multipart.When: "+string(v))
-				}
-			} else {
-				var b bool
-				var s string
-				err = json.Unmarshal(v, &b)
-				if err == nil {
-					if b {
-						s = "true"
-					} else {
-						s = "false"
-					}
-				} else {
-					err = json.Unmarshal(v, &s)
-				}
-				if err != nil {
-					return errors.Wrap(err, "unmarshaling Multipart.When: "+string(v))
-				}
-				mp.When = []map[string]string{{k: s}}
-			}
-		}
-		mp.WhenRaw = nil
-		if len(mp.ApplyRaw) > 0 {
-			if mp.ApplyRaw[0] == '[' {
-				err = json.Unmarshal(mp.ApplyRaw, &mp.Apply)
-			} else {
-				ms := modelSpec{}
-				err = json.Unmarshal(mp.ApplyRaw, &ms)
-				mp.Apply = append(mp.Apply, ms)
-			}
-			if err != nil {
-				return err
-			}
-			mp.ApplyRaw = nil
-		}
-	}
-	return nil
-}
-
-type blockModelFace struct {
-	UV        []float64 `json:"uv"`
-	Texture   string    `json:"texture"`
-	CullFace  string    `json:"cullface,omitempty"`
-	Rotation  int       `json:"rotation,omitempty"`
-	TintIndex *int      `json:"tintindex,omitempty"`
-}
-
-type blockModel struct {
-	Parent           string `json:"parent"`
-	AmbientOcclusion *bool  `json:"ambientocclusion,omitempty"`
-	/* omitted: display */
-	Textures map[string]string `json:"textures"`
-	Elements []struct {
-		From     []float64 `json:"from"`
-		To       []float64 `json:"to"`
-		Rotation struct {
-			Origin  []float64 `json:"origin,omitempty"`
-			Axis    string    `json:"axis,omitempty"`
-			Angle   float64   `json:"angle"`
-			Rescale *bool     `json:"rescale,omitempty"`
-		} `json:"rotation"`
-		Shade *bool                     `json:"shade,omitempty"`
-		Faces map[string]blockModelFace `json:"faces"`
-	} `json:"elements"`
-}
-
-type mcItem struct {
-	Model *struct {
-		Type     string `json:"type"`
-		Base     string `json:"base"`
-		ModelRaw any    `json:"model"`
-		Tints    *[]struct {
-			Type        string   `json:"type"`
-			Downfall    *float64 `json:"downfall"`
-			Temperature *float64 `json:"temperature"`
-		} `json:"tints"`
-	} `json:"model"`
-}
 
 func removeDefaultPrefix(s string) string {
 	if strings.HasPrefix(s, "minecraft:") {
@@ -287,11 +71,11 @@ type blockentryMetadata struct {
 }
 
 type stateConverter struct {
-	models     map[string]*blockModel
+	models     map[string]*rp.Model
 	columnTops map[string]string
 }
 
-func (s *stateConverter) referencedTexturesModel(model *blockModel) ([]string, bool) {
+func (s *stateConverter) referencedTexturesModel(model *rp.Model) ([]string, bool) {
 	out := []string{}
 	tinted := false
 
@@ -323,24 +107,7 @@ func (s *stateConverter) referencedTexturesModel(model *blockModel) ([]string, b
 	return out, tinted
 }
 
-func printMapSortedByValueDesc(m map[string]int) {
-	type kv struct {
-		Key   string
-		Value int
-	}
-	var ss []kv
-	for k, v := range m {
-		ss = append(ss, kv{k, v})
-	}
-	sort.Slice(ss, func(i, j int) bool {
-		return ss[i].Value > ss[j].Value
-	})
-	for _, pair := range ss {
-		fmt.Printf("%s: %d\n", pair.Key, pair.Value)
-	}
-}
-
-func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
+func (s *stateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) {
 	out := []string{}
 	tinted := false
 
@@ -385,36 +152,36 @@ func (s *stateConverter) referencedTextures(st *blockState) ([]string, bool) {
 	return out, tinted
 }
 
-func (s *stateConverter) applyRotations(ms *modelSpec, model *blockModel) *blockModel {
+func (s *stateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.Model {
 	// clone model
-	var m blockModel
+	var m rp.Model
 	buf, _ := json.Marshal(model)
 	json.Unmarshal(buf, &m)
 
 	// -Z north, -X west
 
-	for ms.X != 0 && ms.X%90 == 0 {
+	for ms.X != nil && *ms.X != 0 && *ms.X%90 == 0 {
 		for i := range m.Elements {
-			e := &m.Elements[i]
+			e := m.Elements[i]
 			/*
 				e.From[1], e.From[2] = e.From[2], -e.From[1]
 				e.To[1], e.To[2] = e.To[2], -e.To[1] */
 			e.Faces["north"], e.Faces["down"], e.Faces["south"], e.Faces["up"] =
 				e.Faces["down"], e.Faces["south"], e.Faces["up"], e.Faces["north"]
 		}
-		ms.X -= 90
+		*ms.X -= 90
 	}
 
-	for ms.Y != 0 && ms.Y%90 == 0 {
+	for ms.Y != nil && *ms.Y != 0 && *ms.Y%90 == 0 {
 		for i := range m.Elements {
-			e := &m.Elements[i]
+			e := m.Elements[i]
 			/*
 				e.From[1], e.From[2] = e.From[2], -e.From[1]
 				e.To[1], e.To[2] = e.To[2], -e.To[1] */
 			e.Faces["north"], e.Faces["east"], e.Faces["south"], e.Faces["west"] =
 				e.Faces["west"], e.Faces["north"], e.Faces["east"], e.Faces["south"]
 		}
-		ms.Y -= 90
+		*ms.Y -= 90
 	}
 
 	// fmt.Printf("ROT\n>> %#v\n>> %#v\n", model.Elements[0].Faces, m.Elements[0].Faces)
@@ -422,7 +189,7 @@ func (s *stateConverter) applyRotations(ms *modelSpec, model *blockModel) *block
 	return &m
 }
 
-func (s *stateConverter) resolveInheritance(model *blockModel) {
+func (s *stateConverter) resolveInheritance(model *rp.Model) {
 	parentName := model.Parent
 	for parentName != "" {
 		parent := s.models[removeDefaultPrefix(parentName)]
@@ -446,7 +213,7 @@ func (s *stateConverter) resolveInheritance(model *blockModel) {
 	}
 }
 
-func (m *blockModel) getCubeFaces(faces [6]blockModelFace) ([]string, bool) {
+func getCubeFaces(m *rp.Model, faces [6]rp.BlockModelFace) ([]string, bool) {
 	ret := []string{}
 	tintCount := 0
 	for _, face := range faces {
@@ -471,7 +238,7 @@ func (m *blockModel) getCubeFaces(faces [6]blockModelFace) ([]string, bool) {
 	return ret, tintCount == 6
 }
 
-func (m *blockModel) renderCube() *modelEntry {
+func renderCube(m *rp.Model) *modelEntry {
 	if len(m.Elements) != 1 {
 		return nil
 	}
@@ -482,13 +249,13 @@ func (m *blockModel) renderCube() *modelEntry {
 	if el.Shade != nil || el.Rotation.Angle != 0 {
 		return nil
 	}
-	texs, tint := m.getCubeFaces([...]blockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]})
+	texs, tint := getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]})
 	if texs == nil {
 		return nil
 	}
 	if !tint { // texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
 		// grab texs again to match face visibility order
-		texs, _ = m.getCubeFaces([...]blockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
+		texs, _ = getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
 		m := &modelEntry{
 			Layer: layerVoxel,
 		}
@@ -529,20 +296,24 @@ func (m *blockModel) renderCube() *modelEntry {
 	}
 }
 
-func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry {
+func (s *stateConverter) renderModelSpec(name string, ms *rp.ModelSpec) modelEntry {
 	modelName := removeDefaultPrefix(ms.Model)
 	// TODO: check for modelspec X/Y rotations etc
 	model := s.models[modelName]
+	if model == nil {
+		fmt.Println(lo.Keys(s.models))
+		panic(fmt.Sprintf("unable to find model for %s", modelName))
+	}
 	s.resolveInheritance(model)
 
 	rotated := false
 
-	if ms.X != 0 || ms.Y != 0 {
+	if (ms.X != nil && *ms.X != 0) || (ms.Y != nil && *ms.Y != 0) {
 		model = s.applyRotations(ms, model)
 		rotated = true
 	}
 
-	cubeSpec := model.renderCube()
+	cubeSpec := renderCube(model)
 	if cubeSpec != nil {
 		if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
 			cubeSpec.Layer = layerVoxel
@@ -618,8 +389,8 @@ func (s *stateConverter) renderModelSpec(name string, ms *modelSpec) modelEntry 
 	return modelEntry{Layer: -1}
 }
 
-func (s *stateConverter) render(name string, st *blockState) blockEntry {
-	slist := st.buildStateList()
+func (s *stateConverter) render(name string, st *rp.BlockState) blockEntry {
+	slist := buildStateList(st)
 	smap := buildStateMap(slist)
 	if st.Variants[""] != nil {
 		model := s.renderModelSpec(name, &st.Variants[""][0])
@@ -676,7 +447,7 @@ func generate(outDir string) {
 	}
 	if _, err := os.Stat(jarPath); err != nil {
 		fmt.Println("downloading minecraft client jar")
-		err := downloadMinecraftJar(jarPath)
+		err := rp.DownloadMinecraftJar(jarPath, *clientJarVersion)
 		if err != nil {
 			fmt.Println("unable to downlaod minecraft jar:", err)
 		}
@@ -686,101 +457,16 @@ func generate(outDir string) {
 		fmt.Println("unable to open jar", jarPath)
 	}
 
-	// Load block state to model mapping and textures from jar
-	blockStates := map[string]*blockState{}
-	stateNames := []string{}
-	models := map[string]*blockModel{}
-	items := map[string]*mcItem{}
-	textures := map[string]image.Image{}
-	translations := map[string]any{}
-	stringCounts := map[string]int{}
-
-	for _, f := range jar.File {
-		if strings.HasSuffix(f.Name, ".png") && strings.HasPrefix(f.Name, "assets/minecraft/textures/") {
-			rc, err := f.Open()
-			if err != nil {
-				log.Fatal(err)
-			}
-			name := f.Name[len("assets/minecraft/textures/") : len(f.Name)-4]
-			tex, err := png.Decode(rc)
-			if err != nil {
-				log.Fatal(err)
-			}
-			textures[name] = tex
-			continue
-		}
-		isClass := strings.HasSuffix(f.Name, ".class")
-		if !strings.HasSuffix(f.Name, ".json") && !isClass {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			log.Fatal(err)
-		}
-		data, err := ioutil.ReadAll(rc)
-		if err != nil {
-			log.Fatal(err)
-		}
-		rc.Close()
-		if isClass {
-			walkClassForCounts(data, stringCounts)
-			continue
-		}
-		name := f.Name[:len(f.Name)-len(".json")]
-		fmt.Println("hum", name)
-		if strings.HasPrefix(f.Name, "assets/minecraft/lang/") {
-			if strings.HasSuffix(f.Name, "deprecated") {
-				continue
-			}
-			fmt.Println(string(data))
-			err = json.Unmarshal(data, &translations)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		if strings.HasPrefix(f.Name, "assets/minecraft/items/") {
-			name = strings.Replace(name, "assets/minecraft/items/", "", 1)
-			it := &mcItem{}
-			err = json.Unmarshal(data, &it)
-			if err != nil {
-				log.Fatal(err)
-			}
-			items[name] = it
-		}
-		if strings.HasPrefix(f.Name, "assets/minecraft/models/block") {
-			name = strings.Replace(name, "assets/minecraft/models/", "", 1)
-			models[name] = &blockModel{}
-			err = json.Unmarshal(data, models[name])
-			if err != nil {
-				log.Fatal(err)
-			}
-			if *genDebug == "all" || *genDebug == name {
-				fmt.Printf("BLOCKMODEL! %s\n%s\n", name, string(data)) //, models[name])
-			}
-		}
-		if strings.HasPrefix(f.Name, "assets/minecraft/blockstates") {
-			name = strings.Replace(name, "assets/minecraft/blockstates/", "", 1)
-			blockStates[name] = &blockState{}
-			stateNames = append(stateNames, name)
-			err = unmarshalBlockState(data, blockStates[name])
-			if err != nil {
-				log.Fatalf("unable to parse %s: %v", f.Name, err)
-			}
-			if *genDebug == "all" || *genDebug == name {
-				fmt.Printf("BLOCKSTATES! %s, %s => %v\n", name, string(data), blockStates[name])
-			}
-		}
-	}
-
-	if false {
-		printMapSortedByValueDesc(stringCounts)
+	pack, err := rp.JarFromZip(jar)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Classify textures as opaque, transparent (cutout), translucent
 	// This is used to infer solidity-- a cube with all opaque sides
 	// is a definite occluder.
 	textureClasses := map[string]textureType{}
-	for name, tex := range textures {
+	for name, tex := range pack.Textures {
 		ty := texOpaque
 		rect := tex.Bounds()
 		for y := rect.Min.Y; y < rect.Max.Y; y++ {
@@ -807,11 +493,12 @@ func generate(outDir string) {
 
 	converter := stateConverter{
 		columnTops: map[string]string{},
-		models:     models,
+		models: lo.MapEntries(pack.Models, func(key string, m *rp.Model) (string, *rp.Model) {
+			return removeDefaultPrefix(key), m
+		}),
 	}
 
-	for _, name := range stateNames {
-		st := blockStates[name]
+	for name, st := range pack.BlockStates {
 		entry := converter.render(name, st)
 		if len(entry.Templates) > 0 {
 			*blockEntries = append(*blockEntries, entry)
@@ -822,9 +509,9 @@ func generate(outDir string) {
 
 	// Generate texture atlases and finalize templates
 	nameToOldID := map[string]int{"air": 0}
-	for id, ent := range blockstateMap {
-		if nameToOldID[ent.name] == 0 {
-			nameToOldID[ent.name] = id
+	for id, ent := range rp.BlockstateMap {
+		if nameToOldID[ent.Name] == 0 {
+			nameToOldID[ent.Name] = id
 		}
 	}
 
@@ -865,7 +552,7 @@ func generate(outDir string) {
 		} else if nameToOldID[b] > 0 {
 			return false
 		}
-		diff := (stringCounts[a] + stringCounts["minecraft:"+a]) - (stringCounts[b] + stringCounts["minecraft:"+b])
+		diff := (pack.StringCounts[a] + pack.StringCounts["minecraft:"+a]) - (pack.StringCounts[b] + pack.StringCounts["minecraft:"+b])
 		if diff != 0 {
 			return diff > 0
 		}
@@ -882,7 +569,7 @@ func generate(outDir string) {
 				place = len(texIDs[layer])
 				texIDs[layer][name] = place
 			}
-			tex := textures[name]
+			tex := pack.Textures[name]
 			fmt.Printf("PSL %v %v %v %v %#v\n", layer, name, place, ent.DisplayName, ent.Templates)
 			x0 := (place * 16) % 512
 			y0 := (place / 32) * 16
@@ -890,7 +577,7 @@ func generate(outDir string) {
 			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
-		if tr, ok := translations["block.minecraft."+ent.Name].(string); ok {
+		if tr, ok := pack.Translations["block.minecraft."+ent.Name]; ok {
 			ent.DisplayName = tr
 		}
 
@@ -963,7 +650,7 @@ func generate(outDir string) {
 			}
 			if *genDebug == "all" || *genDebug == ent.Name {
 				fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
-					layer, ent.Name, model.Textures, tid, textures[model.Textures[0]].Bounds(),
+					layer, ent.Name, model.Textures, tid, pack.Textures[model.Textures[0]].Bounds(),
 					model.Template[0], model.Template[1])
 			}
 		}

@@ -5,6 +5,8 @@ import (
 	"math/bits"
 	"sort"
 	"strings"
+
+	"github.com/rmmh/cubeographer/go/resourcepack"
 )
 
 func stringSliceSearch(slice []string, needle string) int {
@@ -16,7 +18,7 @@ func stringSliceSearch(slice []string, needle string) int {
 	return -1
 }
 
-func (st *blockState) buildStateList() [][]string {
+func buildStateList(st *resourcepack.BlockState) [][]string {
 	attrs := map[string][]string{}
 
 	if st.Variants != nil {
@@ -35,13 +37,26 @@ func (st *blockState) buildStateList() [][]string {
 
 	for _, part := range st.Multipart {
 		if part.When != nil {
-			for _, conj := range part.When {
+			for _, conj := range part.When.Clauses {
 				for attr, value := range conj {
-					if value == "side|up" {
-						value = "side" // literally used once
+					var val string
+					switch v := value.(type) {
+					case string:
+						val = v
+					case bool:
+						if v {
+							val = "true"
+						} else {
+							val = "false"
+						}
+					default:
+						panic("unhandled when")
 					}
-					if stringSliceSearch(attrs[attr], value) == -1 {
-						attrs[attr] = append(attrs[attr], value)
+					if val == "side|up" {
+						val = "side" // literally used once
+					}
+					if stringSliceSearch(attrs[attr], val) == -1 {
+						attrs[attr] = append(attrs[attr], val)
 					}
 				}
 			}

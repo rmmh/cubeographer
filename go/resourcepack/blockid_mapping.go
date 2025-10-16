@@ -1,9 +1,9 @@
-package main
+package resourcepack
 
-// blockstateMap translates from pre-1.13 blockid<<4|blockstate to names and properties
+// BlockstateMap translates from pre-1.13 blockid<<4|blockstate to names and properties
 // generated mostly with: grep BlockStateData.register \
-// client/net/minecraft/util/datafix/fixes/BlockStateData.java | sed 's/.*register.//;s/, /: /;s/, ".*//;s/"{Name:.minecraft:\(\w*\).\(,Properties:{\(.*\)}\)\?}"/{"\1","\3"},/;s/'\''//g;s/:\(\S\)/=\1/g'
-var blockstateMap = [4096](struct{ name, properties string }){
+// client/net/minecraft/util/datafix/fixes/BlockStateData.java | sed 's/.*register.//;s/, /: /;s/, ".*//;s/"{Name:.minecraft:\(\w*\).\(,Properties:{\(.*\)}\)\?}"/{"\1","\3"},/;s/'\”//g;s/:\(\S\)/=\1/g'
+var BlockstateMap = [4096](struct{ Name, Properties string }){
 	0:    {"air", ""},
 	16:   {"stone", ""},
 	17:   {"granite", ""},
