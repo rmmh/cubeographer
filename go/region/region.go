@@ -255,6 +255,7 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			// for pasting into https://www.brandonfowler.me/nbtreader/
 			// fmt.Println(base64.StdEncoding.EncodeToString(chunkDecompressedBytes))
 		}
+		r.bm.migrate(dataVersion, palettes)
 		nblocks := [][]uint16{}
 		nstates := [][]render.Stateval{}
 		if len(blocks) > 0 {
