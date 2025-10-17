@@ -99,6 +99,10 @@ func (bm *BlockMapper) migrate(vfrom int, palettes [][]paletteEntry) {
 		m["minecraft:soul_fire_wall_torch"] = "minecraft:soul_wall_torch"
 		m["minecraft:soul_fire_lantern"] = "minecraft:soul_lantern"
 	}
+	if vfrom < 2679 && vto >= 2679 {
+		// Technically this should be done based on the contents.
+		m["minecraft:cauldron"] = "minecraft:water_cauldron"
+	}
 	if vfrom < 2680 && vto >= 2680 {
 		m["minecraft:grass_path"] = "minecraft:dirt_path"
 	}
