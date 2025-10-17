@@ -172,14 +172,15 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		dataVersion := 0
 		blocks := [][]byte{}
 		blockData := [][]byte{}
-		blockStates := make([][]byte, 24) // -64 to 320
-		palettes := make([][]paletteEntry, 24)
+		blockStates := make([][]byte, 25) // -64 to 320
+		palettes := make([][]paletteEntry, 25)
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []int8{}
 		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
+		chunkStatus := ""
 
 		err = NbtWalk(chunkDecompressedBytes, func(path []string, idxes []int, ty NbtType, value []byte) {
 			if len(path) == 0 {
@@ -196,6 +197,8 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			last := path[len(path)-1]
 			if last == "DataVersion" {
 				dataVersion = int(binary.BigEndian.Uint32(value))
+			} else if last == "Status" {
+				chunkStatus = string(value)
 			} else if path[0] == "sections" || len(path) > 1 && path[1] == "Sections" {
 				penult := path[len(path)-2]
 				if len(idxes) == 2 && len(path) > 4 && (path[3] == "Palette" || path[3] == "palette") {
@@ -238,14 +241,22 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			log.Printf("chunk misplaced (corrupt region file?)-- expected %d,%d got %d,%d\n", xPos, zPos, chunkXPos, chunkZPos)
 			continue
 		}
+		if chunkStatus != "" && chunkStatus != "minecraft:full" {
+			continue // skip proto-chunks
+		}
 		for len(ys) > 1 && ys[0] < 0 {
 			// TODO: actually render negative Y
 			ys = ys[1:]
 			palettes = palettes[1:]
 			blockStates = blockStates[1:]
 		}
-		for len(blockStates) > 0 && len(blockStates[len(blockStates)-1]) == 0 {
-			blockStates = blockStates[:len(blockStates)-1]
+		// omit the all-air sections on top
+		for i := len(blockStates) - 1; i >= 0; i-- {
+			if len(blockStates[i]) == 0 && (len(palettes[i]) == 0 || len(palettes[i]) == 1 && palettes[i][0].name == "minecraft:air") {
+				blockStates = blockStates[:i]
+			} else {
+				break
+			}
 		}
 		if !sort.SliceIsSorted(ys, func(i, j int) bool { return ys[i] < ys[j] }) {
 			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
@@ -291,9 +302,24 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 					palStates = append(palStates, r.bm.nidToSmap[nid].GetList(palettes[bi][i].props))
 				}
 				if len(bs) == 0 {
-					// empty segment
-					nblocks = append(nblocks, make([]uint16, 16*16*16))
-					nstates = append(nstates, make([]render.Stateval, 16*16*16))
+					// empty segment, fill as appropriate
+					vals := make([]uint16, 16*16*16)
+					states := make([]render.Stateval, 16*16*16)
+					if len(palettes[bi]) > 0 && palettes[bi][0].name != "minecraft:air" {
+						// only have to fill if it's not air (usually is water)
+						p := palettes[bi][0]
+						v := r.bm.NameToNid[p.name]
+						for i := range 4096 {
+							vals[i] = v
+						}
+						if s := r.bm.nidToSmap[v].GetList(p.props); s != 0 {
+							for i := range 4096 {
+								states[i] = s
+							}
+						}
+					}
+					nblocks = append(nblocks, vals)
+					nstates = append(nstates, states)
 					continue
 				}
 				if bi >= len(palettes) {
