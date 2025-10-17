@@ -284,7 +284,6 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 					palName := palettes[bi][i].name
 					nid, ok := r.bm.NameToNid[palName]
 					if !ok {
-						fmt.Println(r.bm.NameToNid)
 						return cdata, fmt.Errorf("unable to map palette name %s to an id", palName)
 					}
 					palNids = append(palNids, nid)

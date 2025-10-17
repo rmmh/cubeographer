@@ -17,7 +17,7 @@ import (
 )
 
 func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
-	blockmeta, err := ioutil.ReadFile(path.Join(outDir, "blockmeta.json"))
+	blockmeta, err := os.ReadFile(path.Join(outDir, "blockmeta.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -36,10 +36,10 @@ func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves
 	if err != nil || *genDebug == "force" {
 		log.Println("regenerating block mapping")
 		generate(dataDir)
-	}
-	bm, err = makeBlockMapper(dataDir)
-	if err != nil {
-		log.Fatal(err)
+		bm, err = makeBlockMapper(dataDir)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	work := make(chan os.FileInfo)

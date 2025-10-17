@@ -290,6 +290,8 @@ type ResourceJar struct {
 	Textures     map[string]image.Image
 	Translations map[string]string
 	StringCounts map[string]int
+	Version      string
+	WorldVersion int
 }
 
 type Block struct{}
@@ -314,7 +316,8 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 	for _, f := range jar.File {
 		m := assetRe.FindStringSubmatch(f.Name)
 		if m == nil {
-			if strings.HasSuffix(f.Name, ".class") {
+			isVersion := f.Name == "version.json"
+			if strings.HasSuffix(f.Name, ".class") || isVersion {
 				rc, err := f.Open()
 				if err != nil {
 					return nil, err
@@ -324,7 +327,20 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 				if err != nil {
 					return nil, err
 				}
-				walkClassForCounts(buf, rj.StringCounts)
+				if isVersion {
+					var decode struct {
+						Name         string `json:"name"`
+						WorldVersion int    `json:"world_version"`
+					}
+					err = json.Unmarshal(buf, &decode)
+					if err != nil {
+						return nil, err
+					}
+					rj.Version = decode.Name
+					rj.WorldVersion = decode.WorldVersion
+				} else {
+					walkClassForCounts(buf, rj.StringCounts)
+				}
 			}
 			continue
 		}

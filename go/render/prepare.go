@@ -56,7 +56,9 @@ type BlockEntry struct {
 }
 
 type BlockEntryMetadata struct {
-	Blocks []BlockEntry `json:"blocks"`
+	Blocks       []BlockEntry `json:"blocks"`
+	Version      string       `json:"version"`
+	WorldVersion int          `json:"world_version"`
 }
 
 func getCubeFaces(m *rp.Model, faces [6]rp.BlockModelFace) ([]string, bool) {
@@ -444,6 +446,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		Blocks: []BlockEntry{
 			{Name: "air"}, {Name: "cave_air"}, {Name: "void_air"},
 		},
+		Version:      pack.Version,
+		WorldVersion: pack.WorldVersion,
 	}
 
 	blockEntries := &meta.Blocks
