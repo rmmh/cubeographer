@@ -9,7 +9,9 @@ import (
 
 // TODO: this should probably go back to AOS instead of this SOA form
 type BlockMapper struct {
-	meta               render.BlockEntryMetadata
+	meta             render.BlockEntryMetadata
+	migrateBlockMaps []migrateVersionedBlockMap
+
 	solid              []uint64
 	blockstateToNid    [4096]uint16
 	blockstateToNstate [4096]render.Stateval
@@ -74,6 +76,8 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 		bm.blockstateToNid[blockstate] = nid
 		bm.blockstateToNstate[blockstate] = bm.nidToSmap[nid].Get(data.Properties)
 	}
+
+	bm.precalculateMigrations()
 
 	return bm, nil
 }
