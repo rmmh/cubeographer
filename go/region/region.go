@@ -3,6 +3,7 @@ package region
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -172,8 +173,8 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		dataVersion := 0
 		blocks := [][]byte{}
 		blockData := [][]byte{}
-		blockStates := make([][]byte, 25) // -64 to 320
-		palettes := make([][]paletteEntry, 25)
+		blockStates := make([][]byte, 4096/16)
+		palettes := make([][]paletteEntry, 4096/16)
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []int8{}
@@ -244,6 +245,11 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		if chunkStatus != "" && chunkStatus != "minecraft:full" {
 			continue // skip proto-chunks
 		}
+		if len(ys) == 25 && len(palettes[24]) > 1 && false {
+			// for pasting into https://www.brandonfowler.me/nbtreader/
+			fmt.Println(base64.StdEncoding.EncodeToString(chunkDecompressedBytes))
+			panic("stop")
+		}
 		for len(ys) > 1 && ys[0] < 0 {
 			// TODO: actually render negative Y
 			ys = ys[1:]
@@ -251,6 +257,7 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			blockStates = blockStates[1:]
 		}
 		// omit the all-air sections on top
+		blockStates = blockStates[:len(ys)]
 		for i := len(blockStates) - 1; i >= 0; i-- {
 			if len(blockStates[i]) == 0 && (len(palettes[i]) == 0 || len(palettes[i]) == 1 && palettes[i][0].name == "minecraft:air") {
 				blockStates = blockStates[:i]
@@ -261,10 +268,6 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		if !sort.SliceIsSorted(ys, func(i, j int) bool { return ys[i] < ys[j] }) {
 			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
 			continue
-		}
-		if len(ys) > 1 && len(palettes[0]) > 1 {
-			// for pasting into https://www.brandonfowler.me/nbtreader/
-			// fmt.Println(base64.StdEncoding.EncodeToString(chunkDecompressedBytes))
 		}
 		r.bm.migrate(dataVersion, palettes)
 		nblocks := [][]uint16{}

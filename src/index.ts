@@ -607,7 +607,9 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
 
             while (!done) {
                 ({ done, value } = await reader.read());
-                decomp.push(value, done);
+                if (value) {
+                    decomp.push(value, done);
+                }
                 yield* chunks;
                 chunks = [];
             }
@@ -732,12 +734,12 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
 }
 
 setTimeout(function() {
-    const choice: string = 'novigrad';
+    const choice: string = 'center';
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
         case 'test': fetchRange(0, 1, 0, 1, 0, 0, 0); break;
-        default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
+        default: case 'center': fetchRange(-8, 8, -8, 8, 90, 0, 0); break;
     }
 
     maybeSetCameraFromLocstring();

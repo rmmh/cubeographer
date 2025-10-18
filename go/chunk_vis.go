@@ -6,7 +6,7 @@ import (
 	"github.com/rmmh/cubeographer/go/region"
 )
 
-type chunkVis [32 * 32 * (256 / 16)]struct {
+type chunkVis [32 * 32 * (25)]struct {
 	dirReachable int   // 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
 	dirVisited   int   // which dirReachable states has this been visited with?
 	connected    int64 // 0-5 +y can reach (+y,-y,+x,...), 6-11 -y can reach (+y, -y ...)

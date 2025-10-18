@@ -193,7 +193,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	blockCounts := make([]int, len(bm.Tmpl))
 
-	for y := 0; y < 256; y++ {
+	for y := 0; y <= 320; y++ {
 		for z := 0; z < 512; z++ {
 			// skipping empty rows is a significant speedup for empty regions
 			minX := 0
