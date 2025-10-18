@@ -316,7 +316,7 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		return *cubeSpec
 	}
 
-	if name == "grass_block" {
+	if name == "grass_block" || name == "grass" {
 		// render grass blocks as two cubes:
 		// * the dirt sides and bottom (no top)
 		// * the tinted grass top and side overlay (no bottom)
@@ -531,10 +531,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				texIDs[layer][name] = place
 			}
 			tex := pack.Textures[name]
-			fmt.Printf("PSL %v %v %v %v %#v\n", layer, name, place, ent.DisplayName, ent.Templates)
 			x0 := (place * 16) % 512
 			y0 := (place / 32) * 16
-			// fmt.Println("splat", name, place, layer, tex.Bounds(), x0, y0)
 			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
