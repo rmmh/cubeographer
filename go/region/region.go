@@ -2,7 +2,6 @@ package region
 
 import (
 	"bytes"
-	"compress/zlib"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+
+	"github.com/klauspost/compress/zlib"
 
 	"github.com/rmmh/cubeographer/go/render"
 )

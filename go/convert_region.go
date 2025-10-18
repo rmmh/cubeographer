@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,8 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/klauspost/compress/gzip"
 
 	"github.com/rmmh/cubeographer/go/region"
 	"github.com/rmmh/cubeographer/go/render"
