@@ -7,7 +7,7 @@ import { mat4, vec3 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
-import { Inflate } from 'fflate';
+import { Gunzip } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
@@ -597,7 +597,7 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
         let { done, value } = await reader.read();
         if (value[0] == 0x1f && value[1] == 0x8b) {
             // GZIP-compressed
-            let decomp = new Inflate();
+            let decomp = new Gunzip();
             let chunks: Uint8Array[] = [];
             decomp.ondata = (chunk: Uint8Array) => chunks.push(chunk);
             decomp.push(value, done);
