@@ -12,6 +12,8 @@ import { Inflate } from 'fflate';
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 
+DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
+
 const context = new renderer.Context(document.querySelector('#canvas'));
 context.setSize(window.innerWidth, window.innerHeight);
 
@@ -105,6 +107,8 @@ function cameraMove() {
     }
     render();
 }
+
+var x: boolean;
 
 // TODO: replace these controls with block-based ones,
 // i.e. rotate around the click target
