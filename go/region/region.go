@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,67 +19,24 @@ import (
 	"github.com/rmmh/cubeographer/go/render"
 )
 
-type RegionOpener func(path string, bm *BlockMapper) (Regioner, error)
-type Regioner interface {
-	ReadChunks(wanted []int) ([1024]ChunkDatum, error)
-	Rx() int
-	Rz() int
+type ReadRegionFunc func(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error)
+
+var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
+
+func ParseRegionPath(path string) (int, int, error) {
+	m := regionMatchRE.FindStringSubmatch(path)
+	if m != nil {
+		rx, _ := strconv.Atoi(m[1])
+		rz, _ := strconv.Atoi(m[2])
+		return rx, rz, nil
+	} else {
+		return 0, 0, errors.New("region file doesn't match expected r.XX.ZZ format")
+	}
 }
 
 type paletteEntry struct {
 	name  string
 	props []string
-}
-
-var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
-
-type Region struct {
-	path       string
-	rx, rz     int
-	bm         *BlockMapper
-	offsets    [1024]uint32
-	timestamps [1024]uint32
-}
-
-func (r *Region) Rx() int { return r.rx }
-func (r *Region) Rz() int { return r.rz }
-
-func MakeRegion(path string, bm *BlockMapper) (Regioner, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var rx, rz int
-	m := regionMatchRE.FindStringSubmatch(path)
-	if m != nil {
-		rx, _ = strconv.Atoi(m[1])
-		rz, _ = strconv.Atoi(m[2])
-	} else {
-		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
-	}
-
-	r := &Region{path: path, bm: bm, rx: rx, rz: rz}
-
-	var buf [4096]uint8
-	_, err = f.Read(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < 1024; i++ {
-		r.offsets[i] = binary.BigEndian.Uint32(buf[i*4:])
-	}
-
-	_, err = f.Read(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < 1024; i++ {
-		r.timestamps[i] = binary.BigEndian.Uint32(buf[i*4:])
-	}
-
-	return r, nil
 }
 
 type ChunkDatum struct {
@@ -87,17 +45,41 @@ type ChunkDatum struct {
 	Lights, LightsSky [][]byte
 }
 
-func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
-	var cdata [1024]ChunkDatum
+func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error) {
+	rx, rz, err := ParseRegionPath(path)
+	if err != nil {
+		return nil, err
+	}
 
-	f, err := os.Open(r.path)
+	cdata := make([]ChunkDatum, 1024)
+
+	f, err := os.Open(path)
 	if err != nil {
 		return cdata, err
 	}
 	defer f.Close()
 
+	var buf [4096]uint8
+	_, err = f.Read(buf[:])
+	if err != nil {
+		return cdata, err
+	}
+	offsets := make([]uint32, 1024)
+	for i := 0; i < 1024; i++ {
+		offsets[i] = binary.BigEndian.Uint32(buf[i*4:])
+	}
+
+	_, err = f.Read(buf[:])
+	if err != nil {
+		return cdata, err
+	}
+	timestamps := make([]uint32, 1024)
+	for i := 0; i < 1024; i++ {
+		timestamps[i] = binary.BigEndian.Uint32(buf[i*4:])
+	}
+
 	maxSectors := 0 // size of largest chunk in region
-	for _, offset := range r.offsets {
+	for _, offset := range offsets {
 		if int(offset&255) > maxSectors {
 			maxSectors = int(offset & 255)
 		}
@@ -108,19 +90,19 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 	seqChunks := make([]uint16, 0, 1024)
 	if len(wanted) > 0 {
 		for _, i := range wanted {
-			if r.offsets[i] != 0 {
+			if offsets[i] != 0 {
 				seqChunks = append(seqChunks, uint16(i))
 			}
 		}
 	} else {
 		for i := 0; i < 1024; i++ {
-			if r.offsets[i] != 0 {
+			if offsets[i] != 0 {
 				seqChunks = append(seqChunks, uint16(i))
 			}
 		}
 	}
 	sort.Slice(seqChunks[:], func(i, j int) bool {
-		return r.offsets[seqChunks[i]] < r.offsets[seqChunks[j]]
+		return offsets[seqChunks[i]] < offsets[seqChunks[j]]
 	})
 
 	// allocating these once per region saves memory
@@ -132,8 +114,8 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 	var zrr zlib.Resetter
 
 	for _, chunkNum := range seqChunks {
-		f.Seek(int64(r.offsets[chunkNum]>>8)*4096, os.SEEK_SET)
-		paddedLen := 4096 * int(r.offsets[chunkNum]&0xff)
+		f.Seek(int64(offsets[chunkNum]>>8)*4096, os.SEEK_SET)
+		paddedLen := 4096 * int(offsets[chunkNum]&0xff)
 		_, err = f.Read(chunkBuf[:paddedLen])
 		if err != nil {
 			return cdata, err
@@ -179,7 +161,7 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 		lights := [][]byte{}
 		lightsSky := [][]byte{}
 		ys := []int8{}
-		xPos, zPos := int(chunkNum&31)|r.rx<<5, int(chunkNum>>5)|r.rz<<5
+		xPos, zPos := int(chunkNum&31)|rx<<5, int(chunkNum>>5)|rz<<5
 		chunkZPos := math.MaxInt64
 		chunkXPos := math.MaxInt64
 		chunkStatus := ""
@@ -270,23 +252,23 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			log.Println("sections out of order somehow? Ys:", ys, "Blockstates:", len(blockStates), blockStates)
 			continue
 		}
-		r.bm.migrate(dataVersion, palettes)
+		bm.migrate(dataVersion, palettes)
 		nblocks := [][]uint16{}
 		nstates := [][]render.Stateval{}
 		if len(blocks) > 0 {
 			if len(blocks) != len(blockData) {
-				panic("blocks/blockData length mismatch in" + r.path)
+				panic("blocks/blockData length mismatch in" + path)
 			}
 			for bi, bs := range blocks {
 				nb := make([]uint16, 4096)
 				ns := make([]render.Stateval, 4096)
 				for i, ob := range bs {
 					o := uint16(ob)<<4 | uint16((blockData[bi][i>>1]>>((i&1)<<2))&0xf)
-					nb[i] = r.bm.blockstateToNid[o]
-					ns[i] = r.bm.blockstateToNstate[o]
+					nb[i] = bm.blockstateToNid[o]
+					ns[i] = bm.blockstateToNstate[o]
 					if nb[i] == 0 {
-						nb[i] = r.bm.blockstateToNid[o&^0xf]
-						ns[i] = r.bm.blockstateToNstate[o&^0xf]
+						nb[i] = bm.blockstateToNid[o&^0xf]
+						ns[i] = bm.blockstateToNstate[o&^0xf]
 					}
 				}
 				nblocks = append(nblocks, nb)
@@ -298,12 +280,12 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 				palStates = palStates[:0]
 				for i := range palettes[bi] {
 					palName := palettes[bi][i].name
-					nid, ok := r.bm.NameToNid[palName]
+					nid, ok := bm.NameToNid[palName]
 					if !ok {
 						return cdata, fmt.Errorf("unable to map palette name %s to an id", palName)
 					}
 					palNids = append(palNids, nid)
-					palStates = append(palStates, r.bm.nidToSmap[nid].GetList(palettes[bi][i].props))
+					palStates = append(palStates, bm.nidToSmap[nid].GetList(palettes[bi][i].props))
 				}
 				if len(bs) == 0 {
 					// empty segment, fill as appropriate
@@ -312,11 +294,11 @@ func (r *Region) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 					if len(palettes[bi]) > 0 && palettes[bi][0].name != "minecraft:air" {
 						// only have to fill if it's not air (usually is water)
 						p := palettes[bi][0]
-						v := r.bm.NameToNid[p.name]
+						v := bm.NameToNid[p.name]
 						for i := range 4096 {
 							vals[i] = v
 						}
-						if s := r.bm.nidToSmap[v].GetList(p.props); s != 0 {
+						if s := bm.nidToSmap[v].GetList(p.props); s != 0 {
 							for i := range 4096 {
 								states[i] = s
 							}

@@ -20,12 +20,12 @@ import (
 )
 
 type regionState struct {
-	openRegion region.RegionOpener
+	openRegion region.ReadRegionFunc
 	dir        string
 	bm         *region.BlockMapper
 	rx, rz     int
-	cdata      [1024]region.ChunkDatum
-	cadj       [16]*[1024]region.ChunkDatum
+	cdata      []region.ChunkDatum
+	cadj       [16][]region.ChunkDatum
 
 	nbs [6]uint16
 	nls [6]byte
@@ -65,17 +65,12 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 				}
 			}
 			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
-			r, err := rs.openRegion(ap, rs.bm)
+			chunks, err := rs.openRegion(ap, rs.bm, wanted)
 			if err != nil {
-				rs.cadj[key] = &[1024]region.ChunkDatum{}
+				rs.cadj[key] = make([]region.ChunkDatum, 1024)
 				return 0, 0, 0xf, 0
 			}
-			chunks, err := r.ReadChunks(wanted)
-			if err != nil {
-				rs.cadj[key] = &[1024]region.ChunkDatum{}
-				return 0, 0, 0xf, 0
-			}
-			rs.cadj[key] = &chunks
+			rs.cadj[key] = chunks
 		}
 		chunk = &rs.cadj[key][((x&511)>>4)+((z&511)>>4)*32]
 	} else {
@@ -127,7 +122,7 @@ type scanRegionConfig struct {
 	dir, outdir string
 	file        string
 	bm          *region.BlockMapper
-	openRegion  region.RegionOpener
+	readRegion  region.ReadRegionFunc
 
 	pruneCaves bool
 }
@@ -137,17 +132,18 @@ func scanRegion(conf *scanRegionConfig) error {
 		return errors.New("file has wrong suffix (not .mca): " + conf.file)
 	}
 
-	openRegion := region.MakeRegion
-	if conf.openRegion != nil {
-		openRegion = conf.openRegion
+	readRegion := region.ReadRegion
+	if conf.readRegion != nil {
+		readRegion = conf.readRegion
 	}
 
 	bm := conf.bm
-	r, err := openRegion(path.Join(conf.dir, conf.file), bm)
+	cdata, err := readRegion(path.Join(conf.dir, conf.file), bm, nil)
 	if err != nil {
 		return err
 	}
-	cdata, err := r.ReadChunks(nil)
+
+	rx, rz, err := region.ParseRegionPath(conf.file)
 	if err != nil {
 		return err
 	}
@@ -155,10 +151,10 @@ func scanRegion(conf *scanRegionConfig) error {
 	rs := regionState{
 		dir:        conf.dir,
 		bm:         bm,
-		rx:         r.Rx(),
-		rz:         r.Rz(),
+		rx:         rx,
+		rz:         rz,
 		cdata:      cdata,
-		openRegion: openRegion,
+		openRegion: readRegion,
 	}
 
 	var chunkVis *chunkVis

@@ -128,7 +128,7 @@ func computeConnected(chunklet []uint16, bm *region.BlockMapper) int64 {
 	return conn
 }
 
-func makeChunkvis(chunks [1024]region.ChunkDatum, bm *region.BlockMapper) *chunkVis {
+func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis {
 	var cv chunkVis
 
 	for cx := 0; cx < 32; cx++ {

@@ -1,39 +1,13 @@
 package region
 
 import (
-	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/rmmh/cubeographer/go/render"
 )
 
-type FakeRegion struct {
-	path   string
-	rx, rz int
-	bm     *BlockMapper
-}
-
-func TestWorldOpener(path string, bm *BlockMapper) (Regioner, error) {
-	m := regionMatchRE.FindStringSubmatch(path)
-	var rx, rz int
-	if m != nil {
-		rx, _ = strconv.Atoi(m[1])
-		rz, _ = strconv.Atoi(m[2])
-	} else {
-		fmt.Println("WARN: region file doesn't match expected r.XX.ZZ format")
-	}
-
-	if rx != 0 || rz != 0 {
-		return nil, errors.New("out of bounds")
-	}
-
-	r := &FakeRegion{path, rx, rz, bm}
-	return r, nil
-}
-
-func (r *FakeRegion) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
-	var cdata [1024]ChunkDatum
+func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error) {
+	cdata := make([]ChunkDatum, 1024)
 
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
@@ -44,7 +18,7 @@ func (r *FakeRegion) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 			nb := make([]uint16, 4096)
 			ns := make([]render.Stateval, 4096)
 			for j := 0; j < 256; j++ {
-				nb[j+256] = r.bm.NameToNid["minecraft:grass_block"]
+				nb[j+256] = bm.NameToNid["minecraft:grass_block"]
 			}
 			nblocks = append(nblocks, nb)
 			nstates = append(nstates, ns)
@@ -71,15 +45,15 @@ func (r *FakeRegion) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 	bx := 32
 	bz := 32
 
-	for b := 1; b < len(r.bm.NidToName); b++ {
-		ns := int(r.bm.nidToSmap[b].Max())
+	for b := 1; b < len(bm.NidToName); b++ {
+		ns := int(bm.nidToSmap[b].Max())
 		nl := ns/6 + 1
 		if bx+nl >= 220 {
 			bx = 32
 			bz += 8
 		}
-		qualBlock := r.bm.NameToNid["minecraft:"+[]string{
-			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[r.bm.Layer[b][0]]]
+		qualBlock := bm.NameToNid["minecraft:"+[]string{
+			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[bm.Layer[b][0]]]
 		for i := 0; i <= ns; i++ {
 			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
 			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
@@ -90,6 +64,3 @@ func (r *FakeRegion) ReadChunks(wanted []int) ([1024]ChunkDatum, error) {
 
 	return cdata, nil
 }
-
-func (r *FakeRegion) Rx() int { return r.rx }
-func (r *FakeRegion) Rz() int { return r.rz }
