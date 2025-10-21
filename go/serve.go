@@ -86,7 +86,7 @@ func (s *server) mapWorker() {
 			outdir:     path.Join(s.dataDir, item.world, "map"),
 			file:       fmt.Sprintf("r.%d.%d.mca", item.rx, item.rz),
 			bm:         s.bm,
-			pruneCaves: s.pruneCaves,
+			prune:      s.pruneCaves,
 		})
 		s.workLock.Lock()
 		for _, wait := range s.working[itemKey] {

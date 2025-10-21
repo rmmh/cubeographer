@@ -24,7 +24,7 @@ func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 	return region.LoadBlockMapper(blockmeta)
 }
 
-func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves bool) {
+func convert(numProcs int, regionDir, outDir string, filters []string, prune bool) {
 	files, err := ioutil.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
@@ -48,11 +48,11 @@ func convert(numProcs int, regionDir, outDir string, filters []string, hideCaves
 		go func() {
 			for file := range work {
 				err = scanRegion(&scanRegionConfig{
-					dir:        regionDir,
-					outdir:     outDir,
-					file:       file.Name(),
-					bm:         bm,
-					pruneCaves: hideCaves,
+					dir:    regionDir,
+					outdir: outDir,
+					file:   file.Name(),
+					bm:     bm,
+					prune:  prune,
 				})
 				if err != nil {
 					log.Fatal(err)
@@ -90,7 +90,7 @@ func main() {
 	gen := flag.String("gen", "", "generate texture atlas & data files from jar")
 	numProcs := flag.Int("threads", runtime.NumCPU(), "number of parallel threads to use")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
-	hideCaves := flag.Bool("nocave", false, "attempt to hide invisible caves")
+	noPrune := flag.Bool("noprune", false, "don't attempt to hide invisible portions")
 	doConvert := flag.Bool("convert", false, "convert region files for web display")
 	flag.Parse()
 
@@ -119,7 +119,7 @@ func main() {
 	}
 	if *doConvert {
 		if len(args) > 1 {
-			convert(*numProcs, args[0], args[1], filters, *hideCaves)
+			convert(*numProcs, args[0], args[1], filters, !*noPrune)
 			return
 		} else {
 			usage()
@@ -127,7 +127,7 @@ func main() {
 		}
 	}
 	if len(args) > 1 {
-		serve(*numProcs, args[0], args[1], *hideCaves)
+		serve(*numProcs, args[0], args[1], !*noPrune)
 	} else {
 		usage()
 	}

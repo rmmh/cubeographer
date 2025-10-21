@@ -6,10 +6,10 @@ import (
 	"github.com/rmmh/cubeographer/go/region"
 )
 
-type chunkVis [32 * 32 * (25)]struct {
-	dirReachable int   // 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
-	dirVisited   int   // which dirReachable states has this been visited with?
-	connected    int64 // 0-5 +y can reach (+y,-y,+x,...), 6-11 -y can reach (+y, -y ...)
+type chunkVis struct {
+	dirReachable []int   // 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
+	dirVisited   []int   // which dirReachable states has this been visited with?
+	connected    []int64 // 0-5 +y can reach (+y,-y,+x,...), 6-11 -y can reach (+y, -y ...)
 }
 
 type tinybitset struct {
@@ -48,9 +48,9 @@ func (t *tinybitset) pop() int {
 	return -1
 }
 
-func computeConnected(chunklet []uint16, bm *region.BlockMapper) int64 {
+func computeConnected(section []uint16, bm *region.BlockMapper) int64 {
 	var passable tinybitset
-	for i, b := range chunklet {
+	for i, b := range section {
 		if !bm.IsSolid(b) {
 			passable.set(i)
 		}
@@ -131,10 +131,22 @@ func computeConnected(chunklet []uint16, bm *region.BlockMapper) int64 {
 func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis {
 	var cv chunkVis
 
+	maxSectionCount := 0
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
-			for ys, chunklet := range chunks[cx+cz*32].Blocks {
-				cv[cx+cz*32+ys*1024].connected = computeConnected(chunklet, bm)
+			if len(chunks[cx+cz*32].Blocks) > maxSectionCount {
+				maxSectionCount = len(chunks[cx+cz*32].Blocks)
+			}
+		}
+	}
+	cv.dirReachable = make([]int, 32*32*16*maxSectionCount)
+	cv.dirVisited = make([]int, 32*32*16*maxSectionCount)
+	cv.connected = make([]int64, 32*32*16*maxSectionCount)
+
+	for cx := 0; cx < 32; cx++ {
+		for cz := 0; cz < 32; cz++ {
+			for ys, section := range chunks[cx+cz*32].Blocks {
+				cv.connected[cx+cz*32+ys*1024] = computeConnected(section, bm)
 			}
 		}
 	}
@@ -146,8 +158,8 @@ func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis 
 			if len(chunk.Blocks) == 0 {
 				continue
 			}
-			mask := 0b111101 // top chunklet reachable every dir but below
-			cv[cx+cz*32+(len(chunk.Blocks)-1)*1024].dirReachable |= mask
+			mask := 0b111101 // top section reachable every dir but below
+			cv.dirReachable[cx+cz*32+(len(chunk.Blocks)-1)*1024] |= mask
 			if cx == 0 {
 				mask &^= 1 << 2
 			} else if cx == 31 {
@@ -162,7 +174,8 @@ func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis 
 				continue
 			}
 			for ys := 0; ys < len(chunk.Blocks); ys++ {
-				cv[cx+cz*32+ys*1024].dirReachable |= mask // side chunklet reachable every dir
+				// TODO: use cadj to make this prune more
+				cv.dirReachable[cx+cz*32+ys*1024] |= mask // side section reachable every dir
 			}
 		}
 	}
@@ -172,13 +185,13 @@ func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis 
 	for cx := 0; cx < 32; cx++ {
 		for cz := 0; cz < 32; cz++ {
 			for ys := len(chunks[cx+cz*32].Blocks) - 1; ys >= 0; ys-- {
-				ccv := &cv[cx+cz*32+ys*1024]
-				ccv.dirReachable |= 1 << 1
+				i := cx + cz*32 + ys*1024
+				cv.dirReachable[i] |= 1 << 1
 				if ys > 3 {
-					if ccv.connected&0b000010_000010_000010_000010_000000_000010 == 0 {
+					if cv.connected[i]&0b000010_000010_000010_000010_000000_000010 == 0 {
 						break
 					}
-				} else if ccv.connected&0b000010 == 0 {
+				} else if cv.connected[i]&0b000010 == 0 {
 					break
 				}
 			}

@@ -124,7 +124,7 @@ type scanRegionConfig struct {
 	bm          *region.BlockMapper
 	readRegion  region.ReadRegionFunc
 
-	pruneCaves bool
+	prune bool
 }
 
 func scanRegion(conf *scanRegionConfig) error {
@@ -158,21 +158,8 @@ func scanRegion(conf *scanRegionConfig) error {
 	}
 
 	var chunkVis *chunkVis
-	var lit []bool
-	const lr = 4
 
-	if conf.pruneCaves {
-		// does each 4*4*4 region have at least one lit block?
-		lit = make([]bool, (256*512*512)/(lr*lr*lr))
-		for y := 0; y < 64; y++ {
-			for z := 0; z < 512; z++ {
-				for x := 0; x < 512; x++ {
-					if rs.getLight(x, y, z) > 0 {
-						lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr] = true
-					}
-				}
-			}
-		}
+	if conf.prune {
 		chunkVis = makeChunkvis(cdata, bm)
 	}
 
@@ -180,8 +167,6 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	buf := make([]byte, 64)
 	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
-
-	const subScale = 16
 
 	// iterate bottom-to-top so that transparency (i.e. ocean water)
 	// has a chance to render the bottom THEN the surface
@@ -206,10 +191,8 @@ func scanRegion(conf *scanRegionConfig) error {
 					x += 15
 				}
 
-				if conf.pruneCaves {
-					chunkletVis := &chunkVis[(x>>4)+(z>>4)*32+(y>>4)*1024]
-					if chunkletVis.dirReachable == 0 && (y < 64) { // || !lit[(y/lr)*512*512/16+z/lr*512/lr+x/lr]) {
-						// cavey-elimination
+				if conf.prune {
+					if chunkVis.dirReachable[(x>>4)+(z>>4)*32+(y>>4)*1024] == 0 {
 						continue
 					}
 				}
