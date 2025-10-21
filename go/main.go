@@ -7,13 +7,14 @@ import (
 	"log"
 	"os"
 	"path"
+	"regexp"
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/rmmh/cubeographer/go/region"
+	"github.com/samber/lo"
 )
 
 func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
@@ -62,16 +63,19 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 		}()
 	}
 
+	filtersRe := lo.Map(filters, func(f string, idx int) *regexp.Regexp {
+		return regexp.MustCompile(f)
+	})
+
 	for _, file := range files {
 		if len(filters) > 0 {
-			good := false
-			for _, filter := range filters {
-				if strings.Contains(file.Name(), filter) {
-					good = true
-					break
+			good := 0
+			for _, filter := range filtersRe {
+				if filter.MatchString(file.Name()) {
+					good++
 				}
 			}
-			if !good {
+			if good != len(filters) {
 				continue
 			}
 		}

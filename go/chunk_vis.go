@@ -135,8 +135,8 @@ func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 	var cv chunkVis
 
 	maxSectionCount := 0
-	for cx := 0; cx < 32; cx++ {
-		for cz := 0; cz < 32; cz++ {
+	for cx := range 32 {
+		for cz := range 32 {
 			if len(chunks[cx+cz*32].Blocks) > maxSectionCount {
 				maxSectionCount = len(chunks[cx+cz*32].Blocks)
 			}
@@ -146,8 +146,8 @@ func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 	cv.dirVisited = make([]int, 32*32*16*maxSectionCount)
 	cv.connected = make([]int64, 32*32*16*maxSectionCount)
 
-	for cx := 0; cx < 32; cx++ {
-		for cz := 0; cz < 32; cz++ {
+	for cx := range 32 {
+		for cz := range 32 {
 			for ys, section := range chunks[cx+cz*32].Blocks {
 				cv.connected[cx+cz*32+ys*1024] = computeConnected(section, bm)
 			}
@@ -155,8 +155,8 @@ func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 	}
 
 	// 0: +y, 1: -y, 2: +x, 3: -x, 4: +z, 5: -z
-	for cx := 0; cx < 32; cx++ {
-		for cz := 0; cz < 32; cz++ {
+	for cx := range 32 {
+		for cz := range 32 {
 			chunk := chunks[cx+cz*32]
 			if len(chunk.Blocks) == 0 {
 				continue
@@ -185,16 +185,12 @@ func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 
 	// this algorithm is vaguely based on https://tomcc.github.io/2014/08/31/visibility-2.html
 	// ...or it would be, but we end up mostly just following straight down, oh well
-	for cx := 0; cx < 32; cx++ {
-		for cz := 0; cz < 32; cz++ {
+	for cx := range 32 {
+		for cz := range 32 {
 			for ys := len(chunks[cx+cz*32].Blocks) - 1; ys >= 0; ys-- {
 				i := cx + cz*32 + ys*1024
 				cv.dirReachable[i] |= 1 << 1
-				if ys > 3 {
-					if cv.connected[i]&0b000010_000010_000010_000010_000000_000010 == 0 {
-						break
-					}
-				} else if cv.connected[i]&0b000010 == 0 {
+				if cv.connected[i]&0b000010_000010_000010_000010_000000_000010 == 0 {
 					break
 				}
 			}
