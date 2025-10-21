@@ -48,7 +48,11 @@ func (t *tinybitset) pop() int {
 	return -1
 }
 
-func computeConnected(section []uint16, bm *region.BlockMapper) int64 {
+type Solider interface {
+	IsSolid(uint16) bool
+}
+
+func computeConnected(section []uint16, bm Solider) int64 {
 	var passable tinybitset
 	for i, b := range section {
 		if !bm.IsSolid(b) {
@@ -63,7 +67,6 @@ func computeConnected(section []uint16, bm *region.BlockMapper) int64 {
 		todo.set(cur)
 		for cur = todo.pop(); cur != -1; cur = todo.pop() {
 			passable.clear(cur)
-			// fmt.Println(cur, faces, todo.has(cur), passable.has(cur))
 			if cur < 256 { // -y, i.e. an exit to the negative y face (down)
 				faces |= 1 << 1
 				if passable.has(cur + 256) {
@@ -128,7 +131,7 @@ func computeConnected(section []uint16, bm *region.BlockMapper) int64 {
 	return conn
 }
 
-func makeChunkvis(chunks []region.ChunkDatum, bm *region.BlockMapper) *chunkVis {
+func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 	var cv chunkVis
 
 	maxSectionCount := 0
