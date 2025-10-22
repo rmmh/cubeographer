@@ -17,7 +17,7 @@ const visWidthBits = 9 - visDimBits
 // too coarse.
 // 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 type blockVis struct {
-	passable  []uint64 // packed bitset representing whether a given block is passable
+	passable  []uint64 // packed bitset representing whether a given block is passable, with 0 meaning passable
 	reachable []uint64 // 0-5 rays through this face can look at (+x,-x,+y,...), 6-11 face can look at (+x, -x ...), ..., 49: in queue
 }
 
@@ -29,14 +29,14 @@ func (cv *blockVis) passableIndex(x, y, z int) int {
 
 }
 
-func (cv *blockVis) setPassable(x, y, z int) {
+func (cv *blockVis) setSolid(x, y, z int) {
 	i := cv.passableIndex(x, y, z)
 	cv.passable[i>>6] |= 1 << (i & 63)
 }
 
 func (cv *blockVis) isPassable(x, y, z int) bool {
 	i := cv.passableIndex(x, y, z)
-	return cv.passable[i>>6]&(1<<(i&63)) != 0
+	return cv.passable[i>>6]&(1<<(i&63)) == 0
 }
 
 func (cv *blockVis) isVisible(x, y, z int) bool {
@@ -169,19 +169,9 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 				for y := 0; y < 16; y += visDim {
 					for z := 0; z < 16; z += visDim {
 						for x := 0; x < 16; x += visDim {
-							if isPassable(section, bm, x, y, z) {
-								cv.setPassable(cx*16+x, ys*16+y, cz*16+z)
+							if !isPassable(section, bm, x, y, z) {
+								cv.setSolid(cx*16+x, ys*16+y, cz*16+z)
 							}
-						}
-					}
-				}
-			}
-			// fill in empty sections as passable
-			for ys := len(chunks[cx+cz*32].Blocks); ys < maxSectionCount; ys++ {
-				for y := 0; y < 16; y += visDim {
-					for z := 0; z < 16; z += visDim {
-						for x := 0; x < 16; x += visDim {
-							cv.setPassable(cx*16+x, ys*16+y, cz*16+z)
 						}
 					}
 				}
