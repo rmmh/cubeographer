@@ -17,46 +17,6 @@ func (t onlyZeroIsSolid) IsSolid(b uint16) bool {
 	return (b == 0) == t
 }
 
-func sign(x int) int {
-	if x < 0 {
-		return -1
-	} else if x > 0 {
-		return 1
-	}
-	return 0
-}
-
-func markTunnel(section []uint16, x1, y1, z1, x2, y2, z2 int) {
-	mark := func(x, y, z int) {
-		section[x+z*16+y*256] = 1
-	}
-
-	cx, cy, cz := x1, y1, z1
-
-	// draw a tunnel with two straight legs towards the center of the cube
-	for i := range 2 {
-		if cx == 0 || cx == 15 || i == 1 {
-			for dx := sign(x2 - cx); cx != x2; cx += dx {
-				mark(cx, cy, cz)
-			}
-		}
-
-		if cy == 0 || cy == 15 || i == 1 {
-			for dy := sign(y2 - cy); cy != y2; cy += dy {
-				mark(cx, cy, cz)
-			}
-		}
-
-		if cz == 0 || cz == 15 || i == 1 {
-			for dz := sign(z2 - cz); cz != z2; cz += dz {
-				mark(cx, cy, cz)
-			}
-		}
-	}
-
-	mark(x2, y2, z2)
-}
-
 func printSection(section []uint16, solider Solider) {
 	brailleBitMap := [2][4]byte{
 		{1 << 0, 1 << 1, 1 << 2, 1 << 6}, // dx = 0
@@ -105,14 +65,14 @@ func printSection(section []uint16, solider Solider) {
 	}
 }
 
-func TestComputeConnected(t *testing.T) {
+func TestIsPassable(t *testing.T) {
 	sideLocs := [][]int{
-		{15, -1, -1}, // +x / east
-		{0, -1, -1},  // -x / west
-		{-1, 15, -1}, // +y / up
-		{-1, 0, -1},  // -y / down
-		{-1, -1, 15}, // +z / south
-		{-1, -1, 0},  // -z / north
+		{3, -1, -1}, // +x / east
+		{0, -1, -1}, // -x / west
+		{-1, 3, -1}, // +y / up
+		{-1, 0, -1}, // -y / down
+		{-1, -1, 3}, // +z / south
+		{-1, -1, 0}, // -z / north
 	}
 
 	getPoint := func(loc []int, o int) (int, int, int) {
@@ -129,55 +89,40 @@ func TestComputeConnected(t *testing.T) {
 		return x, y, z
 	}
 
-	// test each side alone
+	// one clear bit = not passable
 	m := onlyZeroIsSolid(true)
-	for i, loc := range sideLocs {
+	for i := range 64 {
 		section := make([]uint16, 4096)
-		x, y, z := getPoint(loc, 8)
-		section[x+y*256+z*16] = 1
-		conn := computeConnected(section, m)
-		assert.Equal(t, uint64(1<<i)<<(i*6), conn, "unexpected single-face connectivity: %d", i)
+		x := (i & 3)
+		y := ((i >> 2) & 3)
+		z := (i >> 4)
+		faces := 0
+		for _, v := range []int{x, y, z} {
+			if v == 0 || v == 3 {
+				faces++
+			}
+		}
+		if faces > 1 {
+			continue
+		}
+		section[x+y*16+z*256] = 1
+		conn := isPassable(section, m, 0, 0, 0)
+		assert.False(t, conn, "unexpected single-voxel passability: %d %d %d", x, y, z)
 	}
 
-	// test a tunnel made between each side
+	// two sides clear = passable
 	for i, loc1 := range sideLocs {
-		for j, loc2 := range sideLocs[:i] {
+		for _, loc2 := range sideLocs[:i] {
 			section := make([]uint16, 4096)
-			x1, y1, z1 := getPoint(loc1, 8)
-			x2, y2, z2 := getPoint(loc2, 8)
-			markTunnel(section, x1, y1, z1, x2, y2, z2)
-			faces := uint64(1<<i | 1<<j)
-			expected := faces<<(i*6) | faces<<(j*6)
-			conn := computeConnected(section, m)
-			if expected != conn {
-				fmt.Println("tunnel from", x1, y1, z1, "to", x2, y2, z2)
-				printSection(section, m)
-			}
-			assert.Equal(t, expected, conn, "unexpected double-face connectivity: %d and %d", i, j)
+			x1, y1, z1 := getPoint(loc1, 2)
+			x2, y2, z2 := getPoint(loc2, 2)
+			section[x1+z1*16+y1*256] = 1
+			section[x2+z2*16+y2*256] = 1
+			assert.True(t, isPassable(section, m, 0, 0, 0), "expected passability... (%d,%d,%d) (%d,%d,%d)",
+				x1, y1, z1, x2, y2, z2)
 		}
 	}
 
-	// test tunnels made between TWO pairs of sides (!!)
-	for a, loc1 := range sideLocs {
-		for b, loc2 := range sideLocs[:a] {
-			for c, loc3 := range sideLocs {
-				for d, loc4 := range sideLocs[:c] {
-					section := make([]uint16, 4096)
-					x1, y1, z1 := getPoint(loc1, 2)
-					x2, y2, z2 := getPoint(loc2, 2)
-					markTunnel(section, x1, y1, z1, x2, y2, z2)
-					x3, y3, z3 := getPoint(loc3, 10)
-					x4, y4, z4 := getPoint(loc4, 10)
-					markTunnel(section, x3, y3, z3, x4, y4, z4)
-					facesAB := uint64(1<<a | 1<<b)
-					facesCD := uint64(1<<c | 1<<d)
-					expected := facesAB<<(a*6) | facesAB<<(b*6) | facesCD<<(c*6) | facesCD<<(d*6)
-					conn := computeConnected(section, m)
-					assert.Equal(t, expected, conn, "unexpected quad-face connectivity: %d and %d, %d and %d", a, b, c, d)
-				}
-			}
-		}
-	}
 }
 
 func TestSmear6(t *testing.T) {
@@ -223,7 +168,16 @@ func TestMakeChunkvis(t *testing.T) {
 		Y # 0 y * * #
 		Y # # y # 0 #
 		* * * * # * * * #  `,
+		`
+		# Y # # # Y #
+		# Y # 0 # Y #
+		# Y * * * * #
+		# # # * # # #
+		# * * * * * #
+		# * # # # * #
+		# * 0 0 0 * #`,
 	} {
+		fmt.Println()
 		lines := lo.Map(strings.Split(strings.TrimSpace(scene), "\n"), func(line string, idx int) []string {
 			return regexp.MustCompile(`\S+`).FindAllString(line, -1)
 		})
@@ -254,28 +208,19 @@ func TestMakeChunkvis(t *testing.T) {
 					set(3, y, ho)
 				}
 				set(4, y, ho)
-				fmt.Println(ho, y)
 			}
 		}
 
 		cv := makeBlockvis(r, m)
 
-		getReachable := func(cx, cy, cz int) uint64 {
-			return cv.reachable[cx+32*cz+1024*cy]
-		}
-		getConnectivity := func(cx, cy, cz int) uint64 {
-			return cv.connectivity[cx+32*cz+1024*cy]
-		}
-
 		for n, els := range lines {
 			for ho, _ := range els {
 				y := len(lines) - n
-				conn := getConnectivity(3, y, ho)
-				if conn == 0 {
+				if !cv.isPassable(3*16, y*16, ho*16) {
 					fmt.Print("#")
 					//assert.Equal(t, "#", el)
 				} else {
-					if getReachable(3, y, ho) != 0 {
+					if cv.isVisible(3*16, y*16, ho*16) {
 						fmt.Print("+")
 					} else {
 						fmt.Print(" ")
@@ -288,9 +233,11 @@ func TestMakeChunkvis(t *testing.T) {
 		for n, els := range lines {
 			for ho, el := range els {
 				y := len(lines) - n
-				reachable := getReachable(3, y, ho)
+				visible := cv.isVisible(3*16, y*16, ho*16)
 				if el == "0" {
-					assert.Equal(t, uint64(0), reachable, "section should be invisible")
+					assert.False(t, visible, "section should be invisible")
+				} else if el != "#" {
+					assert.True(t, visible, "section should be visible")
 				}
 			}
 		}

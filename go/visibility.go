@@ -2,20 +2,46 @@ package main
 
 import (
 	"fmt"
-	"math/bits"
+	"os"
 
 	"github.com/gammazero/deque"
 	"github.com/rmmh/cubeographer/go/region"
 )
 
+const visDimBits = 2
+const visDim = 1 << visDimBits
+const visWidth = (32 * 16) / visDim
+const visWidthBits = 9 - visDimBits
+
+// blockVis computes reachability for each 4x4x4 part of a region.
+// Originally it computed it for 16x16x16 sections, but this was found to be
+// too coarse.
 // 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 type blockVis struct {
-	connectivity []uint64 // 0-5 player entering +x can reach (+x,-x,+y,...), 6-11 -x can reach (+x, -x ...)
-	reachable    []uint64 // 0-5 +y ray can maybe look at (+x,-x,+y,...), 6-11 -x can maybe look at (+x, -x ...), 37: in queue
+	passable  []uint64 // packed bitset representing whether a given block is passable
+	reachable []uint64 // 0-5 +x ray can maybe look at (+x,-x,+y,...), 6-11 -x can maybe look at (+x, -x ...), ..., 37: in queue
+}
+
+func (cv *blockVis) passableIndex(x, y, z int) int {
+	x >>= visDimBits
+	y >>= visDimBits
+	z >>= visDimBits
+	return x + z*visWidth + y*visWidth*visWidth
+
+}
+
+func (cv *blockVis) setPassable(x, y, z int) {
+	i := cv.passableIndex(x, y, z)
+	cv.passable[i>>6] |= 1 << (i & 63)
+}
+
+func (cv *blockVis) isPassable(x, y, z int) bool {
+	i := cv.passableIndex(x, y, z)
+	return cv.passable[i>>6]&(1<<(i&63)) != 0
 }
 
 func (cv *blockVis) isVisible(x, y, z int) bool {
-	return cv.reachable[(x>>4)+(z>>4)*32+(y>>4)*1024] != 0
+	return cv.reachable[(x>>visDimBits)+(z>>visDimBits)*visWidth+(y>>visDimBits)*(visWidth*visWidth)] != 0
 }
 
 const allDirsMultipler = 0b1_000001_000001_000001_000001_000001
@@ -35,152 +61,121 @@ func fold36to6(x uint64) uint64 {
 	return x & 0b111111
 }
 
-type tinybitset struct {
-	nonzeros uint64
-	vals     [4096 / 64]uint64
-}
-
-func (t *tinybitset) set(x int) {
-	t.vals[x>>6] |= 1 << (x & 63)
-	t.nonzeros |= 1 << ((x >> 6) & 63)
-}
-
-func (t *tinybitset) clear(x int) {
-	t.vals[x>>6] &^= 1 << (x & 63)
-	if t.vals[x>>6] == 0 {
-		t.nonzeros &^= 1 << ((x >> 6) & 63)
-	}
-}
-
-func (t *tinybitset) has(x int) bool {
-	return t.vals[x>>6]&(1<<(x&63)) != 0
-}
-
-func (t *tinybitset) pop() int {
-	if t.nonzeros != 0 {
-		nzvo := (bits.Len64(t.nonzeros) - 1)
-		o := nzvo
-		v := t.vals[o]
-		off := bits.Len64(v) - 1
-		t.vals[o] ^= 1 << off
-		if t.vals[o] == 0 {
-			t.nonzeros &^= (1 << nzvo)
-		}
-		return o*64 + off
-	}
-	return -1
-}
-
 type Solider interface {
 	IsSolid(uint16) bool
 }
 
-func computeConnected(section []uint16, bm Solider) uint64 {
-	var passable tinybitset
-	for i, b := range section {
-		if !bm.IsSolid(b) {
-			passable.set(i)
-		}
-	}
-	var conn uint64
-	for cur := passable.pop(); cur != -1; cur = passable.pop() {
-		// layout: x+z*16+y*256
-		faces := 0
-		var todo tinybitset
-		todo.set(cur)
-		for cur = todo.pop(); cur != -1; cur = todo.pop() {
-			passable.clear(cur)
-			if (cur & 0xF) == 0 { // -x, i.e. an exit to the negative x face (west)
-				faces |= 1 << 1
-				if passable.has(cur + 1) {
-					todo.set(cur + 1)
-				}
-			} else if (cur & 0xF) >= 15 { // +x
-				faces |= 1 << 0
-				if passable.has(cur - 1) {
-					todo.set(cur - 1)
-				}
-			} else {
-				if passable.has(cur - 1) {
-					todo.set(cur - 1)
-				}
-				if passable.has(cur + 1) {
-					todo.set(cur + 1)
-				}
-			}
-			if (cur & 0xFF) < 16 { // -z
-				faces |= 1 << 5
-				if passable.has(cur + 16) {
-					todo.set(cur + 16)
-				}
-			} else if (cur & 0xFF) >= 15*16 { // +z
-				faces |= 1 << 4
-				if passable.has(cur - 16) {
-					todo.set(cur - 16)
-				}
-			} else {
-				if passable.has(cur - 16) {
-					todo.set(cur - 16)
-				}
-				if passable.has(cur + 16) {
-					todo.set(cur + 16)
-				}
-			}
-			if cur < 256 { // -y, i.e. an exit to the negative y face (down)
-				faces |= 1 << 3
-				if passable.has(cur + 256) {
-					todo.set(cur + 256)
-				}
-			} else if cur >= 15*256 { // +y
-				faces |= 1 << 2
-				if passable.has(cur - 256) {
-					todo.set(cur - 256)
-				}
-			} else {
-				if passable.has(cur - 256) {
-					todo.set(cur - 256)
-				}
-				if passable.has(cur + 256) {
-					todo.set(cur + 256)
-				}
-			}
-		}
-		for i := 0; i < 6; i++ {
-			if faces&(1<<i) != 0 {
-				conn |= uint64(faces) << (6 * i)
+func isPassable(section []uint16, bm Solider, qx, qy, qz int) bool {
+	// if two faces of this 4x4x4 section have non-solid pieces, return true
+	faces := 0
+	// test +y/-y first
+yneg:
+	for z := range visDim {
+		for x := range visDim {
+			if !bm.IsSolid(section[qx+x+(qz+z)*16+qy*256]) {
+				faces++
+				break yneg
 			}
 		}
 	}
-	return conn
+ypos:
+	for z := range visDim {
+		for x := range visDim {
+			if !bm.IsSolid(section[qx+x+(qz+z)*16+(qy+visDim-1)*256]) {
+				faces++
+				break ypos
+			}
+		}
+	}
+	if faces >= 2 {
+		return true
+	}
+xneg:
+	for y := range visDim {
+		for z := range visDim {
+			if !bm.IsSolid(section[qx+(qz+z)*16+(qy+y)*256]) {
+				faces++
+				break xneg
+			}
+		}
+	}
+xpos:
+	for y := range visDim {
+		for z := range visDim {
+			if !bm.IsSolid(section[qx+visDim-1+(qz+z)*16+(qy+y)*256]) {
+				faces++
+				break xpos
+			}
+		}
+	}
+	if faces >= 2 {
+		return true
+	}
+zneg:
+	for y := range visDim {
+		for x := range visDim {
+			if !bm.IsSolid(section[qx+x+qz*16+(qy+y)*256]) {
+				faces++
+				break zneg
+			}
+		}
+	}
+zpos:
+	for y := range visDim {
+		for x := range visDim {
+			if !bm.IsSolid(section[qx+x+(qz+visDim-1)*16+(qy+y)*256]) {
+				faces++
+				break zpos
+			}
+		}
+	}
+	return faces >= 2
 }
 
 func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	var cv blockVis
 
-	maxY := 0
+	maxSectionCount := 0
 	for cx := range 32 {
 		for cz := range 32 {
-			if len(chunks[cx+cz*32].Blocks) > maxY {
-				maxY = len(chunks[cx+cz*32].Blocks)
+			if len(chunks[cx+cz*32].Blocks) > maxSectionCount {
+				maxSectionCount = len(chunks[cx+cz*32].Blocks)
 			}
 		}
 	}
-	cv.connectivity = make([]uint64, 32*32*maxY)
-	cv.reachable = make([]uint64, 32*32*maxY)
+	cv.passable = make([]uint64, visWidth*visWidth*maxSectionCount*(16/visDim)/64)
+	cv.reachable = make([]uint64, visWidth*visWidth*maxSectionCount*(16/visDim))
 
-	if maxY == 0 {
+	if maxSectionCount == 0 {
 		// empty region?
 		return &cv
 	}
 
+	maxY := maxSectionCount * 16 / visDim
+
 	for cx := range 32 {
 		for cz := range 32 {
 			for ys, section := range chunks[cx+cz*32].Blocks {
-				cv.connectivity[cx+cz*32+ys*1024] = computeConnected(section, bm)
+				for y := 0; y < 16; y += visDim {
+					for z := 0; z < 16; z += visDim {
+						for x := 0; x < 16; x += visDim {
+							if isPassable(section, bm, x, y, z) {
+								cv.setPassable(cx*16+x, ys*16+y, cz*16+z)
+							}
+
+						}
+					}
+				}
 			}
-			// fill in empty chunks as air (full connectivity)
-			for y := len(chunks[cx+cz*32].Blocks); y < maxY; y++ {
-				cv.connectivity[cx+cz*32+y*1024] = 0b111111 * allDirsMultipler
+			// fill in empty sections as passable
+			for ys := len(chunks[cx+cz*32].Blocks); ys < maxSectionCount; ys++ {
+				for y := 0; y < 16; y += visDim {
+					for z := 0; z < 16; z += visDim {
+						for x := 0; x < 16; x += visDim {
+							cv.setPassable(cx*16+x, ys*16+y, cz*16+z)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -201,45 +196,47 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		return idx
 	}
 	updateReachable := func(x, y, z int, mask uint64) {
-		i := x + z*32 + y*1024
+		if mask == 0 {
+			fmt.Println("updateReachable", x, y, z, mask)
+			panic("wtf")
+		}
+		i := x + z*visWidth + y*visWidth*visWidth
 		old := cv.reachable[i]
+		// fmt.Println("updateReachable", x, y, z, mask, old|mask != old)
 		if old|mask != old {
 			cv.reachable[i] |= mask
-			conns := cv.connectivity[i]
-			if fold36to6((old|mask)&conns) != fold36to6(old&conns) {
-				// we only need to revisit the cell if the potential new links
-				// are different
-				// fmt.Printf("conns=%36b, %36b -> %36b (%b)\n", conns, old&conns, (old|mask)&conns, fold36to6((old|mask)&conns))
+			if cv.isPassable(x*visDim, y*visDim, z*visDim) {
 				queuePush(i)
 			}
 		}
 	}
 
 	// 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
-	for cx := range 32 {
-		for cz := range 32 {
-			chunk := chunks[cx+cz*32]
-			if len(chunk.Blocks) == 0 {
-				continue
-			}
-			mask := uint64(0b111111) // sky rays going down can go in any direction
-			updateReachable(cx, maxY-1, cz, mask<<12)
-			if cx == 0 {
+	for x := range visWidth {
+		for z := range visWidth {
+			mask := uint64(0b111011)
+			maskMult := uint64(1 << 12)
+			updateReachable(x, maxY-1, z, mask*maskMult)
+			if x == 0 {
 				mask &^= 1 << 1
-			} else if cx == 31 {
+				maskMult |= 1 << 6
+			} else if x == visWidth-1 {
 				mask &^= 1 << 0
+				maskMult |= 1 << 0
 			}
-			if cz == 0 {
+			if z == 0 {
 				mask &^= 1 << 5
-			} else if cz == 31 {
+				maskMult |= 1 << (6 * 5)
+			} else if z == visWidth-1 {
 				mask &^= 1 << 4
+				maskMult |= 1 << (6 * 4)
 			}
-			if mask == 0b111111 { // i.e., not on edge
+			if mask == 0b111011 { // i.e., not on edge
 				continue
 			}
-			for ys := 0; ys < len(chunk.Blocks); ys++ {
+			for y := 0; y < maxY; y++ {
 				// TODO: use cadj to make this prune more
-				updateReachable(cx, ys, cz, mask<<12)
+				updateReachable(x, y, z, mask*maskMult)
 			}
 		}
 	}
@@ -287,44 +284,43 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		https://tomcc.github.io/2014/08/31/visibility-2.html
 	*/
 
-	iterLimit := 32 * 32 * maxY * 4
+	iterLimit := visWidth * visWidth * maxY * 4
 	for ; iterLimit > 0 && todo.Len() > 0; iterLimit-- {
 		i := queuePop()
-		x, y, z := i&31, i>>10, (i>>5)&31
+		x, y, z := i&(visWidth-1), i>>(visWidthBits*2), (i>>visWidthBits)&(visWidth-1)
 		r := cv.reachable[i]
 		// fmt.Println(x, y, z, todo.Len(), r)
 		// check if a ray in this cell could maybe reach each of the six exit faces
-		// if so, check if the connectivity rules permit it, then fold together
-		// allowed new reachability based on ORing the reachability for each
-		// input face that can reach that face minus the reverse direction.
+		// if so, mark the reverse direction as not allowed for the new mask for each
+		// for each input face that can reach that face minus the reverse direction.
 
-		if x+1 < 32 && r&(0b1*allDirsMultipler) != 0 {
-			updateReachable(x+1, y, z, (fold36to6(smear6(r&cv.connectivity[i]&(0b1*allDirsMultipler))&r)&^0b10)<<0)
+		if x+1 < visWidth && r&(0b1*allDirsMultipler) != 0 {
+			updateReachable(x+1, y, z, (fold36to6(smear6(r&(0b1*allDirsMultipler))&r)&^0b10)<<0)
 		}
 		if x > 0 && r&(0b10*allDirsMultipler) != 0 {
-			updateReachable(x-1, y, z, (fold36to6(smear6(r&cv.connectivity[i]&(0b10*allDirsMultipler))&r)&^0b1)<<6)
+			updateReachable(x-1, y, z, (fold36to6(smear6(r&(0b10*allDirsMultipler))&r)&^0b1)<<6)
 		}
 		if y+1 < maxY && r&(0b100*allDirsMultipler) != 0 {
-			updateReachable(x, y+1, z, (fold36to6(smear6(r&cv.connectivity[i]&(0b100*allDirsMultipler))&r)&^0b1000)<<12)
+			updateReachable(x, y+1, z, (fold36to6(smear6(r&(0b100*allDirsMultipler))&r)&^0b1000)<<12)
 		}
 		if y > 0 && r&(0b1000*allDirsMultipler) != 0 {
-			updateReachable(x, y-1, z, (fold36to6(smear6(r&cv.connectivity[i]&(0b1000*allDirsMultipler))&r)&^0b100)<<18)
+			updateReachable(x, y-1, z, (fold36to6(smear6(r&(0b1000*allDirsMultipler))&r)&^0b100)<<18)
 		}
-		if z+1 < 32 && r&(0b10000*allDirsMultipler) != 0 {
-			updateReachable(x, y, z+1, (fold36to6(smear6(r&cv.connectivity[i]&(0b10000*allDirsMultipler))&r)&^0b100000)<<24)
+		if z+1 < visWidth && r&(0b10000*allDirsMultipler) != 0 {
+			updateReachable(x, y, z+1, (fold36to6(smear6(r&(0b10000*allDirsMultipler))&r)&^0b100000)<<24)
 		}
 		if z > 0 && r&(0b100000*allDirsMultipler) != 0 {
-			updateReachable(x, y, z-1, (fold36to6(smear6(r&cv.connectivity[i]&(0b100000*allDirsMultipler))&r)&^0b10000)<<30)
+			updateReachable(x, y, z-1, (fold36to6(smear6(r&(0b100000*allDirsMultipler))&r)&^0b10000)<<30)
 		}
 	}
 
 	if false {
 		fmt.Println("SUMMARY:")
 		for y := maxY - 1; y >= 0; y-- {
-			for cz := range 32 {
-				for cx := range 32 {
-					c := cv.connectivity[cx+cz*32+y*1024] != 0
-					r := cv.reachable[cx+cz*32+y*1024] != 0
+			for cz := range visWidth {
+				for cx := range visWidth {
+					c := cv.isPassable(cx*visDim, y*visDim, cz*visDim)
+					r := cv.reachable[cx+cz*visWidth+y*visWidth*visWidth] != 0
 					if c && r {
 						fmt.Print(".")
 					} else if c {
@@ -339,10 +335,15 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 			}
 			fmt.Println()
 		}
+		err := cv.dumpJsonMetadata("vis_metadata.json", maxY)
+		if err != nil {
+			// Handle the error appropriately, maybe log it
+			fmt.Fprintf(os.Stderr, "Error dumping visibility metadata: %v\n", err)
+		}
 	}
 
 	if iterLimit == 0 {
-		panic(fmt.Sprintf("welp %d %d", 32*32*maxY*32, todo.Len()))
+		panic(fmt.Sprintf("welp %d %d", 32*32*maxSectionCount*32, todo.Len()))
 	}
 
 	return &cv

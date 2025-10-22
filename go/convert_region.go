@@ -168,7 +168,7 @@ func scanRegion(conf *scanRegionConfig) error {
 	if conf.prune {
 		chunkVis = makeBlockvis(cdata, bm)
 		if len(chunkVis.reachable) > 0 {
-			fmt.Printf("mid reach=%36b conn=%36b\n", chunkVis.reachable[16+16*32], chunkVis.connectivity[16+16*32])
+			fmt.Printf("mid reach=%36b conn=%36b\n", chunkVis.reachable[16+16*32], chunkVis.passable[16+16*32])
 		}
 	}
 
