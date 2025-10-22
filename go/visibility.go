@@ -9,9 +9,13 @@ import (
 )
 
 // 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
-type chunkVis struct {
+type blockVis struct {
 	connectivity []uint64 // 0-5 player entering +x can reach (+x,-x,+y,...), 6-11 -x can reach (+x, -x ...)
 	reachable    []uint64 // 0-5 +y ray can maybe look at (+x,-x,+y,...), 6-11 -x can maybe look at (+x, -x ...), 37: in queue
+}
+
+func (cv *blockVis) isVisible(x, y, z int) bool {
+	return cv.reachable[(x>>4)+(z>>4)*32+(y>>4)*1024] != 0
 }
 
 const allDirsMultipler = 0b1_000001_000001_000001_000001_000001
@@ -150,8 +154,8 @@ func computeConnected(section []uint16, bm Solider) uint64 {
 	return conn
 }
 
-func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
-	var cv chunkVis
+func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
+	var cv blockVis
 
 	maxY := 0
 	for cx := range 32 {
@@ -181,7 +185,7 @@ func makeChunkvis(chunks []region.ChunkDatum, bm Solider) *chunkVis {
 		}
 	}
 
-	// process chunk discovery using BFS
+	// the queue for BFS
 	var todo deque.Deque[int]
 	queuePush := func(idx int) {
 		if cv.reachable[idx]&(1<<37) != 0 {

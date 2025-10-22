@@ -258,7 +258,7 @@ func TestMakeChunkvis(t *testing.T) {
 			}
 		}
 
-		cv := makeChunkvis(r, m)
+		cv := makeBlockvis(r, m)
 
 		getReachable := func(cx, cy, cz int) uint64 {
 			return cv.reachable[cx+32*cz+1024*cy]
