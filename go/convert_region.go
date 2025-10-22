@@ -138,10 +138,16 @@ func scanRegion(conf *scanRegionConfig) error {
 	}
 
 	bm := conf.bm
-	cdata, err := readRegion(path.Join(conf.dir, conf.file), bm, nil)
+	regionPath := path.Join(conf.dir, conf.file)
+	cdata, err := readRegion(regionPath, bm, nil)
 	if err != nil {
 		return err
 	}
+	st, err := os.Stat(regionPath)
+	if err != nil {
+		return err
+	}
+	regionSize := st.Size()
 
 	rx, rz, err := region.ParseRegionPath(conf.file)
 	if err != nil {
@@ -161,6 +167,9 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	if conf.prune {
 		chunkVis = makeChunkvis(cdata, bm)
+		if len(chunkVis.reachable) > 0 {
+			fmt.Printf("mid reach=%36b conn=%36b\n", chunkVis.reachable[16+16*32], chunkVis.connectivity[16+16*32])
+		}
 	}
 
 	var bufs [4][render.NumRenderLayers]bytes.Buffer
@@ -189,17 +198,18 @@ func scanRegion(conf *scanRegionConfig) error {
 			for x := minX; x < 512; x++ {
 				if cdata[(x>>4)+(z>>4)*32].Blocks == nil {
 					x += 15
-				}
-
-				if conf.prune {
-					if chunkVis.dirReachable[(x>>4)+(z>>4)*32+(y>>4)*1024] == 0 {
-						continue
-					}
+					continue
 				}
 
 				chunk := &cdata[(x>>4)+(z>>4)*32]
-				if len(chunk.Blocks) < y>>4 {
+				if len(chunk.Blocks) <= y>>4 {
 					continue
+				}
+
+				if conf.prune {
+					if chunkVis.reachable[(x>>4)+(z>>4)*32+(y>>4)*1024] == 0 {
+						continue
+					}
 				}
 
 				b, bs, bl, bsl := rs.get(x, y, z)
@@ -317,24 +327,25 @@ func scanRegion(conf *scanRegionConfig) error {
 		out.Close()
 	}
 
-	fmt.Println(conf.dir, conf.file, outLen/1024, "KiB =>", outLenComp/1024, "KiB")
+	fmt.Println(conf.dir, conf.file, regionSize/1024, "KiB region,", outLen/1024, "KiB =>", outLenComp/1024, "KiB gzipped tiles")
 
-	presentBlocks := []uint16{}
-	for bid, count := range blockCounts {
-		if count > 0 {
-			presentBlocks = append(presentBlocks, uint16(bid))
+	if false {
+		presentBlocks := []uint16{}
+		for bid, count := range blockCounts {
+			if count > 0 {
+				presentBlocks = append(presentBlocks, uint16(bid))
+			}
 		}
-	}
-	sort.Slice(presentBlocks, func(i, j int) bool {
-		return blockCounts[presentBlocks[i]] < blockCounts[presentBlocks[j]]
-	})
-
-	for _, bid := range presentBlocks {
-		if blockCounts[bid] < 100 {
-			continue
-		}
-		if render.LayerNumber(bm.Layer[bid][0]) == render.LayerCubeFallback {
-			fmt.Println(bm.NidToName[bid], blockCounts[bid])
+		sort.Slice(presentBlocks, func(i, j int) bool {
+			return blockCounts[presentBlocks[i]] < blockCounts[presentBlocks[j]]
+		})
+		for _, bid := range presentBlocks {
+			if blockCounts[bid] < 100 {
+				continue
+			}
+			if render.LayerNumber(bm.Layer[bid][0]) == render.LayerCubeFallback {
+				fmt.Println(bm.NidToName[bid], blockCounts[bid])
+			}
 		}
 	}
 

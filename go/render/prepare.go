@@ -592,7 +592,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			}
 			model.Template[0] |= uint32(tid) << 24
 			model.Template[1] |= uint32(tid>>8) << 30
-			if ent.Name == "grass_block" && len(model.Template) == 4 {
+			if ent.Name == "minecraft:grass_block" && len(model.Template) == 4 {
 				// render grass blocks as two cubes:
 				// * the dirt sides and bottom (no top)
 				// * & len(model.Template) == 4 {the tinted grass top and side overlay (no bottom)

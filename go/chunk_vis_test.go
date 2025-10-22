@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/rmmh/cubeographer/go/region"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -104,10 +107,10 @@ func printSection(section []uint16, solider Solider) {
 
 func TestComputeConnected(t *testing.T) {
 	sideLocs := [][]int{
-		{-1, 15, -1}, // +y / up
-		{-1, 0, -1},  // -y / down
 		{15, -1, -1}, // +x / east
 		{0, -1, -1},  // -x / west
+		{-1, 15, -1}, // +y / up
+		{-1, 0, -1},  // -y / down
 		{-1, -1, 15}, // +z / south
 		{-1, -1, 0},  // -z / north
 	}
@@ -133,7 +136,7 @@ func TestComputeConnected(t *testing.T) {
 		x, y, z := getPoint(loc, 8)
 		section[x+y*256+z*16] = 1
 		conn := computeConnected(section, m)
-		assert.Equal(t, int64(1<<i)<<(i*6), conn, "unexpected single-face connectivity: %d", i)
+		assert.Equal(t, uint64(1<<i)<<(i*6), conn, "unexpected single-face connectivity: %d", i)
 	}
 
 	// test a tunnel made between each side
@@ -143,7 +146,7 @@ func TestComputeConnected(t *testing.T) {
 			x1, y1, z1 := getPoint(loc1, 8)
 			x2, y2, z2 := getPoint(loc2, 8)
 			markTunnel(section, x1, y1, z1, x2, y2, z2)
-			faces := int64(1<<i | 1<<j)
+			faces := uint64(1<<i | 1<<j)
 			expected := faces<<(i*6) | faces<<(j*6)
 			conn := computeConnected(section, m)
 			if expected != conn {
@@ -166,11 +169,128 @@ func TestComputeConnected(t *testing.T) {
 					x3, y3, z3 := getPoint(loc3, 10)
 					x4, y4, z4 := getPoint(loc4, 10)
 					markTunnel(section, x3, y3, z3, x4, y4, z4)
-					facesAB := int64(1<<a | 1<<b)
-					facesCD := int64(1<<c | 1<<d)
+					facesAB := uint64(1<<a | 1<<b)
+					facesCD := uint64(1<<c | 1<<d)
 					expected := facesAB<<(a*6) | facesAB<<(b*6) | facesCD<<(c*6) | facesCD<<(d*6)
 					conn := computeConnected(section, m)
 					assert.Equal(t, expected, conn, "unexpected quad-face connectivity: %d and %d, %d and %d", a, b, c, d)
+				}
+			}
+		}
+	}
+}
+
+func TestSmear6(t *testing.T) {
+	for i := range 9 {
+		for j := range 6 {
+			x := uint64(1<<j) << (6 * i)
+			assert.Equal(t, uint64((1<<6)-1)<<(6*i), smear6(x))
+		}
+	}
+}
+
+func TestFold36to6(t *testing.T) {
+	for i := range 6 {
+		for j := range 6 {
+			x := uint64(1<<j) << (6 * i)
+			assert.Equal(t, uint64(1<<j), fold36to6(x))
+		}
+	}
+}
+
+func TestMakeChunkvis(t *testing.T) {
+	m := onlyZeroIsSolid(false)
+
+	empty := make([]uint16, 4096)
+	solid := make([]uint16, 4096)
+	for i := range solid {
+		solid[i] = 1
+	}
+
+	for _, scene := range []string{
+		`
+		Y # # # #
+		Y # 0 y #
+		Y # # y #
+		* * * * #`,
+		`
+		Y # # # # # #
+		Y # 0 y * * #
+		Y # # y # 0 #
+		* * * * # # #`,
+		`
+		Y # # # # # #
+		Y # 0 y * * #
+		Y # # y # 0 #
+		* * * * # * * * #  `,
+	} {
+		lines := lo.Map(strings.Split(strings.TrimSpace(scene), "\n"), func(line string, idx int) []string {
+			return regexp.MustCompile(`\S+`).FindAllString(line, -1)
+		})
+		r := make([]region.ChunkDatum, 1024)
+		for cx := range 32 {
+			for cz := range 32 {
+				b := make([][]uint16, len(lines)+2)
+				for i := range b {
+					if i == 0 {
+						b[i] = solid
+					} else {
+						b[i] = empty
+					}
+				}
+				r[cx+cz*32].Blocks = b
+			}
+		}
+
+		set := func(cx, cy, cz int) {
+			r[cx+cz*32].Blocks[cy] = solid
+		}
+
+		for n, els := range lines {
+			for ho, el := range els {
+				y := len(lines) - n
+				set(2, y, ho)
+				if el == "#" {
+					set(3, y, ho)
+				}
+				set(4, y, ho)
+				fmt.Println(ho, y)
+			}
+		}
+
+		cv := makeChunkvis(r, m)
+
+		getReachable := func(cx, cy, cz int) uint64 {
+			return cv.reachable[cx+32*cz+1024*cy]
+		}
+		getConnectivity := func(cx, cy, cz int) uint64 {
+			return cv.connectivity[cx+32*cz+1024*cy]
+		}
+
+		for n, els := range lines {
+			for ho, _ := range els {
+				y := len(lines) - n
+				conn := getConnectivity(3, y, ho)
+				if conn == 0 {
+					fmt.Print("#")
+					//assert.Equal(t, "#", el)
+				} else {
+					if getReachable(3, y, ho) != 0 {
+						fmt.Print("+")
+					} else {
+						fmt.Print(" ")
+					}
+				}
+			}
+			fmt.Println()
+		}
+
+		for n, els := range lines {
+			for ho, el := range els {
+				y := len(lines) - n
+				reachable := getReachable(3, y, ho)
+				if el == "0" {
+					assert.Equal(t, uint64(0), reachable, "section should be invisible")
 				}
 			}
 		}
