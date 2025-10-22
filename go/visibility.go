@@ -2,24 +2,23 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/gammazero/deque"
 	"github.com/rmmh/cubeographer/go/region"
 )
 
-const visDimBits = 2
+const visDimBits = 1
 const visDim = 1 << visDimBits
 const visWidth = (32 * 16) / visDim
 const visWidthBits = 9 - visDimBits
 
-// blockVis computes reachability for each 4x4x4 part of a region.
+// blockVis computes reachability for each 2x2x2 part of a region.
 // Originally it computed it for 16x16x16 sections, but this was found to be
 // too coarse.
 // 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 type blockVis struct {
 	passable  []uint64 // packed bitset representing whether a given block is passable
-	reachable []uint64 // 0-5 +x ray can maybe look at (+x,-x,+y,...), 6-11 -x can maybe look at (+x, -x ...), ..., 37: in queue
+	reachable []uint64 // 0-5 rays through this face can look at (+x,-x,+y,...), 6-11 face can look at (+x, -x ...), ..., 49: in queue
 }
 
 func (cv *blockVis) passableIndex(x, y, z int) int {
@@ -44,8 +43,13 @@ func (cv *blockVis) isVisible(x, y, z int) bool {
 	return cv.reachable[(x>>visDimBits)+(z>>visDimBits)*visWidth+(y>>visDimBits)*(visWidth*visWidth)] != 0
 }
 
-const allDirsMultipler = 0b1_000001_000001_000001_000001_000001
+const (
+	allOctahedralFacesDirs = 0b101010_101001_100110_100101_011010_011001_010110_010101
+	allFacesMultiplier     = 0b000001_000001_000001_000001_000001_000001_000001_000001
+)
 
+// smear6 makes it so if any bit is set in a 6-bit group, all bits in that group are set.
+// This is useful for making masks of groups that have certain bits set.
 func smear6(x uint64) uint64 {
 	x |= (x &^ 0b000001_000001_000001_000001_000001_000001_000001_000001_000001_000001_000001) >> 1
 	x |= x >> 2
@@ -53,19 +57,25 @@ func smear6(x uint64) uint64 {
 	return (x & 0b000001_000001_000001_000001_000001_000001_000001_000001_000001_000001_000001) * 0b111111
 }
 
-func fold36to6(x uint64) uint64 {
-	// (a, b, c, d, e, f) => (a, a|b, c, c|d, e, e|f)
-	x |= (x & 0b111111_000000_111111_000000_111111_000000) >> 6
-	x |= (x & (0b111111 << 12)) >> 12 // (a, a|b, c, c|d, e, e|f) => (a, a|b, c, c|d, e, c|d|e|f)
-	x |= (x & (0b111111 << 24)) >> 24 // (a, a|b, c, c|d, e, c|d|e|f) => (a, a|b, c, c|d, e, a|b|c|d|e|f)
-	return x & 0b111111
-}
-
 type Solider interface {
 	IsSolid(uint16) bool
 }
 
 func isPassable(section []uint16, bm Solider, qx, qy, qz int) bool {
+	if visDim <= 2 {
+		// any clear block in this section means it's passable
+		for y := range visDim {
+			for z := range visDim {
+				for x := range visDim {
+					if !bm.IsSolid(section[qx+x+(qz+z)*16+(qy+y)*256]) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
 	// if two faces of this 4x4x4 section have non-solid pieces, return true
 	faces := 0
 	// test +y/-y first
@@ -162,7 +172,6 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 							if isPassable(section, bm, x, y, z) {
 								cv.setPassable(cx*16+x, ys*16+y, cz*16+z)
 							}
-
 						}
 					}
 				}
@@ -183,26 +192,20 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// the queue for BFS
 	var todo deque.Deque[int]
 	queuePush := func(idx int) {
-		if cv.reachable[idx]&(1<<37) != 0 {
+		if cv.reachable[idx]&(1<<49) != 0 {
 			return
 		}
-		// fmt.Println("queuePush", idx&31, idx>>10, (idx>>5)&31, idx)
-		cv.reachable[idx] |= 1 << 37
+		cv.reachable[idx] |= 1 << 49
 		todo.PushBack(idx)
 	}
 	queuePop := func() int {
 		idx := todo.PopFront()
-		cv.reachable[idx] &^= 1 << 37
+		cv.reachable[idx] &^= 1 << 49
 		return idx
 	}
 	updateReachable := func(x, y, z int, mask uint64) {
-		if mask == 0 {
-			fmt.Println("updateReachable", x, y, z, mask)
-			panic("wtf")
-		}
 		i := x + z*visWidth + y*visWidth*visWidth
 		old := cv.reachable[i]
-		// fmt.Println("updateReachable", x, y, z, mask, old|mask != old)
 		if old|mask != old {
 			cv.reachable[i] |= mask
 			if cv.isPassable(x*visDim, y*visDim, z*visDim) {
@@ -214,69 +217,69 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 	for x := range visWidth {
 		for z := range visWidth {
-			mask := uint64(0b111011)
-			maskMult := uint64(1 << 12)
-			updateReachable(x, maxY-1, z, mask*maskMult)
-			if x == 0 {
-				mask &^= 1 << 1
-				maskMult |= 1 << 6
-			} else if x == visWidth-1 {
-				mask &^= 1 << 0
-				maskMult |= 1 << 0
-			}
-			if z == 0 {
-				mask &^= 1 << 5
-				maskMult |= 1 << (6 * 5)
-			} else if z == visWidth-1 {
-				mask &^= 1 << 4
-				maskMult |= 1 << (6 * 4)
-			}
-			if mask == 0b111011 { // i.e., not on edge
-				continue
-			}
-			for y := 0; y < maxY; y++ {
-				// TODO: use cadj to make this prune more
-				updateReachable(x, y, z, mask*maskMult)
-			}
+			mask := uint64(allOctahedralFacesDirs)
+			// to only allow downward octahedral faces:
+			// mask = smear6(mask&(0b1000*allFacesMultiplier)) & mask
+			updateReachable(x, maxY-1, z, mask)
+		}
+	}
+	// Pushing the sides after the top gives faster BFS convergence.
+	// Doing this inside the loop when the iteration reaches the correct
+	// Y level is a few percent faster still, but makes the code even harder to read.
+	// Also, pushing top down gives faster BFS convergence
+	for y := maxY - 1; y >= 0; y-- {
+		mask := uint64(allOctahedralFacesDirs)
+		for x := range visWidth {
+			updateReachable(x, y, 0, mask)
+			updateReachable(x, y, visWidth-1, mask)
+		}
+		for z := range visWidth {
+			updateReachable(0, y, z, mask)
+			updateReachable(visWidth-1, y, z, mask)
 		}
 	}
 
 	/*
 		Run a BFS to compute visibility throughout the scene.
 
-		Connectivity tracks how a ray could traverse a given region:
-			which faces a ray entering a given face could exit.
-			Connectivity is read-only after this point.
-		Reachable tracks which directions a ray entering from a given
-			face can traverse next.
-			Reachable is the thing we are updating. A nonzero value
-			indicates that a given cell can be entered somehow, and
-			might be visible!
+		Passable tracks whether rays might be able to traverse a
+			given cell, and is precomputed in a single pass.
+		Reachable tracks which octahedral faces might be able to reach
+			a given cell, and is an approximation of visibility. It is
+			what this loop is computing. Rays from each octahedral face
+			can only move in three directions (e.g. +x/-y/+z), which
+			helps slightly in constraining the exploration to be better
+			than naive flood-fill BFS which would find fully surrounded
+			regions.
+			A nonzero reachable value indicates that a given cell can
+			be entered somehow, and thus might be visible!
 
-		Consider this 2D case where a ray is entering A from the left:
+		Consider the 2D case:
 
-		┼───┼───┼───┼
-		│           │
-		│ B──►C──►D │
-		│ ▲         │
-		┼ │ ┼───┼   ┼
-		  │ │   │   │
-		─►A │ X │ E │
-			│   │   │
-		┼───┼───┼───┼
+		   ^
+		  / \
+		 < * >
+		  \ /        +-+
+		   v   +---- |#|
+		       |#### +-+
+		       |####
+		       |####
 
-		Connectivity says that A's left and top faces are connected,
-		B's bottom and right faces are connected, and so on.
+		The light source * is a diamond to indicate the shape of its faces,
+		and the # are shadows. The bottom-right face of the diamond emits
+		rays that can pathfind *only* downward or to the right, producing
+		the shadowed regions after performing a BFS.
 
-		Reachable says that A can be entered from the left, and that
-		this ray can explore up, right, or down.
+		In 3D we use a regular octahedron that similarly has its vertices
+		touching the centers of the cell's cube, and each octahedral face
+		can go only in one direction on each axis. These rays moving in 3
+		directions is a large improvement over a previous hemisphere-based
+		occlusion method where rays can move in 5 directions.
 
-		The tricky part: to vaguely approximate a viewing cone without
-		using too many bits and not say that E is visible from A, when
-		we traverse up from A to B, B gets a reachable flag based on
-		the reachable bits from, with "down" marked off-- so reachable
-		says that B can be entered from the bottom, and that this ray
-		can explore up, or right (but not left or down!).
+		To do this efficiently, we use bit operations so that each cell has
+		reachability from each octahedral face, and when it's visited we can
+		quickly propagate the up to four difference faces that might go in
+		a certain direction.
 
 		This algorithm is inspired by previous work on Minecraft occlusion
 		culling, but adapted to work for multiple viewpoints instead
@@ -289,28 +292,26 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		i := queuePop()
 		x, y, z := i&(visWidth-1), i>>(visWidthBits*2), (i>>visWidthBits)&(visWidth-1)
 		r := cv.reachable[i]
-		// fmt.Println(x, y, z, todo.Len(), r)
-		// check if a ray in this cell could maybe reach each of the six exit faces
-		// if so, mark the reverse direction as not allowed for the new mask for each
-		// for each input face that can reach that face minus the reverse direction.
-
-		if x+1 < visWidth && r&(0b1*allDirsMultipler) != 0 {
-			updateReachable(x+1, y, z, (fold36to6(smear6(r&(0b1*allDirsMultipler))&r)&^0b10)<<0)
+		// check if a ray in this cell could maybe reach each of the six exit faces,
+		// if so, mark that adjacent cell as reachable by each octahedral face that
+		// could reach it.
+		if x+1 < visWidth && r&((1<<0)*allFacesMultiplier) != 0 {
+			updateReachable(x+1, y, z, r&smear6(r&((1<<0)*allFacesMultiplier)))
 		}
-		if x > 0 && r&(0b10*allDirsMultipler) != 0 {
-			updateReachable(x-1, y, z, (fold36to6(smear6(r&(0b10*allDirsMultipler))&r)&^0b1)<<6)
+		if x > 0 && r&((1<<1)*allFacesMultiplier) != 0 {
+			updateReachable(x-1, y, z, r&smear6(r&((1<<1)*allFacesMultiplier)))
 		}
-		if y+1 < maxY && r&(0b100*allDirsMultipler) != 0 {
-			updateReachable(x, y+1, z, (fold36to6(smear6(r&(0b100*allDirsMultipler))&r)&^0b1000)<<12)
+		if y+1 < maxY && r&((1<<2)*allFacesMultiplier) != 0 {
+			updateReachable(x, y+1, z, r&smear6(r&((1<<2)*allFacesMultiplier)))
 		}
-		if y > 0 && r&(0b1000*allDirsMultipler) != 0 {
-			updateReachable(x, y-1, z, (fold36to6(smear6(r&(0b1000*allDirsMultipler))&r)&^0b100)<<18)
+		if y > 0 && r&((1<<3)*allFacesMultiplier) != 0 {
+			updateReachable(x, y-1, z, r&smear6(r&((1<<3)*allFacesMultiplier)))
 		}
-		if z+1 < visWidth && r&(0b10000*allDirsMultipler) != 0 {
-			updateReachable(x, y, z+1, (fold36to6(smear6(r&(0b10000*allDirsMultipler))&r)&^0b100000)<<24)
+		if z+1 < visWidth && r&((1<<4)*allFacesMultiplier) != 0 {
+			updateReachable(x, y, z+1, r&smear6(r&((1<<4)*allFacesMultiplier)))
 		}
-		if z > 0 && r&(0b100000*allDirsMultipler) != 0 {
-			updateReachable(x, y, z-1, (fold36to6(smear6(r&(0b100000*allDirsMultipler))&r)&^0b10000)<<30)
+		if z > 0 && r&((1<<5)*allFacesMultiplier) != 0 {
+			updateReachable(x, y, z-1, r&smear6(r&((1<<5)*allFacesMultiplier)))
 		}
 	}
 
@@ -335,15 +336,10 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 			}
 			fmt.Println()
 		}
-		err := cv.dumpJsonMetadata("vis_metadata.json", maxY)
-		if err != nil {
-			// Handle the error appropriately, maybe log it
-			fmt.Fprintf(os.Stderr, "Error dumping visibility metadata: %v\n", err)
-		}
 	}
 
 	if iterLimit == 0 {
-		panic(fmt.Sprintf("welp %d %d", 32*32*maxSectionCount*32, todo.Len()))
+		panic(fmt.Sprintf("BFS convergence took too long? %d %d", 32*32*maxSectionCount*32, todo.Len()))
 	}
 
 	return &cv

@@ -66,6 +66,23 @@ func printSection(section []uint16, solider Solider) {
 }
 
 func TestIsPassable(t *testing.T) {
+	if visDim <= 2 {
+
+		// any clear bit = passable
+		m := onlyZeroIsSolid(true)
+		for i := range visDim * visDim * visDim {
+			section := make([]uint16, 4096)
+			x := (i & (visDim - 1))
+			y := ((i >> visDimBits) & (visDim - 1))
+			z := (i >> (visDimBits * 2))
+			section[x+y*16+z*256] = 1
+			conn := isPassable(section, m, 0, 0, 0)
+			assert.True(t, conn, "expected single-voxel passability: %d %d %d", x, y, z)
+		}
+
+		return // passability is trivial if the cubes are <=2
+	}
+
 	sideLocs := [][]int{
 		{3, -1, -1}, // +x / east
 		{0, -1, -1}, // -x / west
@@ -91,14 +108,14 @@ func TestIsPassable(t *testing.T) {
 
 	// one clear bit = not passable
 	m := onlyZeroIsSolid(true)
-	for i := range 64 {
+	for i := range visDim * visDim * visDim {
 		section := make([]uint16, 4096)
-		x := (i & 3)
-		y := ((i >> 2) & 3)
-		z := (i >> 4)
+		x := (i & (visDim - 1))
+		y := ((i >> visDimBits) & (visDim - 1))
+		z := (i >> (visDimBits * 2))
 		faces := 0
 		for _, v := range []int{x, y, z} {
-			if v == 0 || v == 3 {
+			if v == 0 || v == visDim-1 {
 				faces++
 			}
 		}
@@ -114,8 +131,8 @@ func TestIsPassable(t *testing.T) {
 	for i, loc1 := range sideLocs {
 		for _, loc2 := range sideLocs[:i] {
 			section := make([]uint16, 4096)
-			x1, y1, z1 := getPoint(loc1, 2)
-			x2, y2, z2 := getPoint(loc2, 2)
+			x1, y1, z1 := getPoint(loc1, 1)
+			x2, y2, z2 := getPoint(loc2, 1)
 			section[x1+z1*16+y1*256] = 1
 			section[x2+z2*16+y2*256] = 1
 			assert.True(t, isPassable(section, m, 0, 0, 0), "expected passability... (%d,%d,%d) (%d,%d,%d)",
@@ -130,15 +147,6 @@ func TestSmear6(t *testing.T) {
 		for j := range 6 {
 			x := uint64(1<<j) << (6 * i)
 			assert.Equal(t, uint64((1<<6)-1)<<(6*i), smear6(x))
-		}
-	}
-}
-
-func TestFold36to6(t *testing.T) {
-	for i := range 6 {
-		for j := range 6 {
-			x := uint64(1<<j) << (6 * i)
-			assert.Equal(t, uint64(1<<j), fold36to6(x))
 		}
 	}
 }
