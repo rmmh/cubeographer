@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/bits"
 	"regexp"
 	"strings"
 	"testing"
@@ -242,4 +243,96 @@ func TestMakeChunkvis(t *testing.T) {
 
 		}
 	}
+}
+
+func TestOctahedronProperties(t *testing.T) {
+	octAxes := []uint{
+		octXPos, octXNeg,
+		octYPos, octYNeg,
+		octZPos, octZNeg,
+	}
+
+	assert.Equal(t, 8, bits.OnesCount(octAll))
+
+	for _, axis := range octAxes {
+		assert.Equal(t, 4, bits.OnesCount(axis), "axis %b should have 4 faces", axis)
+	}
+
+	assert.Equal(t, octAll, octXPos|octXNeg)
+	assert.Zero(t, octXPos&octXNeg)
+
+	assert.Equal(t, octAll, octYPos|octYNeg)
+	assert.Zero(t, octYPos&octYNeg)
+
+	assert.Equal(t, octAll, octZPos|octZNeg)
+	assert.Zero(t, octZPos&octZNeg)
+
+	for i := range 8 {
+		mask := uint(1 << i)
+		count := 0
+		for _, axis := range octAxes {
+			if axis&mask != 0 {
+				count++
+			}
+		}
+		assert.Equal(t, 3, count, "face %b is in %d axis constants, expected 3", i, mask, count)
+	}
+}
+
+func TestTriakisOctahedronProperties(t *testing.T) {
+	triOctAxes := []uint{
+		triOctXPos, triOctXNeg,
+		triOctYPos, triOctYNeg,
+		triOctZPos, triOctZNeg,
+	}
+
+	triOctDiagonals := []uint{
+		triOctXNegYNegZNeg, triOctXNegYNegZPos,
+		triOctXNegYPosZNeg, triOctXNegYPosZPos,
+		triOctXPosYNegZNeg, triOctXPosYNegZPos,
+		triOctXPosYPosZNeg, triOctXPosYPosZPos,
+	}
+
+	assert.Equal(t, 24, bits.OnesCount(triOctAll))
+
+	for i, axis := range triOctAxes {
+		assert.Equal(t, 8, bits.OnesCount(axis), "axis constant %b should have 8 faces", i)
+	}
+
+	for i, diag := range triOctDiagonals {
+		assert.Equal(t, 3, bits.OnesCount(diag), "diag constant %b should have 3 faces", i)
+	}
+
+	for i := range 24 {
+		mask := uint(1 << i)
+		axisCount := 0
+		diagCount := 0
+
+		for _, axis := range triOctAxes {
+			if axis&mask != 0 {
+				axisCount++
+			}
+		}
+
+		for _, diag := range triOctDiagonals {
+			if diag&mask != 0 {
+				diagCount++
+			}
+		}
+
+		assert.Equal(t, 2, axisCount, "face %b is in %d axis constants, expected 2", mask, axisCount)
+		assert.Equal(t, 1, diagCount, "face %b is in %d diagonal constants, expected 1", mask, diagCount)
+	}
+
+	var allAxes uint
+	for _, axis := range triOctAxes {
+		allAxes |= axis
+	}
+	assert.Equal(t, uint(triOctAll), allAxes)
+
+	var allDiags uint
+	for _, diag := range triOctDiagonals {
+		allDiags |= diag
+	}
+	assert.Equal(t, uint(triOctAll), allDiags)
 }
