@@ -243,11 +243,54 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider, mode visibilityMode) *
 		mask = triOctAll
 	}
 
-	for x := range visWidth {
-		for z := range visWidth {
-			updateReachable(x, maxY-1, z, mask)
+	// The top of overworld chunks is mostly air, so to make the BFS faster it makes sense to
+	// do a bulk fill. This is similar to a BFS floodfill scanline optimization, but in 3D.
+	var fastFillTopDown func(x, y, z, width int)
+	fastFillTopDown = func(x, y, z, width int) {
+		if width <= 8 {
+			for oz := range width {
+				for ox := range width {
+					updateReachable(x+ox, y, z+oz, mask)
+				}
+			}
+			return
+		}
+		for ; y >= 0; y-- {
+			for oz := range width {
+				for ox := range width {
+					if !cv.isPassable((x+ox)<<visDimBits, y<<visDimBits, (z+oz)<<visDimBits) {
+						fastFillTopDown(x, y, z, width>>1)
+						fastFillTopDown(x+width>>1, y, z, width>>1)
+						fastFillTopDown(x, y, z+width>>1, width>>1)
+						fastFillTopDown(x+width>>1, y, z+width>>1, width>>1)
+						return
+					}
+				}
+			}
+			// This entire square slice is clear, so we do two operations before moving to the next
+			// slice:
+			// 1) Mark the inside of the square as reachable, but don't queue them up for BFS.
+			//    This avoids many BFS iterations and saves lots of time.
+			for oz := 1; oz < width-1; oz++ {
+				for ox := 1; ox < width-1; ox++ {
+					// Flagging this as already queued prevents pushing it.
+					updateReachable(x+ox, y, z+oz, mask|reachableQueued)
+				}
+			}
+			// 2) Mark the perimeter of the square as reachable and queue it up for BFS.
+			for ox := range width {
+				updateReachable(x+ox, y, z, mask)
+				updateReachable(x+ox, y, z+width-1, mask)
+			}
+			for oz := range width {
+				updateReachable(x, y, z+oz, mask)
+				updateReachable(x+width-1, y, z+oz, mask)
+			}
 		}
 	}
+
+	fastFillTopDown(0, maxY-1, 0, visWidth)
+
 	// Pushing the sides after the top gives faster BFS convergence.
 	// Doing this inside the loop when the iteration reaches the correct
 	// Y level is a few percent faster still, but makes the code even harder to read.
