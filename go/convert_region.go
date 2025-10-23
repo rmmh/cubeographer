@@ -166,7 +166,7 @@ func scanRegion(conf *scanRegionConfig) error {
 	var chunkVis *blockVis
 
 	if conf.prune {
-		chunkVis = makeBlockvis(cdata, bm)
+		chunkVis = makeBlockvis(cdata, bm, visTriakisOctahedral)
 		if len(chunkVis.reachable) > 0 {
 			// fmt.Printf("mid reach=%36b pass=%v\n", chunkVis.reachable[16+16*32], chunkVis.isPassable(16, 0, 16))
 		}

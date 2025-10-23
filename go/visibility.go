@@ -21,9 +21,11 @@ type blockVis struct {
 	// octahedral: 0: -x-y-z, 1: -x-y+z, 2: -x+y-z, ... 31: queued
 }
 
-const (
-	reachableQueued = 1 << 31
+const reachableQueued = 1 << 31
 
+const (
+	// octahedron masks
+	// https://dmccooey.com/polyhedra/Octahedron.html
 	octAll  = 0b11111111
 	octXPos = 0b11110000
 	octXNeg = 0b00001111
@@ -31,6 +33,38 @@ const (
 	octYNeg = 0b00110011
 	octZPos = 0b10101010
 	octZNeg = 0b01010101
+)
+
+const (
+	// triakis octahedron masks
+	// (split each of the 8 faces of an octahedron into 3 triangles)
+	// https://dmccooey.com/polyhedra/TriakisOctahedron.html
+	triOctAll = (1 << 24) - 1
+
+	// each axis has 8 touching faces
+	triOctXPos = 0b101101_101101_000000_000000
+	triOctXNeg = 0b000000_000000_101101_101101
+	triOctYPos = 0b011011_000000_011011_000000
+	triOctYNeg = 0b000000_011011_000000_011011
+	triOctZPos = 0b110000_110000_110000_110000
+	triOctZNeg = 0b000110_000110_000110_000110
+
+	// each cube corner has 3 faces touching
+	triOctXNegYNegZNeg = 0b000000_000000_000000_000111
+	triOctXNegYNegZPos = 0b000000_000000_000000_111000
+	triOctXNegYPosZNeg = 0b000000_000000_000111_000000
+	triOctXNegYPosZPos = 0b000000_000000_111000_000000
+	triOctXPosYNegZNeg = 0b000000_000111_000000_000000
+	triOctXPosYNegZPos = 0b000000_111000_000000_000000
+	triOctXPosYPosZNeg = 0b000111_000000_000000_000000
+	triOctXPosYPosZPos = 0b111000_000000_000000_000000
+)
+
+type visibilityMode int
+
+const (
+	visOctahedral visibilityMode = iota
+	visTriakisOctahedral
 )
 
 func (cv *blockVis) passableIndex(x, y, z int) int {
@@ -140,7 +174,7 @@ zpos:
 	return faces >= 2
 }
 
-func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
+func makeBlockvis(chunks []region.ChunkDatum, bm Solider, mode visibilityMode) *blockVis {
 	var cv blockVis
 
 	maxSectionCount := 0
@@ -202,11 +236,15 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		}
 	}
 
+	mask := uint32(octAll)
+	// to only allow downward octahedral faces:
+	// mask = octFaceZNegMask
+	if mode == visTriakisOctahedral {
+		mask = triOctAll
+	}
+
 	for x := range visWidth {
 		for z := range visWidth {
-			mask := uint32(octAll)
-			// to only allow downward octahedral faces:
-			// mask = octFaceZNegMask
 			updateReachable(x, maxY-1, z, mask)
 		}
 	}
@@ -215,7 +253,6 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// Y level is a few percent faster still, but makes the code even harder to read.
 	// Also, pushing top down gives faster BFS convergence
 	for y := maxY - 1; y >= 0; y-- {
-		mask := uint32(octAll)
 		for x := range visWidth {
 			updateReachable(x, y, 0, mask)
 			updateReachable(x, y, visWidth-1, mask)
@@ -231,9 +268,9 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 
 		Passable tracks whether rays might be able to traverse a
 			given cell, and is precomputed in a single pass.
-		Reachable tracks which octahedral faces might be able to reach
+		Reachable tracks which polyhedra faces might be able to reach
 			a given cell, and is an approximation of visibility. It is
-			what this loop is computing. Rays from each octahedral face
+			what this loop is computing. Rays from each face
 			can only move in three directions (e.g. +x/-y/+z), which
 			helps slightly in constraining the exploration to be better
 			than naive flood-fill BFS which would find fully surrounded
@@ -268,38 +305,122 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		quickly propagate the up to four difference faces that can go in
 		a certain direction.
 
+		As a further refinement, we can trace rays from the faces of a
+		"triakis octahedra", a polyhedra with 24 faces built by dividing each
+		of the faces of an octahedra into a further 3 triangles. This helps
+		restrict each ray's visibility/transmission space even further.
+
 		This algorithm is inspired by previous work on Minecraft occlusion
 		culling, but adapted to work for multiple viewpoints instead
 		of a single camera position:
 		https://tomcc.github.io/2014/08/31/visibility-2.html
 	*/
 
-	iterLimit := visWidth * visWidth * maxY * 4
+	iterLimit := visWidth * visWidth * maxY * 16
 	for ; iterLimit > 0 && todo.Len() > 0; iterLimit-- {
 		i := queuePop()
 		x, y, z := i&(visWidth-1), i>>(visWidthBits*2), (i>>visWidthBits)&(visWidth-1)
 		r := cv.reachable[i]
 		// Check if a ray in this cell could maybe reach each of the six exit faces,
-		// if so, mark that adjacent cell as reachable by each octahedral faces that
-		// could reach it.
-		if x+1 < visWidth && r&octXPos != 0 {
-			updateReachable(x+1, y, z, r&octXPos)
+		// if so, mark that adjacent cell as reachable by each face that could reach it.
+
+		const (
+			dXP = 1 << iota
+			dXN
+			dYP
+			dYN
+			dZP
+			dZN
+		)
+
+		dirs := 0
+		if x+1 < visWidth {
+			dirs |= dXP
 		}
-		if x > 0 && r&octXNeg != 0 {
-			updateReachable(x-1, y, z, r&octXNeg)
+		if x > 0 {
+			dirs |= dXN
 		}
-		if y+1 < maxY && r&octYPos != 0 {
-			updateReachable(x, y+1, z, r&octYPos)
+		if y+1 < maxY {
+			dirs |= dYP
 		}
-		if y > 0 && r&octYNeg != 0 {
-			updateReachable(x, y-1, z, r&octYNeg)
+		if y > 0 {
+			dirs |= dYN
 		}
-		if z+1 < visWidth && r&octZPos != 0 {
-			updateReachable(x, y, z+1, r&octZPos)
+		if z+1 < visWidth {
+			dirs |= dZP
 		}
-		if z > 0 && r&octZNeg != 0 {
-			updateReachable(x, y, z-1, r&octZNeg)
+		if z > 0 {
+			dirs |= dZN
 		}
+
+		switch mode {
+		case visOctahedral:
+			if r&octXPos != 0 && dirs&dXP != 0 {
+				updateReachable(x+1, y, z, r&octXPos)
+			}
+			if r&octXNeg != 0 && dirs&dXN != 0 {
+				updateReachable(x-1, y, z, r&octXNeg)
+			}
+			if r&octYPos != 0 && dirs&dYP != 0 {
+				updateReachable(x, y+1, z, r&octYPos)
+			}
+			if r&octYNeg != 0 && dirs&dYN != 0 {
+				updateReachable(x, y-1, z, r&octYNeg)
+			}
+			if r&octZPos != 0 && dirs&dZP != 0 {
+				updateReachable(x, y, z+1, r&octZPos)
+			}
+			if r&octZNeg != 0 && dirs&dZN != 0 {
+				updateReachable(x, y, z-1, r&octZNeg)
+			}
+		case visTriakisOctahedral:
+			// axes
+			if r&triOctXPos != 0 && dirs&dXP != 0 {
+				updateReachable(x+1, y, z, r&triOctXPos)
+			}
+			if r&triOctXNeg != 0 && dirs&dXN != 0 {
+				updateReachable(x-1, y, z, r&triOctXNeg)
+			}
+			if r&triOctYPos != 0 && dirs&dYP != 0 {
+				updateReachable(x, y+1, z, r&triOctYPos)
+			}
+			if r&triOctYNeg != 0 && dirs&dYN != 0 {
+				updateReachable(x, y-1, z, r&triOctYNeg)
+			}
+			if r&triOctZPos != 0 && dirs&dZP != 0 {
+				updateReachable(x, y, z+1, r&triOctZPos)
+			}
+			if r&triOctZNeg != 0 && dirs&dZN != 0 {
+				updateReachable(x, y, z-1, r&triOctZNeg)
+			}
+
+			// diag
+			if r&triOctXPosYPosZPos != 0 && dirs&(dXP|dYP|dZP) == (dXP|dYP|dZP) {
+				updateReachable(x+1, y+1, z+1, r&triOctXPosYPosZPos)
+			}
+			if r&triOctXPosYPosZNeg != 0 && dirs&(dXP|dYP|dZN) == (dXP|dYP|dZN) {
+				updateReachable(x+1, y+1, z-1, r&triOctXPosYPosZNeg)
+			}
+			if r&triOctXPosYNegZPos != 0 && dirs&(dXP|dYN|dZP) == (dXP|dYN|dZP) {
+				updateReachable(x+1, y-1, z+1, r&triOctXPosYNegZPos)
+			}
+			if r&triOctXPosYNegZNeg != 0 && dirs&(dXP|dYN|dZN) == (dXP|dYN|dZN) {
+				updateReachable(x+1, y-1, z-1, r&triOctXPosYNegZNeg)
+			}
+			if r&triOctXNegYPosZPos != 0 && dirs&(dXN|dYP|dZP) == (dXN|dYP|dZP) {
+				updateReachable(x-1, y+1, z+1, r&triOctXNegYPosZPos)
+			}
+			if r&triOctXNegYPosZNeg != 0 && dirs&(dXN|dYP|dZN) == (dXN|dYP|dZN) {
+				updateReachable(x-1, y+1, z-1, r&triOctXNegYPosZNeg)
+			}
+			if r&triOctXNegYNegZPos != 0 && dirs&(dXN|dYN|dZP) == (dXN|dYN|dZP) {
+				updateReachable(x-1, y-1, z+1, r&triOctXNegYNegZPos)
+			}
+			if r&triOctXNegYNegZNeg != 0 && dirs&(dXN|dYN|dZN) == (dXN|dYN|dZN) {
+				updateReachable(x-1, y-1, z-1, r&triOctXNegYNegZNeg)
+			}
+		}
+
 	}
 
 	if false {

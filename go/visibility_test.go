@@ -209,35 +209,37 @@ func TestMakeChunkvis(t *testing.T) {
 			}
 		}
 
-		cv := makeBlockvis(r, m)
-
-		for n, els := range lines {
-			for ho, _ := range els {
-				y := len(lines) - n
-				if !cv.isPassable(3*16, y*16, ho*16) {
-					fmt.Print("#")
-					//assert.Equal(t, "#", el)
-				} else {
-					if cv.isVisible(3*16, y*16, ho*16) {
-						fmt.Print("+")
+		for _, mode := range []visibilityMode{visOctahedral, visTriakisOctahedral} {
+			cv := makeBlockvis(r, m, mode)
+			for n, els := range lines {
+				for ho, _ := range els {
+					y := len(lines) - n
+					if !cv.isPassable(3*16, y*16, ho*16) {
+						fmt.Print("#")
+						//assert.Equal(t, "#", el)
 					} else {
-						fmt.Print(" ")
+						if cv.isVisible(3*16, y*16, ho*16) {
+							fmt.Print("+")
+						} else {
+							fmt.Print(" ")
+						}
+					}
+				}
+				fmt.Println()
+			}
+
+			for n, els := range lines {
+				for ho, el := range els {
+					y := len(lines) - n
+					visible := cv.isVisible(3*16, y*16, ho*16)
+					if el == "0" {
+						assert.False(t, visible, "section should be invisible")
+					} else if el != "#" {
+						assert.True(t, visible, "section should be visible")
 					}
 				}
 			}
-			fmt.Println()
-		}
 
-		for n, els := range lines {
-			for ho, el := range els {
-				y := len(lines) - n
-				visible := cv.isVisible(3*16, y*16, ho*16)
-				if el == "0" {
-					assert.False(t, visible, "section should be invisible")
-				} else if el != "#" {
-					assert.True(t, visible, "section should be visible")
-				}
-			}
 		}
 	}
 }
