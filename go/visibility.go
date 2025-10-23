@@ -16,20 +16,21 @@ const visWidthBits = 9 - visDimBits
 // Originally it computed it for 16x16x16 sections, but this was found to be
 // too coarse.
 type blockVis struct {
-	passable  []uint64 // packed bitset representing whether a given block is passable, with 0 meaning passable
-	reachable []uint32 // which faces can reach?
+	passable  []uint64 // packed bitset representing whether a given cell is passable, with 0 meaning passable
+	reachable []uint32 // which faces can reach this cell?
 	// octahedral: 0: -x-y-z, 1: -x-y+z, 2: -x+y-z, ... 31: queued
 }
 
 const (
 	reachableQueued = 1 << 31
-	octFaceAllMask  = 0b11111111
-	octFaceXPosMask = 0b11110000
-	octFaceXNegMask = 0b00001111
-	octFaceYPosMask = 0b11001100
-	octFaceYNegMask = 0b00110011
-	octFaceZPosMask = 0b10101010
-	octFaceZNegMask = 0b01010101
+
+	octAll  = 0b11111111
+	octXPos = 0b11110000
+	octXNeg = 0b00001111
+	octYPos = 0b11001100
+	octYNeg = 0b00110011
+	octZPos = 0b10101010
+	octZNeg = 0b01010101
 )
 
 func (cv *blockVis) passableIndex(x, y, z int) int {
@@ -203,7 +204,7 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 
 	for x := range visWidth {
 		for z := range visWidth {
-			mask := uint32(octFaceAllMask)
+			mask := uint32(octAll)
 			// to only allow downward octahedral faces:
 			// mask = octFaceZNegMask
 			updateReachable(x, maxY-1, z, mask)
@@ -214,7 +215,7 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// Y level is a few percent faster still, but makes the code even harder to read.
 	// Also, pushing top down gives faster BFS convergence
 	for y := maxY - 1; y >= 0; y-- {
-		mask := uint32(octFaceAllMask)
+		mask := uint32(octAll)
 		for x := range visWidth {
 			updateReachable(x, y, 0, mask)
 			updateReachable(x, y, visWidth-1, mask)
@@ -281,23 +282,23 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		// Check if a ray in this cell could maybe reach each of the six exit faces,
 		// if so, mark that adjacent cell as reachable by each octahedral faces that
 		// could reach it.
-		if x+1 < visWidth && r&octFaceXPosMask != 0 {
-			updateReachable(x+1, y, z, r&octFaceXPosMask)
+		if x+1 < visWidth && r&octXPos != 0 {
+			updateReachable(x+1, y, z, r&octXPos)
 		}
-		if x > 0 && r&octFaceXNegMask != 0 {
-			updateReachable(x-1, y, z, r&octFaceXNegMask)
+		if x > 0 && r&octXNeg != 0 {
+			updateReachable(x-1, y, z, r&octXNeg)
 		}
-		if y+1 < maxY && r&octFaceYPosMask != 0 {
-			updateReachable(x, y+1, z, r&octFaceYPosMask)
+		if y+1 < maxY && r&octYPos != 0 {
+			updateReachable(x, y+1, z, r&octYPos)
 		}
-		if y > 0 && r&octFaceYNegMask != 0 {
-			updateReachable(x, y-1, z, r&octFaceYNegMask)
+		if y > 0 && r&octYNeg != 0 {
+			updateReachable(x, y-1, z, r&octYNeg)
 		}
-		if z+1 < visWidth && r&octFaceZPosMask != 0 {
-			updateReachable(x, y, z+1, r&octFaceZPosMask)
+		if z+1 < visWidth && r&octZPos != 0 {
+			updateReachable(x, y, z+1, r&octZPos)
 		}
-		if z > 0 && r&octFaceZNegMask != 0 {
-			updateReachable(x, y, z-1, r&octFaceZNegMask)
+		if z > 0 && r&octZNeg != 0 {
+			updateReachable(x, y, z-1, r&octZNeg)
 		}
 	}
 
