@@ -139,16 +139,6 @@ func TestIsPassable(t *testing.T) {
 				x1, y1, z1, x2, y2, z2)
 		}
 	}
-
-}
-
-func TestSmear6(t *testing.T) {
-	for i := range 9 {
-		for j := range 6 {
-			x := uint64(1<<j) << (6 * i)
-			assert.Equal(t, uint64((1<<6)-1)<<(6*i), smear6(x))
-		}
-	}
 }
 
 func TestMakeChunkvis(t *testing.T) {

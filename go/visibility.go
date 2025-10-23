@@ -15,11 +15,22 @@ const visWidthBits = 9 - visDimBits
 // blockVis computes reachability for each 2x2x2 part of a region.
 // Originally it computed it for 16x16x16 sections, but this was found to be
 // too coarse.
-// 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 type blockVis struct {
 	passable  []uint64 // packed bitset representing whether a given block is passable, with 0 meaning passable
-	reachable []uint64 // 0-5 rays through this face can look at (+x,-x,+y,...), 6-11 face can look at (+x, -x ...), ..., 49: in queue
+	reachable []uint32 // which faces can reach?
+	// octahedral: 0: -x-y-z, 1: -x-y+z, 2: -x+y-z, ... 31: queued
 }
+
+const (
+	reachableQueued = 1 << 31
+	octFaceAllMask  = 0b11111111
+	octFaceXPosMask = 0b11110000
+	octFaceXNegMask = 0b00001111
+	octFaceYPosMask = 0b11001100
+	octFaceYNegMask = 0b00110011
+	octFaceZPosMask = 0b10101010
+	octFaceZNegMask = 0b01010101
+)
 
 func (cv *blockVis) passableIndex(x, y, z int) int {
 	x >>= visDimBits
@@ -41,20 +52,6 @@ func (cv *blockVis) isPassable(x, y, z int) bool {
 
 func (cv *blockVis) isVisible(x, y, z int) bool {
 	return cv.reachable[(x>>visDimBits)+(z>>visDimBits)*visWidth+(y>>visDimBits)*(visWidth*visWidth)] != 0
-}
-
-const (
-	allOctahedralFacesDirs = 0b101010_101001_100110_100101_011010_011001_010110_010101
-	allFacesMultiplier     = 0b000001_000001_000001_000001_000001_000001_000001_000001
-)
-
-// smear6 makes it so if any bit is set in a 6-bit group, all bits in that group are set.
-// This is useful for making masks of groups that have certain bits set.
-func smear6(x uint64) uint64 {
-	x |= (x &^ 0b000001_000001_000001_000001_000001_000001_000001_000001_000001_000001_000001) >> 1
-	x |= x >> 2
-	x |= x >> 3
-	return (x & 0b000001_000001_000001_000001_000001_000001_000001_000001_000001_000001_000001) * 0b111111
 }
 
 type Solider interface {
@@ -154,7 +151,7 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		}
 	}
 	cv.passable = make([]uint64, visWidth*visWidth*maxSectionCount*(16/visDim)/64)
-	cv.reachable = make([]uint64, visWidth*visWidth*maxSectionCount*(16/visDim))
+	cv.reachable = make([]uint32, visWidth*visWidth*maxSectionCount*(16/visDim))
 
 	if maxSectionCount == 0 {
 		// empty region?
@@ -182,18 +179,18 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// the queue for BFS
 	var todo deque.Deque[int]
 	queuePush := func(idx int) {
-		if cv.reachable[idx]&(1<<49) != 0 {
+		if cv.reachable[idx]&reachableQueued != 0 {
 			return
 		}
-		cv.reachable[idx] |= 1 << 49
+		cv.reachable[idx] |= reachableQueued
 		todo.PushBack(idx)
 	}
 	queuePop := func() int {
 		idx := todo.PopFront()
-		cv.reachable[idx] &^= 1 << 49
+		cv.reachable[idx] &^= reachableQueued
 		return idx
 	}
-	updateReachable := func(x, y, z int, mask uint64) {
+	updateReachable := func(x, y, z int, mask uint32) {
 		i := x + z*visWidth + y*visWidth*visWidth
 		old := cv.reachable[i]
 		if old|mask != old {
@@ -204,12 +201,11 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		}
 	}
 
-	// 0: +x, 1: -x, 2: +y, 3: -y, 4: +z, 5: -z
 	for x := range visWidth {
 		for z := range visWidth {
-			mask := uint64(allOctahedralFacesDirs)
+			mask := uint32(octFaceAllMask)
 			// to only allow downward octahedral faces:
-			// mask = smear6(mask&(0b1000*allFacesMultiplier)) & mask
+			// mask = octFaceZNegMask
 			updateReachable(x, maxY-1, z, mask)
 		}
 	}
@@ -218,7 +214,7 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 	// Y level is a few percent faster still, but makes the code even harder to read.
 	// Also, pushing top down gives faster BFS convergence
 	for y := maxY - 1; y >= 0; y-- {
-		mask := uint64(allOctahedralFacesDirs)
+		mask := uint32(octFaceAllMask)
 		for x := range visWidth {
 			updateReachable(x, y, 0, mask)
 			updateReachable(x, y, visWidth-1, mask)
@@ -268,7 +264,7 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 
 		To do this efficiently, we use bit operations so that each cell has
 		reachability from each octahedral face, and when it's visited we can
-		quickly propagate the up to four difference faces that might go in
+		quickly propagate the up to four difference faces that can go in
 		a certain direction.
 
 		This algorithm is inspired by previous work on Minecraft occlusion
@@ -282,26 +278,26 @@ func makeBlockvis(chunks []region.ChunkDatum, bm Solider) *blockVis {
 		i := queuePop()
 		x, y, z := i&(visWidth-1), i>>(visWidthBits*2), (i>>visWidthBits)&(visWidth-1)
 		r := cv.reachable[i]
-		// check if a ray in this cell could maybe reach each of the six exit faces,
-		// if so, mark that adjacent cell as reachable by each octahedral face that
+		// Check if a ray in this cell could maybe reach each of the six exit faces,
+		// if so, mark that adjacent cell as reachable by each octahedral faces that
 		// could reach it.
-		if x+1 < visWidth && r&((1<<0)*allFacesMultiplier) != 0 {
-			updateReachable(x+1, y, z, r&smear6(r&((1<<0)*allFacesMultiplier)))
+		if x+1 < visWidth && r&octFaceXPosMask != 0 {
+			updateReachable(x+1, y, z, r&octFaceXPosMask)
 		}
-		if x > 0 && r&((1<<1)*allFacesMultiplier) != 0 {
-			updateReachable(x-1, y, z, r&smear6(r&((1<<1)*allFacesMultiplier)))
+		if x > 0 && r&octFaceXNegMask != 0 {
+			updateReachable(x-1, y, z, r&octFaceXNegMask)
 		}
-		if y+1 < maxY && r&((1<<2)*allFacesMultiplier) != 0 {
-			updateReachable(x, y+1, z, r&smear6(r&((1<<2)*allFacesMultiplier)))
+		if y+1 < maxY && r&octFaceYPosMask != 0 {
+			updateReachable(x, y+1, z, r&octFaceYPosMask)
 		}
-		if y > 0 && r&((1<<3)*allFacesMultiplier) != 0 {
-			updateReachable(x, y-1, z, r&smear6(r&((1<<3)*allFacesMultiplier)))
+		if y > 0 && r&octFaceYNegMask != 0 {
+			updateReachable(x, y-1, z, r&octFaceYNegMask)
 		}
-		if z+1 < visWidth && r&((1<<4)*allFacesMultiplier) != 0 {
-			updateReachable(x, y, z+1, r&smear6(r&((1<<4)*allFacesMultiplier)))
+		if z+1 < visWidth && r&octFaceZPosMask != 0 {
+			updateReachable(x, y, z+1, r&octFaceZPosMask)
 		}
-		if z > 0 && r&((1<<5)*allFacesMultiplier) != 0 {
-			updateReachable(x, y, z-1, r&smear6(r&((1<<5)*allFacesMultiplier)))
+		if z > 0 && r&octFaceZNegMask != 0 {
+			updateReachable(x, y, z-1, r&octFaceZNegMask)
 		}
 	}
 
