@@ -37,8 +37,9 @@ out vec3 vPosition;
 out vec4 vColor;
 out vec3 vNormal;
 out vec2 vTexCoord;
+flat out int vTexLayer;
 
-vec3 unpackPos(uint p) { // 26b pos (9b,8b,9b each) => vec3
+vec3 unpackPos(uint p) { // 24b pos (8b,8b,8b each) => vec3
     return vec3(float((p >> 16) & 255u) , float(p & 255u), float((p >> 8) & 255u));
 }
 
@@ -116,13 +117,19 @@ void main()	{
 
 #ifdef CUBOID
     vec4 faceUv = cuboid[blockId].uvSides[face];
-    vec2 atlasCoord = mix(faceUv.xy, faceUv.zw, mappedLocalUV);
-    vec2 tileCenter = floor(min(faceUv.xy, faceUv.zw)) + 0.5;
-    atlasCoord = mix(tileCenter, atlasCoord, 1.0 - 1.0/128.0);
-    vTexCoord = atlasCoord / 32.0;
+    
+    // Extract block atlas offset using floor on minimum bounds
+    float tx = floor(min(faceUv.x, faceUv.z));
+    float ty = floor(min(faceUv.y, faceUv.w));
+    vTexLayer = int(tx + ty * 32.0);
+    
+    // Map custom UV dimensions locally relative to the layer bounds
+    vec2 uvStart = faceUv.xy - vec2(tx, ty);
+    vec2 uvEnd = faceUv.zw - vec2(tx, ty);
+    vTexCoord = mix(uvStart, uvEnd, mappedLocalUV);
 #else
-    vec2 primCoord = mappedLocalUV * (1.0-1./128.) + vec2(1./256.);
     int block = (blockId + (sideSpecial ? 256 : 0));
-    vTexCoord = (primCoord + vec2(block % 32, block / 32)) / 32.0;
+    vTexLayer = block;
+    vTexCoord = mappedLocalUV;
 #endif
 }

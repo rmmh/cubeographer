@@ -2,18 +2,20 @@
 precision mediump float;
 precision highp int;
 
-uniform sampler2D atlas;
+uniform mediump sampler2DArray atlas;
+uniform float alphaCutoutThreshold;
 
 in vec3 vPosition;
 in vec4 vColor;
 in vec3 vNormal;
 in vec2 vTexCoord;
+flat in int vTexLayer;
 
 out vec4 outColor;
 
 void main()	{
-    vec4 color = vec4( vColor ) * texture(atlas, vTexCoord);
-    if (color.a == 0.0) discard;
+    vec4 color = vec4( vColor ) * texture(atlas, vec3(vTexCoord, float(vTexLayer)));
+    if (color.a < alphaCutoutThreshold) discard;
     // OFFICIAL MINECRAFT:
     //  *0.8 on the Z axis faces, by *0.6 on the X axis faces, and by *0.5 on the bottom face
     outColor = mix(

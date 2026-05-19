@@ -1,7 +1,7 @@
 import { glMatrix, mat4, quat, vec3, vec4 } from 'gl-matrix';
 
 import * as webgl_utils from "./webgl_utils";
-import { generateMipmaps } from "./downscale";
+import { generateTextureArrayMipmaps } from "./downscale";
 
 export class Material {
     gl: WebGLRenderingContext;
@@ -79,7 +79,7 @@ export class InstancedLayer {
         public material: Material,
         public texture: WebGLTexture,
         public name: string,
-    ) {}
+    ) { }
 }
 
 export class Chunk {
@@ -154,52 +154,80 @@ export class Context {
         return new Chunk(this.gl);
     }
 
-    loadTexture(path: string, done?: ()=>void): WebGLTexture {
-        function isPowerOf2(value: number) {
-            return (value & (value - 1)) === 0;
-        }
-
+    loadTexture(path: string, done?: () => void): WebGLTexture {
         const gl = this.gl;
 
-        // Create a texture.
+        // Create a WebGL 2 texture array
         var texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        // Fill the texture with a 1x1 grey pixel.
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-            new Uint8Array([120, 120, 120, 255]));
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
 
-        // Asynchronously load an image
+        // Pre-allocate WebGL 2 immutable 3D texture storage (with 4 mipmap levels)
+        gl.texStorage3D(
+            gl.TEXTURE_2D_ARRAY,
+            4, // 4 levels (16x16, 8x8, 4x4, 2x2)
+            gl.RGBA8,
+            16,
+            16,
+            1024
+        );
+
+        // Asynchronously load the 512x512 image
         var image = new Image();
         image.src = path;
         image.addEventListener('load', function () {
-            // Now that the image has loaded make copy it to the texture.
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-            gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            // Draw the loaded image to a temporary canvas to read its pixel data
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(image, 0, 0);
+            const imgData = ctx.getImageData(0, 0, 512, 512);
+            const srcPixels = imgData.data;
 
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            // Allocate a buffer to hold the sliced 1024 tiles
+            const slicedPixels = new Uint8Array(16 * 16 * 4 * 1024);
 
-            // Check if the image is a power of 2 in both dimensions.
-            if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
-                // Yes, it's a power of 2. Generate mips.
-                // try to prevent texture bleeding by limiting mipmaps to up to 16x reduction.
-                // https://gamedev.stackexchange.com/a/50777
-                generateMipmaps(gl, image, 4);
-                // gl.generateMipmap(gl.TEXTURE_2D);
-                gl.texParameterf(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 4);
-            } else {
-                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            // Copy each 16x16 tile into its respective slice/layer
+            for (let slice = 0; slice < 1024; slice++) {
+                const tileX = (slice % 32) * 16;
+                const tileY = Math.floor(slice / 32) * 16;
+
+                for (let y = 0; y < 16; y++) {
+                    const srcRowStart = ((tileY + y) * 512 + tileX) * 4;
+                    const destRowStart = (slice * 16 * 16 + y * 16) * 4;
+
+                    // Copy 16 pixels (64 bytes)
+                    for (let i = 0; i < 64; i++) {
+                        slicedPixels[destRowStart + i] = srcPixels[srcRowStart + i];
+                    }
+                }
             }
 
-            var ext = webgl_utils.getExtensionWithKnownPrefixes(gl, "texture_filter_anisotropic");
-            if (ext) {
-                gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT, 4);
-            }
+            // Upload the sliced pixel data to WebGL
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+            gl.texSubImage3D(
+                gl.TEXTURE_2D_ARRAY,
+                0,
+                0, 0, 0, // xoffset, yoffset, zoffset
+                16, 16, 1024, // width, height, depth
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                slicedPixels
+            );
 
-            done();
+            // Setup texture wrapping and filtering parameters
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+            // Generate custom gamma-aware and transparency-weighted mipmaps
+            generateTextureArrayMipmaps(gl, texture, slicedPixels, 4);
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+
+            // 4 levels means 16px -> 1
+            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, 4);
+
+            if (done) done();
         });
         return texture;
     }
@@ -259,8 +287,8 @@ export class PerspectiveCamera implements Camera {
 }
 
 function sphereCone(sphereCenter: vec3, sphereRadius: number,
-                    coneOrigin: vec3, coneNormal: vec3,
-                    sinAngle: number, tanAngleSqPlusOne: number): boolean {
+    coneOrigin: vec3, coneNormal: vec3,
+    sinAngle: number, tanAngleSqPlusOne: number): boolean {
     const diff = vec3.sub(vec3.create(), sphereCenter, coneOrigin);
 
     // this code is somehow broken. unfortunate. this approximation helps slightly.
@@ -286,12 +314,12 @@ function sphereCone(sphereCenter: vec3, sphereRadius: number,
 
         // return c.dot() <= lenA * lenA * tanAngleSqPlusOne;
         return vec3.sqrLen(c) <= lenA * lenA * tanAngleSqPlusOne;
-    // } else return diff.dot() <= sphereRadius * sphereRadius;
+        // } else return diff.dot() <= sphereRadius * sphereRadius;
     } else {
         console.log("near fallback", dot, coneNormal,
             vec3.scaleAndAdd(vec3.create(),
                 diff, coneNormal, -sphereRadius * sinAngle),
-        diff, vec3.len(diff), sphereRadius);
+            diff, vec3.len(diff), sphereRadius);
         return vec3.sqrLen(diff) <= sphereRadius * sphereRadius;
     }
 }
@@ -308,8 +336,8 @@ class Frustum {
         this.coneNormal = vec3.sub(vec3.create(), camera.target, camera.position);
         vec3.normalize(this.coneNormal, this.coneNormal);
         const vFovRad = camera.fov * Math.PI / 180;
-        const hFovRad = 2 * Math.atan(Math.tan(vFovRad/2) * camera.aspect);
-        this.coneAngle = 2 * Math.atan(Math.sqrt(hFovRad*hFovRad + vFovRad * vFovRad));
+        const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * camera.aspect);
+        this.coneAngle = 2 * Math.atan(Math.sqrt(hFovRad * hFovRad + vFovRad * vFovRad));
     }
 
     intersects(c: Chunk): boolean {
@@ -403,6 +431,21 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
         bind(mat, layer.geometry)
 
         mat.uniformSetters.atlas(layer.texture);
+
+        // Selectively configure blending and alpha cutout per layer:
+        // CUBE_FALLBACK (contains water/translucent elements) uses alpha blending.
+        // Other layers (CUBE, VOXEL, CROSS, CROP, CUBOID) use efficient alpha cutouts.
+        const isCutout = layer.name !== "CUBE_FALLBACK";
+        if (isCutout) {
+            gl.disable(gl.BLEND);
+        } else {
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        }
+
+        if (mat.uniformSetters.alphaCutoutThreshold) {
+            mat.uniformSetters.alphaCutoutThreshold(isCutout ? 0.5 : 0.05);
+        }
 
         let chunkNum = 0;
         for (const chunk of culledChunks) {
