@@ -90,6 +90,7 @@ export class Chunk {
     occluded: boolean
     query: WebGLQuery
     queryInProgress: boolean
+    voxelBitset?: any
 
     constructor(public gl: WebGLRenderingContext) {
         this.position = vec3.create();

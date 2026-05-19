@@ -3,7 +3,7 @@ TODO: open addressing for block insertion/deletion
 steal from https://shlegeris.com/2017/01/06/hash-maps.html
 */
 
-import { mat4, vec3 } from 'gl-matrix';
+import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
@@ -11,6 +11,7 @@ import { Gunzip } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
+import { createOrbitTargetFinder, VoxelBitset } from './voxel';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
 
@@ -53,7 +54,7 @@ let urlTimer = 0;
 
 // https://stackoverflow.com/a/13419367/3694
 function parseQuery(queryString: string) {
-    const query: {[name: string]: string} = {};
+    const query: { [name: string]: string } = {};
     const pairs = (queryString[0] === '?' ? queryString.substr(1) : queryString).split('&');
     for (let i = 0; i < pairs.length; i++) {
         const pair = pairs[i].split('=');
@@ -89,8 +90,8 @@ function cameraMove() {
         let pos = camera.position;
         let off = vec3.sub(vec3.create(), controls.target, pos);
         off[0] = Math.round(off[0]),
-        off[1] = Math.round(off[1]),
-        off[2] = Math.round(off[2]);
+            off[1] = Math.round(off[1]),
+            off[2] = Math.round(off[2]);
         let rx = pos[0] >> 9;
         let rz = pos[2] >> 9;
         let y = pos[1] | 0;
@@ -117,6 +118,8 @@ controls.addEventListener('change', cameraMove); // call this only in static sce
 controls.screenSpacePanning = true;
 controls.minDistance = 1;
 controls.maxDistance = space * 2;
+
+controls.getOrbitTarget = createOrbitTargetFinder(context, camera, scene);
 
 const CUBE_ATTRIB_STRIDE = 2;
 
@@ -230,9 +233,9 @@ function makeCubeLayer(name: string, texturePath: string, defines?: { [name: str
     let geometry = context.Geometry();
 
     geometry.setAttributes({
-        position: {data: bf32, numComponents: 3, stride: stride, offset: 0},
-        normal: {data: bf32, numComponents: 3, stride: stride, offset: 12},
-        uv: {data: bu8, numComponents: 2, stride: stride, offset: 24},
+        position: { data: bf32, numComponents: 3, stride: stride, offset: 0 },
+        normal: { data: bf32, numComponents: 3, stride: stride, offset: 12 },
+        uv: { data: bu8, numComponents: 2, stride: stride, offset: 24 },
     });
 
     geometry.verts = tris * 3;
@@ -244,7 +247,7 @@ function makeCubeLayer(name: string, texturePath: string, defines?: { [name: str
     return new renderer.InstancedLayer(geometry, material, texture, name);
 }
 
-function makeCrossLayer(name: string, texturePath: string, defines?: {[name: string]: any}) {
+function makeCrossLayer(name: string, texturePath: string, defines?: { [name: string]: any }) {
     const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
     const stridef = (stride / 4) | 0;
     const tris = 4;  // 2 faces * 2 tris each (double-sided)
@@ -542,10 +545,10 @@ let cube = makeCube();
 const layerNames = ["CUBE", "VOXEL", "CROSS", "CROP", "CUBE_FALLBACK"]
 let layers = [
     makeCubeLayer("CUBE", "textures/atlas0.png"),
-    makeCubeLayer("VOXEL", "textures/atlas1.png", {VOXEL: 1}),
-    makeCrossLayer("CROSS", "textures/atlas2.png", {CROSS: 1}),
-    makeCropLayer("CROP", "textures/atlas3.png", {CROSS: 1}),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas4.png", {WATER_ID: 1, FALLBACK: 1})
+    makeCubeLayer("VOXEL", "textures/atlas1.png", { VOXEL: 1 }),
+    makeCrossLayer("CROSS", "textures/atlas2.png", { CROSS: 1 }),
+    makeCropLayer("CROP", "textures/atlas3.png", { CROSS: 1 }),
+    makeCubeLayer("CUBE_FALLBACK", "textures/atlas4.png", { WATER_ID: 1, FALLBACK: 1 })
 ];
 
 let willRender = false;
@@ -646,7 +649,7 @@ function fetchRegion(x: number, z: number, off: number) {
             const headerLength = new Uint32Array(header.slice(8, 8 + 4).buffer)[0];
             let meta = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
 
-            let sectionLengths : Array<number> = meta.layers.map((x: {length: number}) => x.length);
+            let sectionLengths: Array<number> = meta.layers.map((x: { length: number }) => x.length);
             let length = sectionLengths.reduce((a, b) => a + b);
 
             let value = header.subarray(12 + headerLength);
@@ -656,12 +659,14 @@ function fetchRegion(x: number, z: number, off: number) {
 
             let chunk = context.Chunk();
 
-            vec3.set(chunk.position, x * 512 + (off&1) * 256, 0, z * 512 + (off&2) * 128);
+            vec3.set(chunk.position, x * 512 + (off & 1) * 256, 0, z * 512 + (off & 2) * 128);
 
             let layerSpecs: any = {};
             for (const layer of meta.layers) {
-                layerSpecs[layer.name] = { data: new Uint32Array(layer.length/4), retain: true,
-                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1 };
+                layerSpecs[layer.name] = {
+                    data: new Uint32Array(layer.length / 4), retain: true,
+                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                };
             }
 
             chunk.setLayers(layerSpecs);
@@ -673,7 +678,7 @@ function fetchRegion(x: number, z: number, off: number) {
 
             while (!done) {
                 if (value.length == 0) {
-                    ({value, done} = await stream.next());
+                    ({ value, done } = await stream.next());
                     continue;
                 }
 
@@ -696,6 +701,7 @@ function fetchRegion(x: number, z: number, off: number) {
             }
 
             let minY = 255, maxY = 0;
+            const bitset = new VoxelBitset();
             for (const [name, value] of Object.entries(chunk.layers)) {
                 if (value.data) {
                     const buf = new Uint8Array(value.data);
@@ -704,9 +710,20 @@ function fetchRegion(x: number, z: number, off: number) {
                         minY = Math.min(minY, y);
                         maxY = Math.max(maxY, y);
                     }
+                    const data = new Uint32Array(value.data);
+                    const size = value.size;
+                    for (let i = 0; i < size; i++) {
+                        const attrX = data[2 * i];
+                        const unpackedX = (attrX >> 16) & 255;
+                        const unpackedY = attrX & 255;
+                        const unpackedZ = (attrX >> 8) & 255;
+                        bitset.add(unpackedX, unpackedY, unpackedZ);
+                    }
+                    // Free CPU-side voxel buffer data to save CPU RAM
                     value.data = null;
                 }
             }
+            chunk.voxelBitset = bitset;
             chunk.minY = minY;
             chunk.maxY = maxY;
             console.debug("done streaming", response.url, minY, maxY);
@@ -724,7 +741,7 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     for (let o = 0; o < 4; o++) {
         for (let x = xs; x <= xe; x++) {
             for (let z = zs; z <= ze; z++) {
-                    fetchRegion(x, z, o);
+                fetchRegion(x, z, o);
             }
         }
     }
@@ -733,7 +750,7 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     controls.update();
 }
 
-setTimeout(function() {
+setTimeout(function () {
     const choice: string = 'center';
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
