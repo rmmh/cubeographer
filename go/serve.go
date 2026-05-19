@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	cmtRe = regexp.MustCompile(`([^/]+)/map/r\.(\d+)\.(\d+)\.\d+\.cmt$`)
+	cmtRe = regexp.MustCompile(`([^/]*)/map/r\.(-?\d+)\.(-?\d+)\.\d+\.cmt$`)
 )
 
 type workItem struct {
@@ -103,7 +103,7 @@ func (s *server) awaitUpdate(filename string) {
 		return
 	}
 	world := m[1]
-	if s.regionDir[world] == "" && s.readRegion == nil {
+	if s.regionDir[world] == "" && (s.readRegion == nil || s.readRegion[world] == nil) {
 		return
 	}
 	rx, _ := strconv.Atoi(m[2])
@@ -154,7 +154,7 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 
 	r := mux.NewRouter()
 	s := &server{
-		regionDir: map[string]string{"0": regionDir},
+		regionDir: map[string]string{"": regionDir},
 		readRegion: map[string]region.ReadRegionFunc{
 			"test": region.FakeReadRegion,
 		},

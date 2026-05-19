@@ -9,6 +9,10 @@ import (
 func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error) {
 	cdata := make([]ChunkDatum, 1024)
 
+	if path != "r.0.0.mca" {
+		return cdata, nil
+	}
+
 	for cn := 0; cn < 1024; cn++ {
 		nblocks := [][]uint16{}
 		nstates := [][]render.Stateval{}
@@ -45,21 +49,33 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 	bx := 32
 	bz := 32
 
-	for b := 1; b < len(bm.NidToName); b++ {
-		ns := int(bm.nidToSmap[b].Max())
-		nl := ns/6 + 1
-		if bx+nl >= 220 {
-			bx = 32
-			bz += 8
+	for layer := 0; layer < int(render.NumRenderLayers); layer++ {
+		for b := 1; b < len(bm.NidToName); b++ {
+			layerIdx := bm.Layer[b][0]
+			if int(layerIdx) != layer {
+				continue
+			}
+
+			ns := int(bm.nidToSmap[b].Max())
+			nl := ns/6 + 1
+			if bx+nl >= 220 {
+				bx = 32
+				bz += 8
+			}
+			qualName := []string{
+				"gold_block", "diamond_block", "emerald_block", "dirt", "copper_block", "iron_block", "stone"}[layerIdx]
+			qualBlock := bm.NameToNid["minecraft:"+qualName]
+			if bz == 32 {
+				fmt.Printf("FakeReadRegion (bz=32): block=%s layerIdx=%d layerName=%s qualBlockID=%d (%s) bx=%d nl=%d ns=%d\n",
+					bm.NidToName[b], layerIdx, render.LayerNames[layerIdx], qualBlock, qualName, bx, nl, ns)
+			}
+			for i := 0; i <= ns; i++ {
+				set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
+				set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
+			}
+			bx += nl
+			bx += 2
 		}
-		qualBlock := bm.NameToNid["minecraft:"+[]string{
-			"gold_block", "diamond_block", "emerald_block", "dirt", "iron_block"}[bm.Layer[b][0]]]
-		for i := 0; i <= ns; i++ {
-			set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
-			set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
-		}
-		bx += nl
-		bx += 2
 	}
 
 	return cdata, nil
