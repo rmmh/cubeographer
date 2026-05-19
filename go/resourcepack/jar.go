@@ -37,6 +37,7 @@ var MajorMCVersions = []string{
 	"1.19.4",
 	"1.20.6",
 	"1.21.10",
+	"26.1.2",
 }
 
 func jsonGrab(url string, val interface{}) error {
@@ -234,16 +235,75 @@ type ModelOverride struct {
 	Predicate map[string]float64 `json:"predicate"`
 }
 
+type TextureMap map[string]string
+
 type Model struct {
 	Parent           string                     `json:"parent,omitempty"`
 	AmbientOcclusion *bool                      `json:"ambientocclusion,omitempty"`
-	Textures         map[string]string          `json:"textures,omitempty"`
+	Textures         TextureMap                 `json:"textures,omitempty"`
 	TextureSize      []int                      `json:"texture_size,omitempty"`
 	Elements         []*ModelElement            `json:"elements,omitempty"`
 	Groups           []*ModelGroup              `json:"groups,omitempty"`
 	Display          map[string]*ModelTransform `json:"display,omitempty"`
 	GuiLight         string                     `json:"gui_light,omitempty"`
 	Overrides        []ModelOverride            `json:"overrides,omitempty"`
+	ForceTranslucent map[string]bool            `json:"-"`
+}
+
+func (m *Model) UnmarshalJSON(data []byte) error {
+	type Alias Model
+	var aux struct {
+		*Alias
+		Textures map[string]any `json:"textures"`
+	}
+	aux.Alias = (*Alias)(m)
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(aux.Textures) == 0 {
+		return nil
+	}
+	m.Textures = make(TextureMap)
+	m.ForceTranslucent = make(map[string]bool)
+	for k, v := range aux.Textures {
+		if s, ok := v.(string); ok {
+			m.Textures[k] = s
+		} else if obj, ok := v.(map[string]any); ok {
+			if sprite, ok := obj["sprite"].(string); ok {
+				m.Textures[k] = sprite
+			}
+			if ft, ok := obj["force_translucent"].(bool); ok && ft {
+				m.ForceTranslucent[k] = true
+			}
+		} else {
+			return fmt.Errorf("unexpected texture value type for key %q: %T", k, v)
+		}
+	}
+	return nil
+}
+
+func (m *Model) MarshalJSON() ([]byte, error) {
+	type Alias Model
+	aux := struct {
+		*Alias
+		Textures map[string]any `json:"textures,omitempty"`
+	}{
+		Alias: (*Alias)(m),
+	}
+	if m.Textures != nil {
+		aux.Textures = make(map[string]any)
+		for k, v := range m.Textures {
+			if m.ForceTranslucent != nil && m.ForceTranslucent[k] {
+				aux.Textures[k] = map[string]any{
+					"sprite":            v,
+					"force_translucent": true,
+				}
+			} else {
+				aux.Textures[k] = v
+			}
+		}
+	}
+	return json.Marshal(aux)
 }
 
 type ModelRanges struct {
@@ -384,7 +444,7 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 				model := &Model{}
 				err = json.Unmarshal(data, model)
 				if err != nil {
-					return nil, err
+					return nil, errors.Wrapf(err, "unable to decode model %s (file: %s)", name, f.Name)
 				}
 				rj.Models[name] = model
 				decode = model
