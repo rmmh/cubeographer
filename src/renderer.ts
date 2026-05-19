@@ -165,7 +165,7 @@ export class Context {
         // Pre-allocate WebGL 2 immutable 3D texture storage (with 4 mipmap levels)
         gl.texStorage3D(
             gl.TEXTURE_2D_ARRAY,
-            4, // 4 levels (16x16, 8x8, 4x4, 2x2)
+            5, // 5 levels (16x16, 8x8, 4x4, 2x2, 1x1)
             gl.RGBA8,
             16,
             16,
@@ -408,7 +408,7 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
     })
 
 
-    culledChunks = culledChunks.slice(0, 32);
+    culledChunks = culledChunks.slice(0, 64);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {

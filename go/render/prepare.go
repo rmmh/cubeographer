@@ -151,7 +151,6 @@ func renderCube(m *rp.Model) *ModelEntry {
 		return nil
 	}
 	name := m.Parent
-	fmt.Println("m", m)
 	el := m.Elements[0]
 	if !reflect.DeepEqual(el.From, []float64{0, 0, 0}) || !reflect.DeepEqual(el.To, []float64{16, 16, 16}) {
 		return nil

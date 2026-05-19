@@ -507,10 +507,13 @@ class OrbitControls extends EventDispatcher {
     private handleMouseMoveDolly(event: MouseEvent) {
         vec2.set(this.dollyEnd, event.clientX, event.clientY);
         vec2.sub(this.dollyDelta, this.dollyEnd, this.dollyStart);
-        if (this.dollyDelta[1] > 0) {
-            this.dollyOut(this.getZoomScale());
-        } else if (this.dollyDelta[1] < 0) {
-            this.dollyIn(this.getZoomScale());
+        if (this.dollyDelta[1] !== 0) {
+            const factor = Math.pow(0.995, Math.abs(this.dollyDelta[1]) * this.zoomSpeed);
+            if (this.dollyDelta[1] > 0) {
+                this.dollyOut(factor);
+            } else {
+                this.dollyIn(factor);
+            }
         }
         vec2.copy(this.dollyStart, this.dollyEnd);
         this.update();
@@ -1074,9 +1077,16 @@ export function safeLookAt(out: mat4, eye: vec3, center: vec3, up: vec3): mat4 {
 
     let normDir = vec3.normalize(vec3.create(), dir);
     const dot = vec3.dot(normDir, up);
-    if (Math.abs(dot) > 0.999999) {
-        let perturbedEye = vec3.fromValues(eye[0] + 1e-5, eye[1], eye[2] + 1e-5);
-        return mat4.lookAt(out, perturbedEye, center, up);
+    if (Math.abs(dot) > 0.99999999999999) {
+        // Collinear fallback: use a secondary up vector that is perpendicular to the line of sight
+        // to prevent degenerate rotation matrices and NaN values.
+        let altUp = vec3.fromValues(0, 0, -1);
+        if (Math.abs(up[1]) > 0.9) {
+            altUp = vec3.fromValues(0, 0, -1);
+        } else {
+            altUp = vec3.fromValues(0, 1, 0);
+        }
+        return mat4.lookAt(out, eye, center, altUp);
     }
     return mat4.lookAt(out, eye, center, up);
 }
