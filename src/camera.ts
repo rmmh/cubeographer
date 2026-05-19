@@ -299,14 +299,14 @@ class OrbitControls extends EventDispatcher {
 
         // Calculate base orientation relative to orbitTarget using native lookAt
         let tempView = mat4.create();
-        mat4.lookAt(tempView, position, this.orbitTarget, vec3.fromValues(0, 1, 0));
+        safeLookAt(tempView, position, this.orbitTarget, vec3.fromValues(0, 1, 0));
         let qBase = quat.create();
         mat4.getRotation(qBase, tempView);
         let qBaseInv = quat.conjugate(quat.create(), qBase);
 
         // Rotate the unit localOffset (look direction) to world space
         let worldLookDir = vec3.transformQuat(vec3.create(), this.localOffset, qBaseInv);
-        vec3.normalize(worldLookDir, worldLookDir);
+        safeNormalize(worldLookDir, worldLookDir);
 
         // Set this.target along the look direction at distance spherical.radius from position
         vec3.scaleAndAdd(this.target, position, worldLookDir, this.spherical.radius);
@@ -753,13 +753,13 @@ class OrbitControls extends EventDispatcher {
                         if (newTarget) {
                             // Calculate base orientation relative to newTarget using native lookAt
                             let tempView = mat4.create();
-                            mat4.lookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
+                            safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
                             let qBase = quat.create();
                             mat4.getRotation(qBase, tempView);
 
                             // Calculate look direction in camera local space of this base orientation
                             let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                            vec3.normalize(lookDir, lookDir);
+                            safeNormalize(lookDir, lookDir);
                             vec3.transformQuat(this.localOffset, lookDir, qBase);
 
                             // Update orbit target
@@ -830,13 +830,13 @@ class OrbitControls extends EventDispatcher {
             if (newTarget) {
                 // Calculate base orientation relative to newTarget using native lookAt
                 let tempView = mat4.create();
-                mat4.lookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
+                safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
                 let qBase = quat.create();
                 mat4.getRotation(qBase, tempView);
 
                 // Calculate look direction in camera local space of this base orientation
                 let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                vec3.normalize(lookDir, lookDir);
+                safeNormalize(lookDir, lookDir);
                 vec3.transformQuat(this.localOffset, lookDir, qBase);
 
                 // Update orbit target
@@ -861,7 +861,7 @@ class OrbitControls extends EventDispatcher {
 
         // Current look direction (from position to target)
         const lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-        vec3.normalize(lookDir, lookDir);
+        safeNormalize(lookDir, lookDir);
 
         // If look direction is degenerate (e.g. position == target), default to forward look
         if (vec3.length(lookDir) < 1e-4) {
@@ -899,13 +899,13 @@ class OrbitControls extends EventDispatcher {
                             if (newTarget) {
                                 // Calculate base orientation relative to newTarget using native lookAt
                                 let tempView = mat4.create();
-                                mat4.lookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
+                                safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
                                 let qBase = quat.create();
                                 mat4.getRotation(qBase, tempView);
 
                                 // Calculate look direction in camera local space of this base orientation
                                 let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                                vec3.normalize(lookDir, lookDir);
+                                safeNormalize(lookDir, lookDir);
                                 vec3.transformQuat(this.localOffset, lookDir, qBase);
 
                                 // Update orbit target
@@ -1064,4 +1064,29 @@ class Spherical {
             sinPhiRadius * Math.cos(theta))
     }
 }
+
+export function safeLookAt(out: mat4, eye: vec3, center: vec3, up: vec3): mat4 {
+    let dir = vec3.sub(vec3.create(), eye, center);
+    if (vec3.length(dir) < 1e-4) {
+        let perturbedEye = vec3.fromValues(eye[0] + 1e-5, eye[1], eye[2]);
+        return mat4.lookAt(out, perturbedEye, center, up);
+    }
+
+    let normDir = vec3.normalize(vec3.create(), dir);
+    const dot = vec3.dot(normDir, up);
+    if (Math.abs(dot) > 0.999999) {
+        let perturbedEye = vec3.fromValues(eye[0] + 1e-5, eye[1], eye[2] + 1e-5);
+        return mat4.lookAt(out, perturbedEye, center, up);
+    }
+    return mat4.lookAt(out, eye, center, up);
+}
+
+export function safeNormalize(out: vec3, v: vec3): vec3 {
+    vec3.normalize(out, v);
+    if (isNaN(out[0]) || isNaN(out[1]) || isNaN(out[2])) {
+        vec3.set(out, 0, 0, -1);
+    }
+    return out;
+}
+
 export { OrbitControls, MapControls };

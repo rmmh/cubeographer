@@ -2,6 +2,7 @@ import { glMatrix, mat4, quat, vec3, vec4 } from 'gl-matrix';
 
 import * as webgl_utils from "./webgl_utils";
 import { generateTextureArrayMipmaps } from "./downscale";
+import { safeLookAt } from "./camera";
 
 export class Material {
     gl: WebGLRenderingContext;
@@ -273,7 +274,7 @@ export class PerspectiveCamera implements Camera {
         // TODO: add ortho mode with correct zooming, shaders (flipping is broken), etc
         // const orthoscale = 128;
         // mat4.ortho(this.proj, -orthoscale * this.aspect, orthoscale * this.aspect, -orthoscale, orthoscale, -5000, 5000)
-        mat4.lookAt(this.view, this.position, this.target, vec3.fromValues(0, 1, 0));
+        safeLookAt(this.view, this.position, this.target, vec3.fromValues(0, 1, 0));
         mat4.getRotation(this.quaternion, this.view);
     }
 
