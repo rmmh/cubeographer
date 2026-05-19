@@ -22,11 +22,70 @@ const (
 	TexTranslucent
 )
 
+/*
+Render Layers and Packing Formats:
+
+Each block model is classified into one of the following render layers.
+During conversion, instances are packed into a 64-bit attribute structure:
+  - `attr.x` (32-bit uint): Packed position and texture/block ID.
+  - `attr.y` (32-bit uint): Packed lighting, visibility, flags, and tint.
+
+Positional Packing in `attr.x`:
+  - Bits  0 -  7: Y Coordinate (8 bits, 0-255 relative to regionlet)
+  - Bits  8 - 15: Z Coordinate (8 bits, 0-255 relative to regionlet)
+  - Bits 16 - 23: X Coordinate (8 bits, 0-255 relative to regionlet)
+  - Bits 24 - 31: Texture ID (8 bits, base index in the layer's texture atlas)
+
+1. CUBE (LayerCube)
+  - Represents solid/opaque full-size blocks with 1 to 4 textures.
+  - Utilizes `sideSpecial` face-mapping to render multiple textures (sides, top, bottom) on a single cube.
+  - `attr.y` packing:
+  - Bits  0 -  5: Active visible faces mask (6 bits; bit set if face is visible)
+  - Bits  6 - 29: Per-face lighting values (4 bits per face for 6 faces; order: West, East, South, North, Up, Down)
+  - Bit      30: `sideSpecial` flag (if set, uses secondary/tertiary textures for top/bottom faces)
+  - Bit      31: Tint flag (1 to apply biome coloring, 0 otherwise)
+
+2. VOXEL (LayerVoxel)
+  - Represents complex or transparent multi-textured voxel blocks (where each face has independent textures).
+  - `attr.y` packing:
+  - Bits  0 -  5: Active visible faces mask
+  - Bits  6 - 29: Per-face lighting values (4 bits per face for 6 faces)
+  - Bits 30 - 31: Unused / High-bits of Texture ID (if texture ID > 255) / Tint flag
+
+3. CROSS (LayerCross)
+  - Represents diagonal intersecting 2D plane sprites (e.g. flowers, saplings, tall grass, webs).
+  - `attr.y` packing:
+  - Bits  0 -  3: Sprite light level (4 bits, 0-15)
+  - Bits  4 - 30: Unused
+  - Bit      31: Tint flag
+
+4. CROP (LayerCrop)
+  - Represents agricultural crop-style overlapping vertical parallel planes (e.g. wheat, carrots).
+  - `attr.y` packing:
+  - Bits  0 -  3: Sprite light level (4 bits, 0-15)
+  - Bits  4 - 30: Unused
+  - Bit      31: Tint flag
+
+5. CUBOID (LayerCuboid)
+  - Represents rectangular prism-shaped blocks with 6 independent textures.
+  - "Texture id" becomes "cuboid ID", which is an index into the cuboid UBO.
+  - `attr.y` packing:
+  - Bits  0 -  5: Active visible faces mask (6 bits; bit set if face is visible)
+  - Bits  6 - 29: Per-face lighting values (4 bits per face for 6 faces; order: West, East, South, North, Up, Down)
+  - Bit      30: Unused.
+  - Bit      31: Tint flag (1 to apply biome coloring, 0 otherwise)
+
+6. CUBE_FALLBACK (LayerCubeFallback)
+  - A general fallback layer for complex models that are otherwise unsupported.
+  - Renders as a standard solid cube using only the first resolved texture.
+  - `attr.y` packing: Same as CUBE.
+*/
 var LayerNames = []string{
 	"CUBE",
 	"VOXEL",
 	"CROSS",
 	"CROP",
+	"CUBOID",
 	"CUBE_FALLBACK",
 }
 
@@ -37,6 +96,7 @@ const (
 	LayerVoxel
 	LayerCross
 	LayerCrop
+	LayerCuboid
 	LayerCubeFallback
 	NumRenderLayers
 )
@@ -90,17 +150,22 @@ func renderCube(m *rp.Model) *ModelEntry {
 	if len(m.Elements) != 1 {
 		return nil
 	}
+	name := m.Parent
+	fmt.Println("m", m)
 	el := m.Elements[0]
 	if !reflect.DeepEqual(el.From, []float64{0, 0, 0}) || !reflect.DeepEqual(el.To, []float64{16, 16, 16}) {
 		return nil
 	}
 	if el.Shade != nil || el.Rotation.Angle != 0 {
+		fmt.Println("bailing due to", name, el.Shade, el.Rotation.Angle)
 		return nil
 	}
 	texs, tint := getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]})
 	if texs == nil {
+		fmt.Println("bailing due to texs", name, m, el.Faces)
 		return nil
 	}
+
 	if !tint { // texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
 		// grab texs again to match face visibility order
 		texs, _ = getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
@@ -144,10 +209,110 @@ func renderCube(m *rp.Model) *ModelEntry {
 	}
 }
 
+type TextureMeta struct {
+	Bounds   []float32
+	UVs      [][]float32
+	TexNames []string
+}
+
 type StateConverter struct {
-	Models     map[string]*rp.Model
-	ColumnTops map[string]string
-	Debug      string
+	Models        map[string]*rp.Model
+	ColumnTops    map[string]string
+	Debug         string
+	TextureBounds map[string]TextureMeta
+}
+
+func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
+	if len(m.Elements) != 1 {
+		return nil
+	}
+	el := m.Elements[0]
+	if el.Shade != nil || el.Rotation.Angle != 0 {
+		return nil
+	}
+
+	// Similar check to getCubeFaces, but we don't reject custom UVs
+	texs := []string{}
+	tintCount := 0
+	faces := [...]rp.BlockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]}
+	for _, face := range faces {
+		if face.Texture == "" || face.CullFace == "" {
+			return nil
+		}
+		if face.TintIndex != nil {
+			if *face.TintIndex != 0 {
+				return nil
+			}
+			tintCount++
+		}
+		tex := face.Texture
+		for tex != "" && tex[0] == byte('#') {
+			tex = m.Textures[tex[1:]]
+		}
+		texs = append(texs, tex)
+	}
+
+	if tintCount != 0 && tintCount != 6 {
+		return nil
+	}
+	tint := tintCount == 6
+
+	// Grab texs again to match face visibility order, same as renderCube
+	// Order: west, east, south, north, up, down
+	texsOrder := [...]rp.BlockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]}
+	texs = []string{}
+	for _, face := range texsOrder {
+		tex := face.Texture
+		for tex != "" && tex[0] == byte('#') {
+			tex = m.Textures[tex[1:]]
+		}
+		texs = append(texs, tex)
+	}
+
+	// Calculate custom UVs just like above
+	var uvs [][]float32
+	uvs = make([][]float32, 6)
+	for i, face := range texsOrder {
+		if face.UV != nil && len(face.UV) == 4 {
+			uvs[i] = []float32{float32(face.UV[0]), float32(face.UV[1]), float32(face.UV[2]), float32(face.UV[3])}
+		} else {
+			uvs[i] = []float32{0, 0, 16, 16}
+		}
+	}
+
+	meta := uint32(0b111111)
+	if tint {
+		meta |= 1 << 31
+	}
+
+	// For LayerCuboid, we can pass up to 6 textures.
+	// We'll output a model entry with up to 6 unique textures and 1 layer.
+	// But wait, the LayerCuboid packing format only supports `sideSpecial` flag which allows 3 textures (side, top, bottom).
+	// If the model has more than 3 unique textures, it cannot be packed into LayerCuboid natively unless we modify packing format.
+	// Let's check how LayerCuboid is defined. The comment says: "Represents rectangular prism-shaped blocks with 6 independent textures."
+	// Wait! The comment for LayerCuboid says:
+	// "5. CUBOID (LayerCuboid)
+	//   - Represents rectangular prism-shaped blocks with 6 independent textures.
+	//   - `attr.y` packing:
+	//   - Bits  0 -  5: Active visible faces mask (6 bits; bit set if face is visible)
+	//   - Bits  6 - 29: Per-face lighting values (4 bits per face for 6 faces; order: West, East, South, North, Up, Down)
+	//   - Bit      30: `sideSpecial` flag (if set, uses secondary/tertiary textures for top/bottom faces)
+	//   - Bit      31: Tint flag (1 to apply biome coloring, 0 otherwise)"
+	// Wait, if it only has `sideSpecial`, it can't support 6 independent textures! The texture packing is exactly like CUBE.
+	// So we can only support 1 or 3 textures for CUBOID, just like CUBE.
+	// Let's implement the same logic as renderCube for returning the textures.
+
+	s.TextureBounds[texs[0]] = TextureMeta{
+		Bounds:   []float32{float32(el.From[0]), float32(el.From[1]), float32(el.From[2]), float32(el.To[0]), float32(el.To[1]), float32(el.To[2])},
+		UVs:      uvs,
+		TexNames: texs,
+	}
+
+	return &ModelEntry{
+		Layer:    LayerCuboid,
+		Textures: texs,
+		Template: []uint32{0, meta},
+	}
 }
 
 func (s *StateConverter) referencedTexturesModel(model *rp.Model) ([]string, bool) {
@@ -305,6 +470,34 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		rotated = true
 	}
 
+	from, to := getModelBounds(model)
+	var uvs [][]float32
+	if len(model.Elements) == 1 {
+		el := model.Elements[0]
+		uvs = make([][]float32, 6)
+		faces := [...]string{"west", "east", "south", "north", "up", "down"}
+		for i, fName := range faces {
+			f := el.Faces[fName]
+			if f.UV != nil && len(f.UV) == 4 {
+				uvs[i] = []float32{float32(f.UV[0]), float32(f.UV[1]), float32(f.UV[2]), float32(f.UV[3])}
+			} else {
+				uvs[i] = []float32{0, 0, 16, 16}
+			}
+		}
+	}
+
+	for _, tex := range model.Textures {
+		tName := rp.RemoveDefaultPrefix(tex)
+		if tName != "" && tName[0] != '#' {
+			if _, ok := s.TextureBounds[tName]; !ok {
+				s.TextureBounds[tName] = TextureMeta{
+					Bounds: []float32{from[0], from[1], from[2], to[0], to[1], to[2]},
+					UVs:    uvs,
+				}
+			}
+		}
+	}
+
 	cubeSpec := renderCube(model)
 	if cubeSpec != nil {
 		if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
@@ -316,7 +509,8 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		return *cubeSpec
 	}
 
-	if name == "grass_block" || name == "grass" {
+	cleanName := rp.RemoveDefaultPrefix(name)
+	if cleanName == "grass_block" || cleanName == "grass" {
 		// render grass blocks as two cubes:
 		// * the dirt sides and bottom (no top)
 		// * the tinted grass top and side overlay (no bottom)
@@ -328,6 +522,22 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 			Textures: []string{model.Textures["side"], model.Textures["bottom"], model.Textures["overlay"], model.Textures["top"]},
 			Template: []uint32{0, 0b101111 | 1<<30, 0, 0b011111 | 3<<30},
 		}
+	}
+
+	if cleanName == "water" && model.Textures != nil && model.Textures["particle"] == "block/water_still" {
+		return ModelEntry{
+			Layer:    LayerCubeFallback,
+			Textures: []string{"block/water_still"},
+			Template: []uint32{0, 0b111111},
+		}
+	}
+
+	cuboidSpec := s.renderCuboid(model)
+	if cuboidSpec != nil {
+		if s.Debug == "all" || s.Debug == name {
+			fmt.Printf("CUBOID %#v\n", cuboidSpec)
+		}
+		return *cuboidSpec
 	}
 
 	if model.Parent == "minecraft:block/cross" {
@@ -375,9 +585,29 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		if tinted {
 			meta |= 1 << 31
 		}
-		return ModelEntry{Layer: LayerCubeFallback, Textures: []string{tex}, Template: []uint32{0, meta}}
+		if s.Debug == "improper" {
+			reason := ""
+			if len(model.Elements) > 1 {
+				reason = fmt.Sprintf("has %d elements", len(model.Elements))
+			} else if len(model.Elements) == 1 {
+				el := model.Elements[0]
+				if !reflect.DeepEqual(el.From, []float64{0, 0, 0}) || !reflect.DeepEqual(el.To, []float64{16, 16, 16}) {
+					reason = fmt.Sprintf("non-full cube element (from: %v, to: %v)", el.From, el.To)
+				} else if el.Rotation.Angle != 0 {
+					reason = fmt.Sprintf("has element rotation (angle: %v)", el.Rotation.Angle)
+				}
+			} else {
+				reason = "has 0 elements"
+			}
+			fmt.Printf("IMPROPER %s (%s): fallback to cube, %s, textures: %v\n", name, modelName, reason, textures)
+		}
+		layer := LayerCubeFallback
+		return ModelEntry{Layer: layer, Textures: []string{tex}, Template: []uint32{0, meta}}
 	}
 
+	if s.Debug == "improper" {
+		fmt.Printf("IMPROPER %s (%s): unhandled model (no textures), elements: %d\n", name, modelName, len(model.Elements))
+	}
 	return ModelEntry{Layer: -1}
 }
 
@@ -413,6 +643,9 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 			modelJ, _ := json.MarshalIndent(st, "", "  ")
 			fmt.Printf("FALLBACKMULTI %#v %s\n", name, string(modelJ))
 		}
+		if s.Debug == "improper" {
+			fmt.Printf("IMPROPER MULTI %s: blockstate uses multipart/variants but fallback to single texture cube, textures: %v\n", name, textures)
+		}
 		return BlockEntry{Name: name, States: slist, Templates: []ModelEntry{
 			{Layer: LayerCubeFallback, Textures: []string{tex}, Template: []uint32{0, tint}}}}
 	}
@@ -420,7 +653,7 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 	return BlockEntry{}
 }
 
-func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA) {
+func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, map[string][]UBOModelEntry) {
 	// Classify textures as opaque, transparent (cutout), translucent
 	// This is used to infer solidity-- a cube with all opaque sides
 	// is a definite occluder.
@@ -457,6 +690,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		Models: lo.MapEntries(pack.Models, func(key string, m *rp.Model) (string, *rp.Model) {
 			return rp.RemoveDefaultPrefix(key), m
 		}),
+		Debug:         genDebug,
+		TextureBounds: map[string]TextureMeta{},
 	}
 
 	for name, st := range pack.BlockStates {
@@ -497,6 +732,10 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		texIDs = append(texIDs, map[string]int{"air": 0})
 	}
 
+	// Reserve texture slot 1 in CUBE_FALLBACK for water, matching the
+	// hardcoded WATER_ID=1 shader define used for water tint color.
+	texIDs[LayerCubeFallback]["block/water_still"] = 1
+
 	// sort blocks so that blocks with assigned block IDs
 	// come first in the correct order
 	sort.SliceStable(*blockEntries, func(i, j int) bool {
@@ -530,13 +769,23 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				place = len(texIDs[layer])
 				texIDs[layer][name] = place
 			}
+			if place > 512 {
+				fmt.Println("warn: overrun for", ent.Name, place)
+				return
+			}
 			tex := pack.Textures[name]
+			if tex == nil {
+				fmt.Println("warn: nil texture for", ent.Name, name)
+				return
+			}
 			x0 := (place * 16) % 512
 			y0 := (place / 32) * 16
 			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
 		if tr, ok := pack.Translations["block.minecraft."+ent.Name]; ok {
+			ent.DisplayName = tr
+		} else if tr, ok := pack.Translations["block.minecraft."+rp.RemoveDefaultPrefix(ent.Name)]; ok {
 			ent.DisplayName = tr
 		}
 
@@ -604,7 +853,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					model.Template[2*i+1] |= uint32(tid>>8) << 30
 				}
 			}
-			if ent.Name == "water" {
+			if rp.RemoveDefaultPrefix(ent.Name) == "water" {
 				model.Template[1] |= 1 << 31
 			}
 			if genDebug == "all" || genDebug == ent.Name {
@@ -614,5 +863,68 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			}
 		}
 	}
-	return meta, atlases
+
+	// Build UBOs for each layer
+	ubos := map[string][]UBOModelEntry{}
+	for l := 0; l < int(NumRenderLayers); l++ {
+		layerName := LayerNames[l]
+		numTids := len(texIDs[l])
+		entries := make([]UBOModelEntry, numTids)
+
+		// Fill with default full cube bounds first
+		for i := range entries {
+			entries[i] = UBOModelEntry{
+				From: []float32{0, 0, 0},
+				To:   []float32{16, 16, 16},
+			}
+		}
+
+		for texName, tid := range texIDs[l] {
+			if tid < len(entries) {
+				if meta, ok := converter.TextureBounds[texName]; ok {
+					var texIds []int
+					if l == int(LayerCuboid) && len(meta.TexNames) == 6 {
+						texIds = make([]int, 6)
+						for i, t := range meta.TexNames {
+							texIds[i] = texIDs[l][rp.RemoveDefaultPrefix(t)]
+						}
+					}
+					entries[tid] = UBOModelEntry{
+						From:   meta.Bounds[:3],
+						To:     meta.Bounds[3:],
+						UVs:    meta.UVs,
+						TexIDs: texIds,
+					}
+				}
+			}
+		}
+		ubos[layerName] = entries
+	}
+
+	return meta, atlases, ubos
+}
+
+type UBOModelEntry struct {
+	From   []float32   `json:"from"`
+	To     []float32   `json:"to"`
+	UVs    [][]float32 `json:"uvs,omitempty"`
+	TexIDs []int       `json:"tex_ids,omitempty"`
+}
+
+func getModelBounds(model *rp.Model) ([]float32, []float32) {
+	if len(model.Elements) == 0 {
+		return []float32{0, 0, 0}, []float32{16, 16, 16}
+	}
+	minX, minY, minZ := 16.0, 16.0, 16.0
+	maxX, maxY, maxZ := 0.0, 0.0, 0.0
+	for _, el := range model.Elements {
+		minX = min(minX, el.From[0])
+		minY = min(minY, el.From[1])
+		minZ = min(minZ, el.From[2])
+		maxX = max(maxX, el.To[0])
+		maxY = max(maxY, el.To[1])
+		maxZ = max(maxZ, el.To[2])
+	}
+	return []float32{float32(minX), float32(minY), float32(minZ)},
+		[]float32{float32(maxX), float32(maxY), float32(maxZ)}
 }

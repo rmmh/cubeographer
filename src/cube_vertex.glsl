@@ -10,6 +10,17 @@ precision highp int;
 
 //DEFINESBLOCK
 
+#ifdef CUBOID
+struct Cuboid {
+    vec2 packed;
+    vec4 uvSides[6];
+};
+
+layout(std140) uniform CuboidMetadata {
+    Cuboid cuboid[512];
+};
+#endif
+
 uniform mat4 modelViewMatrix; // optional
 uniform mat4 projectionMatrix; // optional
 uniform vec3 cameraPosition;
@@ -32,6 +43,9 @@ vec3 unpackPos(uint p) { // 26b pos (9b,8b,9b each) => vec3
 }
 
 vec3 unpackColor(int blockId, uint color) {
+#ifdef CUBOID
+    return vec3(1.0);
+#endif
     // TODO: read biome color from texture?
     if ((color & (1u << 31)) == 0u)
         return vec3(1.0);
@@ -70,17 +84,45 @@ void main()	{
 #else
     bool sideSpecial = face >= 4 && (attr.y & (1u<<30)) != 0u;
 #endif
+
+#ifdef CUBOID
+    sideSpecial = false;
+#endif
+
     vColor = vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
-    gl_Position = projectionMatrix * modelViewMatrix *
-        vec4((shouldFlip ? vec3(1) - position : position) + unpackedPos, 1.0 );
+
+#ifdef CUBOID
+    uint packedFrom = uint(cuboid[blockId].packed.x);
+    uint packedTo = uint(cuboid[blockId].packed.y);
+    vec3 from = vec3(float(packedFrom & 255u), float((packedFrom >> 8u) & 255u), float((packedFrom >> 16u) & 255u));
+    vec3 to = vec3(float(packedTo & 255u), float((packedTo >> 8u) & 255u), float((packedTo >> 16u) & 255u));
+    vec3 scale = (to - from) / 16.0;
+    vec3 localOffset = from / 16.0;
+    vec3 localPos = (shouldFlip ? vec3(1.0) - position : position) * scale + localOffset;
+#else
+    vec3 localPos = shouldFlip ? vec3(1.0) - position : position;
+#endif
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(localPos + unpackedPos, 1.0 );
     vNormal = normal * vec3(shouldFlip ? -1.0 : 1.0);
 #endif // CROSS
-    int block = (blockId + (sideSpecial ? 256 : 0));
-    vec2 primCoord;
-    primCoord = vec2(float(uv.x), float(uv.y)) * (1.0-1./128.) + vec2(1./256.);
+    vec2 localUV = vec2(uv.x, uv.y);
+
 #ifdef CROSS
-    vTexCoord = (vec2(1) - primCoord + vec2(block % 32, block / 32)) / 32.0;
+    vec2 mappedLocalUV = vec2(1.0) - localUV;
 #else
-    vTexCoord = ((shouldFlip ?  primCoord : vec2(1) - primCoord) + vec2(block % 32, block / 32)) / 32.0;
+    vec2 mappedLocalUV = shouldFlip ? localUV : vec2(1.0) - localUV;
+#endif
+
+#ifdef CUBOID
+    vec4 faceUv = cuboid[blockId].uvSides[face];
+    vec2 atlasCoord = mix(faceUv.xy, faceUv.zw, mappedLocalUV);
+    vec2 tileCenter = floor(min(faceUv.xy, faceUv.zw)) + 0.5;
+    atlasCoord = mix(tileCenter, atlasCoord, 1.0 - 1.0/128.0);
+    vTexCoord = atlasCoord / 32.0;
+#else
+    vec2 primCoord = mappedLocalUV * (1.0-1./128.) + vec2(1./256.);
+    int block = (blockId + (sideSpecial ? 256 : 0));
+    vTexCoord = (primCoord + vec2(block % 32, block / 32)) / 32.0;
 #endif
 }

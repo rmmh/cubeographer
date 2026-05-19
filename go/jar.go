@@ -19,7 +19,7 @@ import (
 var clientJarPath = flag.String("jar", "", "use specific client jar")
 var clientJarVersion = flag.String("version", "latest", "specify client version to download")
 
-var genDebug = flag.String("gendebug", "", "debug specific block name (or \"all\")")
+var genDebug = flag.String("gendebug", "", "debug specific block name, \"all\", or \"improper\"")
 
 func generate(outDir string) {
 	fmt.Println("generating textures")
@@ -46,7 +46,7 @@ func generate(outDir string) {
 		log.Fatal(err)
 	}
 
-	meta, atlases := render.Prepare(pack, *genDebug)
+	meta, atlases, ubos := render.Prepare(pack, *genDebug)
 
 	os.MkdirAll(path.Join(outDir, "textures"), 0755)
 
@@ -60,6 +60,15 @@ func generate(outDir string) {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	uboBuf, err := json.Marshal(ubos)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = os.WriteFile(path.Join(outDir, "textures", "layer_ubos.json"), uboBuf, 0644)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	layerCounts := map[int]int{}

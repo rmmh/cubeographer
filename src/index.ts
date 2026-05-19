@@ -542,13 +542,14 @@ function makeCube() {
 let cube = makeCube();
 
 
-const layerNames = ["CUBE", "VOXEL", "CROSS", "CROP", "CUBE_FALLBACK"]
+const layerNames = ["CUBE", "VOXEL", "CROSS", "CROP", "CUBOID", "CUBE_FALLBACK"]
 let layers = [
     makeCubeLayer("CUBE", "textures/atlas0.png"),
     makeCubeLayer("VOXEL", "textures/atlas1.png", { VOXEL: 1 }),
     makeCrossLayer("CROSS", "textures/atlas2.png", { CROSS: 1 }),
     makeCropLayer("CROP", "textures/atlas3.png", { CROSS: 1 }),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas4.png", { WATER_ID: 1, FALLBACK: 1 })
+    makeCubeLayer("CUBOID", "textures/atlas4.png", { CUBOID: 1 }),
+    makeCubeLayer("CUBE_FALLBACK", "textures/atlas5.png", { WATER_ID: 1, FALLBACK: 1 })
 ];
 
 let willRender = false;
@@ -749,6 +750,71 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
     controls.update();
 }
+
+let cuboidUBOData = new Float32Array(512 * 28);
+
+// Default to standard full cube [0, 0, 0] -> [16, 16, 16] for all slots
+// and default UVs [0, 0, 16, 16] for all faces
+for (let i = 0; i < 512; i++) {
+    cuboidUBOData[28 * i + 0] = 0;
+    cuboidUBOData[28 * i + 1] = 16 | (16 << 8) | (16 << 16);
+    // 2 and 3 are padding for std140 vec4 alignment
+    let tx = i % 32;
+    let ty = Math.floor(i / 32);
+    for (let f = 0; f < 6; f++) {
+        cuboidUBOData[28 * i + 4 + 4 * f + 0] = tx;
+        cuboidUBOData[28 * i + 4 + 4 * f + 1] = ty;
+        cuboidUBOData[28 * i + 4 + 4 * f + 2] = 1 + tx;
+        cuboidUBOData[28 * i + 4 + 4 * f + 3] = 1 + ty;
+    }
+}
+
+fetch("textures/layer_ubos.json")
+    .then(r => r.json())
+    .then(data => {
+        const cuboidList = data["CUBOID"] || [];
+        for (let i = 0; i < cuboidList.length; i++) {
+            if (i >= 512) break;
+            const entry = cuboidList[i];
+            if (entry && entry.from && entry.to) {
+                cuboidUBOData[28 * i + 0] = entry.from[0] | (entry.from[1] << 8) | (entry.from[2] << 16);
+                cuboidUBOData[28 * i + 1] = entry.to[0] | (entry.to[1] << 8) | (entry.to[2] << 16);
+                if (entry.uvs) {
+                    for (let f = 0; f < 6; f++) {
+                        if (entry.uvs[f]) {
+                            let tid = entry.tex_ids ? entry.tex_ids[f] : i;
+                            let tx = tid % 32;
+                            let ty = Math.floor(tid / 32);
+                            cuboidUBOData[28 * i + 4 + 4 * f + 0] = entry.uvs[f][0] / 16.0 + tx;
+                            cuboidUBOData[28 * i + 4 + 4 * f + 1] = entry.uvs[f][1] / 16.0 + ty;
+                            cuboidUBOData[28 * i + 4 + 4 * f + 2] = entry.uvs[f][2] / 16.0 + tx;
+                            cuboidUBOData[28 * i + 4 + 4 * f + 3] = entry.uvs[f][3] / 16.0 + ty;
+                        }
+                    }
+                }
+            }
+        }
+
+        const gl = context.gl;
+        const uboBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.UNIFORM_BUFFER, uboBuffer);
+        gl.bufferData(gl.UNIFORM_BUFFER, cuboidUBOData, gl.STATIC_DRAW);
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, uboBuffer);
+
+        const cuboidLayer = layers.find(l => l.name === "CUBOID");
+        if (cuboidLayer) {
+            const prog = cuboidLayer.material.program;
+            const blockIndex = gl.getUniformBlockIndex(prog, "CuboidMetadata");
+            if (blockIndex !== gl.INVALID_INDEX) {
+                gl.uniformBlockBinding(prog, blockIndex, 0);
+            }
+        }
+
+        render();
+    })
+    .catch(err => {
+        console.error("failed to load layer_ubos.json", err);
+    });
 
 setTimeout(function () {
     const choice: string = 'center';
