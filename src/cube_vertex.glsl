@@ -11,14 +11,17 @@ precision highp int;
 //DEFINESBLOCK
 
 #ifdef CUBOID
-struct Cuboid {
-    vec2 packed;
-    vec4 uvSides[6];
-};
+uniform highp usampler2D cuboidDataTex;
 
-layout(std140) uniform CuboidMetadata {
-    Cuboid cuboid[512];
-};
+uvec4 fetchCuboidPixel(int blockId, int pixelOffset) {
+    int pixelIndex = (blockId << 2) + pixelOffset;
+    ivec2 texCoord = ivec2(pixelIndex & 511, pixelIndex >> 9);
+    return texelFetch(cuboidDataTex, texCoord, 0);
+}
+
+vec2 unpackUV(uint p) {
+    return vec2(float(p & 0xFFFFu) / 256.0, float(p >> 16u) / 256.0);
+}
 #endif
 
 uniform mat4 modelViewMatrix; // optional
@@ -78,8 +81,9 @@ void main()	{
 #else
 
 #ifdef CUBOID
-    uint packedFrom = uint(cuboid[blockId].packed.x);
-    uint packedTo = uint(cuboid[blockId].packed.y);
+    uvec4 p0 = fetchCuboidPixel(blockId, 0);
+    uint packedFrom = p0.r;
+    uint packedTo = p0.g;
     vec3 from = vec3(float(packedFrom & 255u), float((packedFrom >> 8u) & 255u), float((packedFrom >> 16u) & 255u));
     vec3 to = vec3(float(packedTo & 255u), float((packedTo >> 8u) & 255u), float((packedTo >> 16u) & 255u));
     vec3 worldMidpoint = unpackedPos + offset + (from + to) / 32.0;
@@ -127,7 +131,11 @@ void main()	{
 #endif
 
 #ifdef CUBOID
-    vec4 faceUv = cuboid[blockId].uvSides[face];
+    int pixelOffset = 1 + (face >> 1);
+    uvec4 pixelData = fetchCuboidPixel(blockId, pixelOffset);
+    uint packedUVStart = ((face & 1) == 0) ? pixelData.r : pixelData.b;
+    uint packedUVEnd = ((face & 1) == 0) ? pixelData.g : pixelData.a;
+    vec4 faceUv = vec4(unpackUV(packedUVStart), unpackUV(packedUVEnd));
 
     // Extract block atlas offset using floor on minimum bounds
     float tx = floor(min(faceUv.x, faceUv.z));

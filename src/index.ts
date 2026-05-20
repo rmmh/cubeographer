@@ -751,64 +751,96 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     controls.update();
 }
 
-let cuboidUBOData = new Float32Array(512 * 28);
+const cuboidTextureData = new Uint32Array(512 * 512 * 4);
 
 // Default to standard full cube [0, 0, 0] -> [16, 16, 16] for all slots
-// and default UVs [0, 0, 16, 16] for all faces
-for (let i = 0; i < 512; i++) {
-    cuboidUBOData[28 * i + 0] = 0;
-    cuboidUBOData[28 * i + 1] = 16 | (16 << 8) | (16 << 16);
-    // 2 and 3 are padding for std140 vec4 alignment
-    let tx = i % 32;
-    let ty = Math.floor(i / 32);
+// and default UVs [0, 0, 16, 16] for all faces using Option 2 (4 pixels per cuboid)
+for (let i = 0; i < 65536; i++) {
+    const offset = 16 * i;
+    cuboidTextureData[offset + 0] = 0;
+    cuboidTextureData[offset + 1] = 16 | (16 << 8) | (16 << 16);
+    cuboidTextureData[offset + 2] = 0; // unused
+    cuboidTextureData[offset + 3] = 0; // unused
+
+    const tx = i % 32;
+    const ty = Math.floor(i / 32);
+
     for (let f = 0; f < 6; f++) {
-        cuboidUBOData[28 * i + 4 + 4 * f + 0] = tx;
-        cuboidUBOData[28 * i + 4 + 4 * f + 1] = ty;
-        cuboidUBOData[28 * i + 4 + 4 * f + 2] = 1 + tx;
-        cuboidUBOData[28 * i + 4 + 4 * f + 3] = 1 + ty;
+        const uMin = tx;
+        const vMin = ty;
+        const uMax = 1 + tx;
+        const vMax = 1 + ty;
+
+        const packedMin = Math.round(uMin * 256.0) | (Math.round(vMin * 256.0) << 16);
+        const packedMax = Math.round(uMax * 256.0) | (Math.round(vMax * 256.0) << 16);
+
+        cuboidTextureData[offset + 4 + 2 * f] = packedMin;
+        cuboidTextureData[offset + 4 + 2 * f + 1] = packedMax;
     }
 }
+
+const gl = context.gl;
+const cuboidDataTexture = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, cuboidDataTexture);
+gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA32UI,
+    512,
+    512,
+    0,
+    gl.RGBA_INTEGER,
+    gl.UNSIGNED_INT,
+    cuboidTextureData
+);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+context.cuboidDataTex = cuboidDataTexture;
 
 fetch("textures/layer_ubos.json")
     .then(r => r.json())
     .then(data => {
         const cuboidList = data["CUBOID"] || [];
         for (let i = 0; i < cuboidList.length; i++) {
-            if (i >= 512) break;
+            if (i >= 65536) break;
             const entry = cuboidList[i];
             if (entry && entry.from && entry.to) {
-                cuboidUBOData[28 * i + 0] = entry.from[0] | (entry.from[1] << 8) | (entry.from[2] << 16);
-                cuboidUBOData[28 * i + 1] = entry.to[0] | (entry.to[1] << 8) | (entry.to[2] << 16);
+                const offset = 16 * i;
+                cuboidTextureData[offset + 0] = entry.from[0] | (entry.from[1] << 8) | (entry.from[2] << 16);
+                cuboidTextureData[offset + 1] = entry.to[0] | (entry.to[1] << 8) | (entry.to[2] << 16);
                 if (entry.uvs) {
                     for (let f = 0; f < 6; f++) {
                         if (entry.uvs[f]) {
                             let tid = entry.tex_ids ? entry.tex_ids[f] : i;
                             let tx = tid % 32;
                             let ty = Math.floor(tid / 32);
-                            cuboidUBOData[28 * i + 4 + 4 * f + 0] = entry.uvs[f][0] / 16.0 + tx;
-                            cuboidUBOData[28 * i + 4 + 4 * f + 1] = entry.uvs[f][1] / 16.0 + ty;
-                            cuboidUBOData[28 * i + 4 + 4 * f + 2] = entry.uvs[f][2] / 16.0 + tx;
-                            cuboidUBOData[28 * i + 4 + 4 * f + 3] = entry.uvs[f][3] / 16.0 + ty;
+
+                            const uMin = entry.uvs[f][0] / 16.0 + tx;
+                            const vMin = entry.uvs[f][1] / 16.0 + ty;
+                            const uMax = entry.uvs[f][2] / 16.0 + tx;
+                            const vMax = entry.uvs[f][3] / 16.0 + ty;
+
+                            cuboidTextureData[offset + 4 + 2 * f] = Math.round(uMin * 256.0) | (Math.round(vMin * 256.0) << 16);
+                            cuboidTextureData[offset + 4 + 2 * f + 1] = Math.round(uMax * 256.0) | (Math.round(vMax * 256.0) << 16);
                         }
                     }
                 }
             }
         }
 
-        const gl = context.gl;
-        const uboBuffer = gl.createBuffer();
-        gl.bindBuffer(gl.UNIFORM_BUFFER, uboBuffer);
-        gl.bufferData(gl.UNIFORM_BUFFER, cuboidUBOData, gl.STATIC_DRAW);
-        gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, uboBuffer);
-
-        const cuboidLayer = layers.find(l => l.name === "CUBOID");
-        if (cuboidLayer) {
-            const prog = cuboidLayer.material.program;
-            const blockIndex = gl.getUniformBlockIndex(prog, "CuboidMetadata");
-            if (blockIndex !== gl.INVALID_INDEX) {
-                gl.uniformBlockBinding(prog, blockIndex, 0);
-            }
-        }
+        gl.bindTexture(gl.TEXTURE_2D, cuboidDataTexture);
+        gl.texSubImage2D(
+            gl.TEXTURE_2D,
+            0,
+            0, 0,
+            512, 512,
+            gl.RGBA_INTEGER,
+            gl.UNSIGNED_INT,
+            cuboidTextureData
+        );
 
         render();
     })

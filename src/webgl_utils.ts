@@ -158,7 +158,7 @@ export function createProgramFromSources(
  * Returns the corresponding bind point for a given sampler type
  */
 function getBindPointForSamplerType(gl: WebGLRenderingContext|any, type: number) {
-    if (type === gl.SAMPLER_2D) return gl.TEXTURE_2D;        // eslint-disable-line
+    if (type === gl.SAMPLER_2D || type === (gl as any).UNSIGNED_INT_SAMPLER_2D) return gl.TEXTURE_2D;        // eslint-disable-line
     if (type === gl.SAMPLER_CUBE) return gl.TEXTURE_CUBE_MAP;  // eslint-disable-line
     if (type === gl.SAMPLER_2D_ARRAY) return gl.TEXTURE_2D_ARRAY;
     return undefined;
@@ -279,7 +279,7 @@ export function createUniformSetters(gl: WebGLRenderingContext, program: WebGLPr
                 gl.uniformMatrix4fv(location, false, v);
             };
         }
-        if ((type === gl.SAMPLER_2D || type === gl.SAMPLER_CUBE || type === (gl as any).SAMPLER_2D_ARRAY) && isArray) {
+        if ((type === gl.SAMPLER_2D || type === gl.SAMPLER_CUBE || type === (gl as any).SAMPLER_2D_ARRAY || type === (gl as any).UNSIGNED_INT_SAMPLER_2D) && isArray) {
             const units = [];
             for (let ii = 0; ii < uniformInfo.size; ++ii) {
                 units.push(textureUnit++);
@@ -294,7 +294,7 @@ export function createUniformSetters(gl: WebGLRenderingContext, program: WebGLPr
                 };
             }(getBindPointForSamplerType(gl, type), units);
         }
-        if (type === gl.SAMPLER_2D || type === gl.SAMPLER_CUBE || type === (gl as any).SAMPLER_2D_ARRAY) {
+        if (type === gl.SAMPLER_2D || type === gl.SAMPLER_CUBE || type === (gl as any).SAMPLER_2D_ARRAY || type === (gl as any).UNSIGNED_INT_SAMPLER_2D) {
             return function (bindPoint, unit) {
                 return function (texture: WebGLTexture) {
                     gl.uniform1i(location, unit);

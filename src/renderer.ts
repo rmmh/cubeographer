@@ -127,6 +127,7 @@ export class Context {
     canvas: HTMLCanvasElement
     gl: WebGL2RenderingContext
     clearColor: vec4
+    cuboidDataTex?: WebGLTexture
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -432,6 +433,10 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
         bind(mat, layer.geometry)
 
         mat.uniformSetters.atlas(layer.texture);
+
+        if (mat.uniformSetters.cuboidDataTex && context.cuboidDataTex) {
+            mat.uniformSetters.cuboidDataTex(context.cuboidDataTex);
+        }
 
         // Selectively configure blending and alpha cutout per layer:
         // CUBE_FALLBACK (contains water/translucent elements) uses alpha blending.
