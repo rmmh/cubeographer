@@ -111,11 +111,11 @@ type ModelEntry struct {
 }
 
 type BlockEntry struct {
-	Name        string       `json:"name"`
-	DisplayName string       `json:"display_name"`
-	States      [][]string   `json:"states,omitempty"`
-	Solid       bool         `json:"solid,omitempty"`
-	Templates   []ModelEntry `json:"templates"`
+	Name        string         `json:"name"`
+	DisplayName string         `json:"display_name"`
+	States      [][]string     `json:"states,omitempty"`
+	Solid       bool           `json:"solid,omitempty"`
+	Templates   [][]ModelEntry `json:"templates"`
 }
 
 type BlockEntryMetadata struct {
@@ -488,7 +488,7 @@ func (s *StateConverter) resolveInheritance(model *rp.Model) {
 	}
 }
 
-func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEntry {
+func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelEntry {
 	modelName := rp.RemoveDefaultPrefix(ms.Model)
 	// TODO: check for modelspec X/Y rotations etc
 	model := s.Models[modelName]
@@ -533,17 +533,6 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		}
 	}
 
-	cubeSpec := renderCube(model)
-	if cubeSpec != nil {
-		if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
-			cubeSpec.Layer = LayerVoxel
-		}
-		if s.Debug == "all" || s.Debug == name {
-			fmt.Printf("CUBE %#v\n", cubeSpec)
-		}
-		return *cubeSpec
-	}
-
 	cleanName := rp.RemoveDefaultPrefix(name)
 	if cleanName == "grass_block" || cleanName == "grass" {
 		// render grass blocks as two cubes:
@@ -552,27 +541,50 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		if s.Debug == "all" || s.Debug == name {
 			fmt.Println("CUBE(GRASS)", name)
 		}
-		return ModelEntry{
+		return []ModelEntry{{
 			Layer:    LayerCube,
 			Textures: []string{model.Textures["side"], model.Textures["bottom"], model.Textures["overlay"], model.Textures["top"]},
 			Template: []uint32{0, 0b101111 | 1<<30, 0, 0b011111 | 3<<30},
-		}
+		}}
 	}
 
 	if cleanName == "water" && model.Textures != nil && model.Textures["particle"] == "block/water_still" {
-		return ModelEntry{
+		return []ModelEntry{{
 			Layer:    LayerCubeFallback,
 			Textures: []string{"block/water_still"},
 			Template: []uint32{0, 0b111111},
+		}}
+	}
+
+	var out []ModelEntry
+	for _, el := range model.Elements {
+		subModel := *model
+		subModel.Elements = []*rp.ModelElement{el}
+
+		cubeSpec := renderCube(&subModel)
+		if cubeSpec != nil {
+			if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
+				cubeSpec.Layer = LayerVoxel
+			}
+			if s.Debug == "all" || s.Debug == name {
+				fmt.Printf("CUBE %#v\n", cubeSpec)
+			}
+			out = append(out, *cubeSpec)
+			continue
+		}
+
+		cuboidSpec := s.renderCuboid(&subModel)
+		if cuboidSpec != nil {
+			if s.Debug == "all" || s.Debug == name {
+				fmt.Printf("CUBOID %#v\n", cuboidSpec)
+			}
+			out = append(out, *cuboidSpec)
+			continue
 		}
 	}
 
-	cuboidSpec := s.renderCuboid(model)
-	if cuboidSpec != nil {
-		if s.Debug == "all" || s.Debug == name {
-			fmt.Printf("CUBOID %#v\n", cuboidSpec)
-		}
-		return *cuboidSpec
+	if len(out) > 0 {
+		return out
 	}
 
 	if model.Parent == "minecraft:block/cross" {
@@ -580,28 +592,28 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 		if s.Debug == "all" || s.Debug == name {
 			fmt.Println("CROSS", name, tex)
 		}
-		return ModelEntry{
+		return []ModelEntry{{
 			Layer:    LayerCross,
 			Textures: []string{tex},
-			Template: []uint32{0, 0b1111111}}
+			Template: []uint32{0, 0b1111111}}}
 	} else if model.Parent == "minecraft:block/tinted_cross" {
 		tex := model.Textures["cross"]
 		if s.Debug == "all" || s.Debug == name {
 			fmt.Println("TINTED_CROSS", name, tex)
 		}
-		return ModelEntry{
+		return []ModelEntry{{
 			Layer:    LayerCross,
 			Textures: []string{tex},
-			Template: []uint32{0, 0b111111 | 1<<31}}
+			Template: []uint32{0, 0b111111 | 1<<31}}}
 	} else if model.Parent == "minecraft:block/crop" {
 		tex := model.Textures["crop"]
 		if s.Debug == "all" || s.Debug == name {
 			fmt.Println("CROP", name, tex)
 		}
-		return ModelEntry{
+		return []ModelEntry{{
 			Layer:    LayerCrop,
 			Textures: []string{tex},
-			Template: []uint32{0, 0b1111111}}
+			Template: []uint32{0, 0b1111111}}}
 	}
 
 	if s.Debug == "all" || s.Debug == name {
@@ -637,26 +649,26 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) ModelEnt
 			fmt.Printf("IMPROPER %s (%s): fallback to cube, %s, textures: %v\n", name, modelName, reason, textures)
 		}
 		layer := LayerCubeFallback
-		return ModelEntry{Layer: layer, Textures: []string{tex}, Template: []uint32{0, meta}}
+		return []ModelEntry{{Layer: layer, Textures: []string{tex}, Template: []uint32{0, meta}}}
 	}
 
 	if s.Debug == "improper" {
 		fmt.Printf("IMPROPER %s (%s): unhandled model (no textures), elements: %d\n", name, modelName, len(model.Elements))
 	}
-	return ModelEntry{Layer: -1}
+	return nil
 }
 
 func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 	slist := buildStateList(st)
 	smap := BuildStateMap(slist)
 	if st.Variants[""] != nil {
-		model := s.renderModelSpec(name, &st.Variants[""][0])
-		if model.Layer >= 0 {
-			return BlockEntry{Name: name, States: slist, Templates: []ModelEntry{model}}
+		models := s.renderModelSpec(name, &st.Variants[""][0])
+		if len(models) > 0 {
+			return BlockEntry{Name: name, States: slist, Templates: [][]ModelEntry{models}}
 		}
 	}
 	if len(st.Variants) > 0 {
-		tmpls := make([]ModelEntry, smap.Max()+1)
+		tmpls := make([][]ModelEntry, smap.Max()+1)
 		for props, models := range st.Variants {
 			tmpls[int(smap.Get(props))] = s.renderModelSpec(name, &models[0])
 		}
@@ -681,8 +693,8 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 		if s.Debug == "improper" {
 			fmt.Printf("IMPROPER MULTI %s: blockstate uses multipart/variants but fallback to single texture cube, textures: %v\n", name, textures)
 		}
-		return BlockEntry{Name: name, States: slist, Templates: []ModelEntry{
-			{Layer: LayerCubeFallback, Textures: []string{tex}, Template: []uint32{0, tint}}}}
+		return BlockEntry{Name: name, States: slist, Templates: [][]ModelEntry{
+			{{Layer: LayerCubeFallback, Textures: []string{tex}, Template: []uint32{0, tint}}}}}
 	}
 
 	return BlockEntry{}
@@ -837,153 +849,162 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			ent.DisplayName = tr
 		}
 
-		for ti := range ent.Templates {
-			model := &ent.Templates[ti]
-			if model.Textures == nil {
-				continue
-			}
-			for tIdx := range model.Textures {
-				model.Textures[tIdx] = rp.RemoveDefaultPrefix(model.Textures[tIdx])
-			}
+		for sIdx := range ent.Templates {
+			for ti := range ent.Templates[sIdx] {
+				model := &ent.Templates[sIdx][ti]
+				if model.Textures == nil {
+					continue
+				}
+				for tIdx := range model.Textures {
+					model.Textures[tIdx] = rp.RemoveDefaultPrefix(model.Textures[tIdx])
+				}
 
-			layer := model.Layer
-			if len(model.Textures)+len(texIDs[layer]) >= 512 {
-				fmt.Println("warn: overrun for", ent.Name)
-				break
-			}
-			if layer == LayerCube {
-				splatTexture(layer, model.Textures[0], 0)
-				if len(model.Textures) > 1 {
-					splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+256)
-					if len(model.Textures) == 4 { // grass_block
-						splatTexture(layer, model.Textures[2], 0)
-						splatTexture(layer, model.Textures[3], texIDs[layer][model.Textures[2]]+256)
-					} else if len(model.Textures) == 3 {
-						splatTexture(layer, model.Textures[2], texIDs[layer][model.Textures[0]]+512)
-					} else {
-						splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+512)
+				layer := model.Layer
+				if len(model.Textures)+len(texIDs[layer]) >= 512 {
+					fmt.Println("warn: overrun for", ent.Name)
+					break
+				}
+				if layer == LayerCube {
+					splatTexture(layer, model.Textures[0], 0)
+					if len(model.Textures) > 1 {
+						splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+256)
+						if len(model.Textures) == 4 { // grass_block
+							splatTexture(layer, model.Textures[2], 0)
+							splatTexture(layer, model.Textures[3], texIDs[layer][model.Textures[2]]+256)
+						} else if len(model.Textures) == 3 {
+							splatTexture(layer, model.Textures[2], texIDs[layer][model.Textures[0]]+512)
+						} else {
+							splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+512)
+						}
 					}
-				}
-			} else {
-				for _, tex := range model.Textures {
-					splatTexture(layer, tex, 0)
-					if layer == LayerCuboid {
-						splatTexture(LayerCubeFallback, tex, 0)
-					}
-				}
-			}
-
-			var tid int
-			if layer == LayerCuboid {
-				key := cuboidKey{}
-				if len(model.Bounds) == 6 {
-					copy(key.Bounds[:], model.Bounds)
-				}
-				for i := range model.UVs {
-					if i < 6 && len(model.UVs[i]) == 4 {
-						copy(key.UVs[i][:], model.UVs[i])
-					}
-				}
-				for i := range model.Textures {
-					if i < 6 {
-						key.Textures[i] = model.Textures[i]
-					}
-				}
-				key.Tint = (model.Template[1] & (1 << 31)) != 0
-
-				if existingTid, ok := cuboidCache[key]; ok {
-					tid = existingTid
 				} else {
-					if cuboidCount >= 2047 {
-						// UBO is full (2048 max)! Fallback to LayerCubeFallback
-						fmt.Println("cuboid UBO full for", ent.DisplayName)
-						layer = LayerCubeFallback
-						model.Layer = LayerCubeFallback
-						tName := rp.RemoveDefaultPrefix(model.Textures[0])
-						tid = texIDs[LayerCubeFallback][tName]
-					} else {
-						cuboidCount++
-						tid = cuboidCount
-						cuboidCache[key] = tid
+					for _, tex := range model.Textures {
+						splatTexture(layer, tex, 0)
+						if layer == LayerCuboid {
+							splatTexture(LayerCubeFallback, tex, 0)
+						}
+					}
+				}
 
-						var texIds []int
-						if len(model.Textures) == 6 {
-							texIds = make([]int, 6)
-							for i, t := range model.Textures {
-								texIds[i] = texIDs[LayerCuboid][rp.RemoveDefaultPrefix(t)]
+				var tid int
+				if layer == LayerCuboid {
+					key := cuboidKey{}
+					if len(model.Bounds) == 6 {
+						copy(key.Bounds[:], model.Bounds)
+					}
+					for i := range model.UVs {
+						if i < 6 && len(model.UVs[i]) == 4 {
+							copy(key.UVs[i][:], model.UVs[i])
+						}
+					}
+					for i := range model.Textures {
+						if i < 6 {
+							key.Textures[i] = model.Textures[i]
+						}
+					}
+					key.Tint = (model.Template[1] & (1 << 31)) != 0
+
+					if existingTid, ok := cuboidCache[key]; ok {
+						tid = existingTid
+					} else {
+						if cuboidCount >= 2047 {
+							// UBO is full (2047 max)! Fallback to LayerCubeFallback
+							fmt.Println("cuboid UBO full for", ent.DisplayName)
+							layer = LayerCubeFallback
+							model.Layer = LayerCubeFallback
+							tName := rp.RemoveDefaultPrefix(model.Textures[0])
+							tid = texIDs[LayerCubeFallback][tName]
+						} else {
+							cuboidCount++
+							tid = cuboidCount
+							cuboidCache[key] = tid
+
+							var texIds []int
+							if len(model.Textures) == 6 {
+								texIds = make([]int, 6)
+								for i, t := range model.Textures {
+									texIds[i] = texIDs[LayerCuboid][rp.RemoveDefaultPrefix(t)]
+								}
+							}
+							cuboidEntries[tid] = UBOModelEntry{
+								From:   model.Bounds[:3],
+								To:     model.Bounds[3:],
+								UVs:    model.UVs,
+								TexIDs: texIds,
+								Tint:   key.Tint,
 							}
 						}
-						cuboidEntries[tid] = UBOModelEntry{
-							From:   model.Bounds[:3],
-							To:     model.Bounds[3:],
-							UVs:    model.UVs,
-							TexIDs: texIds,
-							Tint:   key.Tint,
-						}
+					}
+				} else {
+					tid = texIDs[layer][model.Textures[0]]
+					if tid >= 256 && layer == LayerCube {
+						panic(fmt.Sprintf("texID too large! layer %d %#v: %v\n%v", layer, ent, tid, texIDs))
+					}
+					if tid >= 512 {
+						panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
 					}
 				}
-			} else {
-				tid = texIDs[layer][model.Textures[0]]
-				if tid >= 256 && layer == LayerCube {
-					panic(fmt.Sprintf("texID too large! layer %d %#v: %v\n%v", layer, ent, tid, texIDs))
-				}
-				if tid >= 512 {
-					panic(fmt.Sprintf("texID too large! %#v: %v", ent, tid))
-				}
-			}
 
-			model.Template[0] |= uint32(tid) << 24
-			if layer == LayerCuboid {
-				model.Template[1] &= ^uint32(1 << 31) // clear tint bit to avoid collision
-				model.Template[1] &= ^uint32(1 << 4)  // clear bit 4 (up face visibility)
-				model.Template[1] |= uint32((tid&0x3FF)>>8) << 30
-				model.Template[1] |= uint32((tid>>10)&1) << 4
-			} else {
-				model.Template[1] |= uint32(tid>>8) << 30
-			}
-			cleanName := rp.RemoveDefaultPrefix(ent.Name)
-			if (cleanName == "grass_block" || cleanName == "grass") && len(model.Template) == 4 {
-				// render grass blocks as two cubes:
-				// * the dirt sides and bottom (no top)
-				// * the tinted grass top and side overlay (no bottom)
-				model.Template[2] |= uint32(texIDs[layer][model.Textures[2]]) << 24
-			} else if layer == LayerVoxel && len(model.Textures) > 1 {
-				for i, t := range model.Textures {
-					tid := texIDs[layer][t]
-					model.Template[2*i] |= uint32(tid) << 24
-					model.Template[2*i+1] |= uint32(tid>>8) << 30
+				model.Template[0] |= uint32(tid) << 24
+				if layer == LayerCuboid {
+					model.Template[1] &= ^uint32(1 << 31) // clear tint bit to avoid collision
+					model.Template[1] &= ^uint32(1 << 4)  // clear bit 4 (up face visibility)
+					model.Template[1] |= uint32((tid&0x3FF)>>8) << 30
+					model.Template[1] |= uint32((tid>>10)&1) << 4
+				} else {
+					model.Template[1] |= uint32(tid>>8) << 30
 				}
-			}
-			if rp.RemoveDefaultPrefix(ent.Name) == "water" {
-				model.Template[1] |= 1 << 31
-			}
-			if genDebug == "all" || genDebug == ent.Name {
-				fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
-					layer, ent.Name, model.Textures, tid, pack.Textures[model.Textures[0]].Bounds(),
-					model.Template[0], model.Template[1])
+				cleanName := rp.RemoveDefaultPrefix(ent.Name)
+				if (cleanName == "grass_block" || cleanName == "grass") && len(model.Template) == 4 {
+					// render grass blocks as two cubes:
+					// * the dirt sides and bottom (no top)
+					// * the tinted grass top and side overlay (no bottom)
+					model.Template[2] |= uint32(texIDs[layer][model.Textures[2]]) << 24
+				} else if layer == LayerVoxel && len(model.Textures) > 1 {
+					for i, t := range model.Textures {
+						tid := texIDs[layer][t]
+						model.Template[2*i] |= uint32(tid) << 24
+						model.Template[2*i+1] |= uint32(tid>>8) << 30
+					}
+				}
+				if rp.RemoveDefaultPrefix(ent.Name) == "water" {
+					model.Template[1] |= 1 << 31
+				}
+				if genDebug == "all" || genDebug == ent.Name {
+					fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
+						layer, ent.Name, model.Textures, tid, pack.Textures[model.Textures[0]].Bounds(),
+						model.Template[0], model.Template[1])
+				}
 			}
 		}
 	}
 
 	for i := range *blockEntries {
 		ent := &(*blockEntries)[i]
-		ent.Solid = true
+		ent.Solid = len(ent.Templates) > 0
 
-		for _, model := range ent.Templates {
-			layer := model.Layer
-			// A block is only solid if ALL of its templates are LayerCube or LayerVoxel (standard full cubes),
-			// and all textures used by those states are opaque.
-			if layer != LayerCube && layer != LayerVoxel {
-				ent.Solid = false
-				break
-			}
-			for _, tex := range model.Textures {
-				if textureClasses[tex] != TexOpaque {
-					ent.Solid = false
-					break
+		for sIdx := range ent.Templates {
+			variantSolid := false
+			for _, model := range ent.Templates[sIdx] {
+				layer := model.Layer
+				// A block is only solid if ALL of its templates are LayerCube or LayerVoxel (standard full cubes),
+				// and all textures used by those states are opaque.
+				if layer == LayerCube || layer == LayerVoxel {
+					modelSolid := true
+					for _, tex := range model.Textures {
+						if textureClasses[tex] != TexOpaque {
+							modelSolid = false
+							break
+						}
+					}
+					if modelSolid {
+						variantSolid = true
+						break
+					}
 				}
 			}
-			if !ent.Solid {
+			if !variantSolid {
+				ent.Solid = false
 				break
 			}
 		}

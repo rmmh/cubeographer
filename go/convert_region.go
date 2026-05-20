@@ -249,29 +249,33 @@ func scanRegion(conf *scanRegionConfig) error {
 					// 0: use sprite+256 for sides
 					// 1: tint according to biome colors
 					// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
-					var tmpl []uint32
-					var layer uint8
+					var tmpls [][]uint32
+					var layers []uint8
 					if int(bs) < len(bm.Tmpl[b]) {
-						tmpl = bm.Tmpl[b][bs]
-						layer = bm.Layer[b][bs]
+						tmpls = bm.Tmpl[b][bs]
+						layers = bm.Layer[b][bs]
 					} else {
-						tmpl = bm.Tmpl[b][0]
-						layer = bm.Layer[b][0]
+						tmpls = bm.Tmpl[b][0]
+						layers = bm.Layer[b][0]
 					}
 
 					pos := uint32((x&255)<<16 | (z&255)<<8 | y)
-					blen := 0
 
-					for i := 0; i < len(tmpl); i += 2 {
-						// x: 8b z: 8b y: 8b   8+8+8=24b
-						if sideVis&tmpl[i+1] != 0 {
-							binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
-							binary.LittleEndian.PutUint32(buf[blen+4:], tmpl[i+1]&^0b111111|sideLight<<6|(sideVis&tmpl[i+1]))
-							blen += 8
+					for eIdx, tmpl := range tmpls {
+						layer := layers[eIdx]
+						blen := 0
+
+						for i := 0; i < len(tmpl); i += 2 {
+							// x: 8b z: 8b y: 8b   8+8+8=24b
+							if sideVis&tmpl[i+1] != 0 {
+								binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
+								binary.LittleEndian.PutUint32(buf[blen+4:], tmpl[i+1]&^0b111111|sideLight<<6|(sideVis&tmpl[i+1]))
+								blen += 8
+							}
 						}
-					}
-					if blen > 0 {
-						bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
+						if blen > 0 {
+							bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
+						}
 					}
 				}
 			}
@@ -344,7 +348,7 @@ func scanRegion(conf *scanRegionConfig) error {
 			if blockCounts[bid] < 100 {
 				continue
 			}
-			if render.LayerNumber(bm.Layer[bid][0]) == render.LayerCubeFallback {
+			if render.LayerNumber(bm.Layer[bid][0][0]) == render.LayerCubeFallback {
 				fmt.Println(bm.NidToName[bid], blockCounts[bid])
 			}
 		}

@@ -18,8 +18,8 @@ type BlockMapper struct {
 	NameToNid          map[string]uint16
 	NidToName          []string
 	nidToSmap          []render.Statemap
-	Tmpl               [][][]uint32
-	Layer              [][]uint8
+	Tmpl               [][][][]uint32
+	Layer              [][][]uint8
 }
 
 func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
@@ -28,8 +28,8 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 		NidToName: []string{""},
 		nidToSmap: []render.Statemap{nil},
 		solid:     []uint64{},
-		Tmpl:      [][][]uint32{nil},
-		Layer:     [][]uint8{nil},
+		Tmpl:      [][][][]uint32{nil},
+		Layer:     [][][]uint8{nil},
 	}
 
 	err := json.Unmarshal(buf, &bm.meta)
@@ -60,11 +60,17 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 			if b.Solid {
 				bm.solid[n>>6] |= 1 << (n & 63)
 			}
-			tmpls := [][]uint32{}
-			layers := []uint8{}
-			for _, model := range b.Templates {
-				tmpls = append(tmpls, model.Template)
-				layers = append(layers, uint8(model.Layer))
+			tmpls := [][][]uint32{}
+			layers := [][]uint8{}
+			for _, variant := range b.Templates {
+				vtmpls := [][]uint32{}
+				vlayers := []uint8{}
+				for _, model := range variant {
+					vtmpls = append(vtmpls, model.Template)
+					vlayers = append(vlayers, uint8(model.Layer))
+				}
+				tmpls = append(tmpls, vtmpls)
+				layers = append(layers, vlayers)
 			}
 			bm.Tmpl = append(bm.Tmpl, tmpls)
 			bm.Layer = append(bm.Layer, layers)

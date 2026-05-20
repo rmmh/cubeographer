@@ -75,9 +75,11 @@ func generate(outDir string) {
 
 	// Wipe unneeded texture references, and count layers for each block
 	for _, b := range meta.Blocks {
-		for i := range b.Templates {
-			b.Templates[i].Textures = nil
-			layerCounts[int(b.Templates[i].Layer)] += 1
+		for sIdx := range b.Templates {
+			for i := range b.Templates[sIdx] {
+				b.Templates[sIdx][i].Textures = nil
+				layerCounts[int(b.Templates[sIdx][i].Layer)] += 1
+			}
 		}
 	}
 
