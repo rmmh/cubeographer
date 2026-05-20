@@ -63,7 +63,11 @@ bool shouldDiscard(int face, uint s) {
 
 void main()	{
     vec3 unpackedPos = unpackPos(attr.x);
+#ifdef CUBOID
+    int blockId = int((attr.x >> 24u) | ((attr.y >> 30u) << 8u));
+#else
     int blockId = int(attr.x >> 24u);
+#endif
 #ifdef CROSS
     float light = float(attr.y&0xFu)/15.0 * 0.7 + 0.3;
     vColor = vec4(unpackColor(blockId, attr.y) * vec3(light), 1.0);
@@ -72,7 +76,18 @@ void main()	{
     vNormal = normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position + unpackedPos, 1.0 );
 #else
+
+#ifdef CUBOID
+    uint packedFrom = uint(cuboid[blockId].packed.x);
+    uint packedTo = uint(cuboid[blockId].packed.y);
+    vec3 from = vec3(float(packedFrom & 255u), float((packedFrom >> 8u) & 255u), float((packedFrom >> 16u) & 255u));
+    vec3 to = vec3(float(packedTo & 255u), float((packedTo >> 8u) & 255u), float((packedTo >> 16u) & 255u));
+    vec3 worldMidpoint = unpackedPos + offset + (from + to) / 32.0;
+    bool shouldFlip = dot(normal, cameraPosition - worldMidpoint) < 0.0;
+#else
     bool shouldFlip = dot(normal, cameraPosition - (unpackedPos + offset)) < 0.0;
+#endif
+
     int face = int(gl_VertexID / 6) * 2 + (shouldFlip ? 1 : 0);
     if (shouldDiscard(face, attr.y)) {
         gl_Position = vec4(1e20);
@@ -93,10 +108,6 @@ void main()	{
     vColor = vec4(unpackColor(blockId, attr.y) * vec3(sideLight), 1.0);
 
 #ifdef CUBOID
-    uint packedFrom = uint(cuboid[blockId].packed.x);
-    uint packedTo = uint(cuboid[blockId].packed.y);
-    vec3 from = vec3(float(packedFrom & 255u), float((packedFrom >> 8u) & 255u), float((packedFrom >> 16u) & 255u));
-    vec3 to = vec3(float(packedTo & 255u), float((packedTo >> 8u) & 255u), float((packedTo >> 16u) & 255u));
     vec3 scale = (to - from) / 16.0;
     vec3 localOffset = from / 16.0;
     vec3 localPos = (shouldFlip ? vec3(1.0) - position : position) * scale + localOffset;
@@ -117,12 +128,12 @@ void main()	{
 
 #ifdef CUBOID
     vec4 faceUv = cuboid[blockId].uvSides[face];
-    
+
     // Extract block atlas offset using floor on minimum bounds
     float tx = floor(min(faceUv.x, faceUv.z));
     float ty = floor(min(faceUv.y, faceUv.w));
     vTexLayer = int(tx + ty * 32.0);
-    
+
     // Map custom UV dimensions locally relative to the layer bounds
     vec2 uvStart = faceUv.xy - vec2(tx, ty);
     vec2 uvEnd = faceUv.zw - vec2(tx, ty);
