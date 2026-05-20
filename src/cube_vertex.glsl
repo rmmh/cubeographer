@@ -51,7 +51,7 @@ vec3 unpackColor(int blockId, uint color) {
     // TODO: read biome color from texture?
 #ifdef CUBOID
     uvec4 p0 = fetchCuboidPixel(blockId, 0);
-    if (p0.a == 0u) return vec3(1.0);
+    if ((p0.a & 1u) == 0u) return vec3(1.0);
 #else
     if ((color & (1u << 31)) == 0u)
         return vec3(1.0);
@@ -63,9 +63,12 @@ vec3 unpackColor(int blockId, uint color) {
     return vec3(0.4,0.73,0.27);
 }
 
-bool shouldDiscard(int face, uint s) {
+bool shouldDiscard(int face, uint s, int blockId) {
 #ifdef CUBOID
-    if (face == 4) return false;
+    if (face == 4) {
+        uvec4 p0 = fetchCuboidPixel(blockId, 0);
+        return (p0.a & 2u) != 0u;
+    }
 #endif
     return (s & uint(1 << face)) == 0u;
 }
@@ -80,7 +83,7 @@ void main()	{
 #ifdef CROSS
     float light = float(attr.y&0xFu)/15.0 * 0.7 + 0.3;
     vColor = vec4(unpackColor(blockId, attr.y) * vec3(light), 1.0);
-    // if (face >= 2)vColor = vec4(1,shouldDiscard(face, attr.y),0,1);
+    // if (face >= 2)vColor = vec4(1,shouldDiscard(face, attr.y, blockId),0,1);
     bool sideSpecial = false;
     vNormal = normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position + unpackedPos, 1.0 );
@@ -100,7 +103,7 @@ void main()	{
 #endif
 
     int face = int(gl_VertexID / 6) * 2 + (shouldFlip ? 1 : 0);
-    if (shouldDiscard(face, attr.y)) {
+    if (shouldDiscard(face, attr.y, blockId)) {
         gl_Position = vec4(1e20);
         return;
     }

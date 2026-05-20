@@ -794,6 +794,7 @@ type cuboidKey struct {
 	UVs      [6][4]float32
 	Textures [6]string
 	Tint     bool
+	TopEmpty bool
 }
 
 func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, map[string][]UBOModelEntry) {
@@ -992,6 +993,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 						}
 					}
 					key.Tint = (model.Template[1] & (1 << 31)) != 0
+					key.TopEmpty = len(model.Textures) > 4 && model.Textures[4] == "air"
 
 					if existingTid, ok := cuboidCache[key]; ok {
 						tid = existingTid
@@ -1016,11 +1018,12 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								}
 							}
 							cuboidEntries[tid] = UBOModelEntry{
-								From:   model.Bounds[:3],
-								To:     model.Bounds[3:],
-								UVs:    model.UVs,
-								TexIDs: texIds,
-								Tint:   key.Tint,
+								From:     model.Bounds[:3],
+								To:       model.Bounds[3:],
+								UVs:      model.UVs,
+								TexIDs:   texIds,
+								Tint:     key.Tint,
+								TopEmpty: key.TopEmpty,
 							}
 						}
 					}
@@ -1157,11 +1160,12 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 }
 
 type UBOModelEntry struct {
-	From   []float32   `json:"from"`
-	To     []float32   `json:"to"`
-	UVs    [][]float32 `json:"uvs,omitempty"`
-	TexIDs []int       `json:"tex_ids,omitempty"`
-	Tint   bool        `json:"tint,omitempty"`
+	From     []float32   `json:"from"`
+	To       []float32   `json:"to"`
+	UVs      [][]float32 `json:"uvs,omitempty"`
+	TexIDs   []int       `json:"tex_ids,omitempty"`
+	Tint     bool        `json:"tint,omitempty"`
+	TopEmpty bool        `json:"top_empty,omitempty"`
 }
 
 func getModelBounds(model *rp.Model) ([]float32, []float32) {

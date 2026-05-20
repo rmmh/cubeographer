@@ -827,7 +827,7 @@ fetch("textures/layer_ubos.json")
                 cuboidTextureData[offset + 0] = fx | (fy << 16);
                 cuboidTextureData[offset + 1] = fz | (tx << 16);
                 cuboidTextureData[offset + 2] = ty | (tz << 16);
-                cuboidTextureData[offset + 3] = entry.tint ? 1 : 0;
+                cuboidTextureData[offset + 3] = (entry.tint ? 1 : 0) | (entry.top_empty ? 2 : 0);
                 if (entry.uvs) {
                     for (let f = 0; f < 6; f++) {
                         if (entry.uvs[f]) {
