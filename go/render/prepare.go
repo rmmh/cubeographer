@@ -946,8 +946,56 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				}
 
 				layer := model.Layer
+				if layer == LayerVoxel {
+					// the voxel layer is too full, so we shunt some blocks to cuboid
+					if len(texIDs[LayerVoxel])+len(model.Textures) >= 512 {
+						model.Layer = LayerCuboid
+						layer = LayerCuboid
+						model.Bounds = []float32{0, 0, 0, 16, 16, 16}
+						model.UVs = [][]float32{
+							{0, 0, 16, 16}, // west
+							{0, 0, 16, 16}, // east
+							{0, 0, 16, 16}, // south
+							{0, 0, 16, 16}, // north
+							{0, 0, 16, 16}, // up
+							{0, 0, 16, 16}, // down
+						}
+
+						// Reconstruct the 6 face textures
+						newTexs := make([]string, 6)
+						for idx := range newTexs {
+							newTexs[idx] = "air"
+						}
+						for k, tex := range model.Textures {
+							mask := model.Template[2*k+1]
+							for f := 0; f < 6; f++ {
+								if (mask & (1 << f)) != 0 {
+									newTexs[f] = tex
+								}
+							}
+						}
+						model.Textures = newTexs
+
+						// Reconstruct the Template with 0 and meta
+						maskUnion := uint32(0)
+						tint := false
+						for k := range model.Template {
+							if k%2 == 1 {
+								maskUnion |= model.Template[k] & 0x3F
+								if (model.Template[k] & (1 << 31)) != 0 {
+									tint = true
+								}
+							}
+						}
+						meta := maskUnion
+						if tint {
+							meta |= 1 << 31
+						}
+						model.Template = []uint32{0, meta}
+					}
+				}
 				if len(model.Textures)+len(texIDs[layer]) >= 512 {
-					fmt.Println("warn: overrun for", ent.Name)
+					fmt.Println("warn: overrun for", ent.Name, "on", LayerNames[model.Layer])
 					break
 				}
 				if layer == LayerCube {
