@@ -417,22 +417,31 @@ func rotateUV90CW(uv []float64) []float64 {
 	if len(uv) != 4 {
 		return uv
 	}
-	return []float64{16.0 - uv[3], uv[0], 16.0 - uv[1], uv[2]}
+	cx := (uv[0] + uv[2]) / 2.0
+	cy := (uv[1] + uv[3]) / 2.0
+	hu := (uv[2] - uv[0]) / 2.0
+	hv := (uv[3] - uv[1]) / 2.0
+	return []float64{cx - hv, cy - hu, cx + hv, cy + hu}
 }
 
 func rotateUV90CCW(uv []float64) []float64 {
 	if len(uv) != 4 {
 		return uv
 	}
-	return []float64{uv[1], 16.0 - uv[2], uv[3], 16.0 - uv[0]}
+	cx := (uv[0] + uv[2]) / 2.0
+	cy := (uv[1] + uv[3]) / 2.0
+	hu := (uv[2] - uv[0]) / 2.0
+	hv := (uv[3] - uv[1]) / 2.0
+	return []float64{cx - hv, cy - hu, cx + hv, cy + hu}
 }
 
 func rotateUV180(uv []float64) []float64 {
 	if len(uv) != 4 {
 		return uv
 	}
-	return []float64{16.0 - uv[2], 16.0 - uv[3], 16.0 - uv[0], 16.0 - uv[1]}
+	return []float64{uv[2], uv[3], uv[0], uv[1]}
 }
+
 
 func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransform map[string]func([]float64) []float64) {
 	orig := make(map[string]rp.BlockModelFace, len(order))
@@ -1051,8 +1060,12 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					model.Template[1] |= 1 << 31
 				}
 				if genDebug == "all" || genDebug == ent.Name {
+					var bounds image.Rectangle
+					if tex := pack.Textures[model.Textures[0]]; tex != nil {
+						bounds = tex.Bounds()
+					}
 					fmt.Printf("L%d %s %v=%d %v %08x %08x\n",
-						layer, ent.Name, model.Textures, tid, pack.Textures[model.Textures[0]].Bounds(),
+						layer, ent.Name, model.Textures, tid, bounds,
 						model.Template[0], model.Template[1])
 				}
 			}
