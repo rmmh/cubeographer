@@ -60,8 +60,22 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 				continue
 			}
 
-			ns := int(bm.nidToSmap[b].Max())
-			nl := ns/6 + 1
+			ns := []int{}
+			seen := map[string]bool{}
+			maxState := int(bm.nidToSmap[b].Max())
+			for i := 0; i <= maxState; i++ {
+				tmplIdx := i
+				if len(bm.Tmpl[b]) == 1 {
+					tmplIdx = 0
+				}
+				key := fmt.Sprintf("%v", bm.Tmpl[b][tmplIdx])
+				if seen[key] || key == "[]" {
+					continue
+				}
+				seen[key] = true
+				ns = append(ns, i)
+			}
+			nl := len(ns)/6 + 1
 			if bx+nl >= 220 {
 				bx = 32
 				bz += 8
@@ -70,8 +84,8 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 				fmt.Printf("FakeReadRegion (bz=32): block=%s layerIdx=%d layerName=%s qualBlockID=%d (%s) bx=%d nl=%d ns=%d\n",
 					bm.NidToName[b], layerIdx, render.LayerNames[layerIdx], qualBlock, qualName, bx, nl, ns)
 			}
-			for i := 0; i <= ns; i++ {
-				set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(i))
+			for i, s := range ns {
+				set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(s))
 				set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
 			}
 			bx += nl
