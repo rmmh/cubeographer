@@ -298,7 +298,24 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 	for i, fName := range texsOrder {
 		face, ok := el.Faces[fName]
 		if ok && face.UV != nil && len(face.UV) == 4 {
-			uvs[i] = []float32{float32(face.UV[0]), float32(face.UV[1]), float32(face.UV[2]), float32(face.UV[3])}
+			u0, v0, u1, v1 := face.UV[0], face.UV[1], face.UV[2], face.UV[3]
+			if face.Rotation != nil {
+				rot := *face.Rotation
+				for rot >= 360 {
+					rot -= 360
+				}
+				for rot < 0 {
+					rot += 360
+				}
+				if rot == 90 {
+					u0, v0, u1, v1 = 16.0-v1, u0, 16.0-v0, u1
+				} else if rot == 180 {
+					u0, v0, u1, v1 = 16.0-u1, 16.0-v1, 16.0-u0, 16.0-v0
+				} else if rot == 270 {
+					u0, v0, u1, v1 = v0, 16.0-u1, v1, 16.0-u0
+				}
+			}
+			uvs[i] = []float32{float32(u0), float32(v0), float32(u1), float32(v1)}
 		} else {
 			uvs[i] = getDefaultUV(fName, el)
 		}
@@ -396,6 +413,48 @@ func (s *StateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 	return out, tinted
 }
 
+func rotateUV90CW(uv []float64) []float64 {
+	if len(uv) != 4 {
+		return uv
+	}
+	return []float64{16.0 - uv[3], uv[0], 16.0 - uv[1], uv[2]}
+}
+
+func rotateUV90CCW(uv []float64) []float64 {
+	if len(uv) != 4 {
+		return uv
+	}
+	return []float64{uv[1], 16.0 - uv[2], uv[3], 16.0 - uv[0]}
+}
+
+func rotateUV180(uv []float64) []float64 {
+	if len(uv) != 4 {
+		return uv
+	}
+	return []float64{16.0 - uv[2], 16.0 - uv[3], 16.0 - uv[0], 16.0 - uv[1]}
+}
+
+func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransform map[string]func([]float64) []float64) {
+	orig := make(map[string]rp.BlockModelFace, len(order))
+	for _, name := range order {
+		if f, ok := faces[name]; ok {
+			orig[name] = f
+		}
+	}
+	n := len(order)
+	for i, dst := range order {
+		src := order[(i-1+n)%n]
+		if face, ok := orig[src]; ok {
+			if transform, ok := uvsToTransform[src]; ok {
+				face.UV = transform(face.UV)
+			}
+			faces[dst] = face
+		} else {
+			delete(faces, dst)
+		}
+	}
+}
+
 func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.Model {
 	// clone model
 	var m rp.Model
@@ -414,8 +473,20 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 	for rotX != 0 && rotX%90 == 0 {
 		for i := range m.Elements {
 			e := m.Elements[i]
-			e.Faces["north"], e.Faces["down"], e.Faces["south"], e.Faces["up"] =
-				e.Faces["down"], e.Faces["south"], e.Faces["up"], e.Faces["north"]
+
+			swapFaces(e.Faces, []string{"north", "up", "south", "down"}, map[string]func([]float64) []float64{
+				"down":  rotateUV180,
+				"north": rotateUV180,
+			})
+
+			if f, ok := e.Faces["west"]; ok {
+				f.UV = rotateUV90CW(f.UV)
+				e.Faces["west"] = f
+			}
+			if f, ok := e.Faces["east"]; ok {
+				f.UV = rotateUV90CCW(f.UV)
+				e.Faces["east"] = f
+			}
 
 			// Rotate coordinates around X:
 			// y_new = 16 - z
@@ -439,8 +510,17 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 	for rotY != 0 && rotY%90 == 0 {
 		for i := range m.Elements {
 			e := m.Elements[i]
-			e.Faces["north"], e.Faces["east"], e.Faces["south"], e.Faces["west"] =
-				e.Faces["west"], e.Faces["north"], e.Faces["east"], e.Faces["south"]
+
+			swapFaces(e.Faces, []string{"north", "east", "south", "west"}, nil)
+
+			if f, ok := e.Faces["up"]; ok {
+				f.UV = rotateUV90CW(f.UV)
+				e.Faces["up"] = f
+			}
+			if f, ok := e.Faces["down"]; ok {
+				f.UV = rotateUV90CCW(f.UV)
+				e.Faces["down"] = f
+			}
 
 			// Rotate coordinates around Y:
 			// x_new = 16 - z
@@ -909,7 +989,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					} else {
 						if cuboidCount >= 2047 {
 							// UBO is full (2047 max)! Fallback to LayerCubeFallback
-							fmt.Println("cuboid UBO full for", ent.DisplayName)
+							// fmt.Println("cuboid UBO full for", ent.DisplayName)
 							layer = LayerCubeFallback
 							model.Layer = LayerCubeFallback
 							tName := rp.RemoveDefaultPrefix(model.Textures[0])
