@@ -930,10 +930,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 
 			model.Template[0] |= uint32(tid) << 24
 			model.Template[1] |= uint32(tid>>8) << 30
-			if ent.Name == "minecraft:grass_block" && len(model.Template) == 4 {
+			cleanName := rp.RemoveDefaultPrefix(ent.Name)
+			if (cleanName == "grass_block" || cleanName == "grass") && len(model.Template) == 4 {
 				// render grass blocks as two cubes:
 				// * the dirt sides and bottom (no top)
-				// * & len(model.Template) == 4 {the tinted grass top and side overlay (no bottom)
+				// * the tinted grass top and side overlay (no bottom)
 				model.Template[2] |= uint32(texIDs[layer][model.Textures[2]]) << 24
 			} else if layer == LayerVoxel && len(model.Textures) > 1 {
 				for i, t := range model.Textures {
@@ -974,6 +975,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			if !ent.Solid {
 				break
 			}
+		}
+
+		cleanName := rp.RemoveDefaultPrefix(ent.Name)
+		if cleanName == "grass_block" || cleanName == "grass" {
+			ent.Solid = true
 		}
 	}
 
