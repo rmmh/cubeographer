@@ -793,7 +793,7 @@ type cuboidKey struct {
 	Tint     bool
 }
 
-func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, map[string][]UBOModelEntry) {
+func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, []byte) {
 	// Classify textures as opaque, transparent (cutout), translucent
 	// This is used to infer solidity-- a cube with all opaque sides
 	// is a definite occluder.
@@ -1038,9 +1038,9 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					if existingTid, ok := cuboidCache[key]; ok {
 						tid = existingTid
 					} else {
-						if cuboidCount >= 65535 {
-							// UBO is full (65535 max)! Fallback to LayerCubeFallback
-							fmt.Println("cuboid UBO full for", ent.DisplayName)
+						if cuboidCount >= 16383 {
+							// metadata atlas is full (16383 max)! Fallback to LayerCubeFallback
+							fmt.Println("cuboid metadata atlas full for", ent.DisplayName)
 							layer = LayerCubeFallback
 							model.Layer = LayerCubeFallback
 							tName := rp.RemoveDefaultPrefix(model.Textures[0])
@@ -1149,76 +1149,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		}
 	}
 
-	// Build UBOs for each layer
-	ubos := map[string][]UBOModelEntry{}
-	for l := 0; l < int(NumRenderLayers); l++ {
-		layerName := LayerNames[l]
-		if l == int(LayerCuboid) {
-			entries := make([]UBOModelEntry, cuboidCount+1)
-			for i := range entries {
-				entries[i] = UBOModelEntry{
-					From: []float32{0, 0, 0},
-					To:   []float32{16, 16, 16},
-				}
-			}
-			for tid, entry := range cuboidEntries {
-				if tid < len(entries) {
-					entries[tid] = entry
-				}
-			}
-			ubos[layerName] = entries
-		} else {
-			numTids := len(texIDs[l])
-			entries := make([]UBOModelEntry, numTids)
+	byteBuf := BuildCuboidMetadata(cuboidEntries, cuboidCount)
 
-			// Fill with default full cube bounds first
-			for i := range entries {
-				entries[i] = UBOModelEntry{
-					From: []float32{0, 0, 0},
-					To:   []float32{16, 16, 16},
-				}
-			}
-
-			for texName, tid := range texIDs[l] {
-				if tid < len(entries) {
-					if meta, ok := converter.TextureBounds[texName]; ok {
-						entries[tid] = UBOModelEntry{
-							From: meta.Bounds[:3],
-							To:   meta.Bounds[3:],
-							UVs:  meta.UVs,
-						}
-					}
-				}
-			}
-			ubos[layerName] = entries
-		}
-	}
-
-	return meta, atlases, ubos
+	return meta, atlases, byteBuf
 }
 
-type UBOModelEntry struct {
-	From   []float32   `json:"from"`
-	To     []float32   `json:"to"`
-	UVs    [][]float32 `json:"uvs,omitempty"`
-	TexIDs []int       `json:"tex_ids,omitempty"`
-	Tint   bool        `json:"tint,omitempty"`
-}
-
-func getModelBounds(model *rp.Model) ([]float32, []float32) {
-	if len(model.Elements) == 0 {
-		return []float32{0, 0, 0}, []float32{16, 16, 16}
-	}
-	minX, minY, minZ := 16.0, 16.0, 16.0
-	maxX, maxY, maxZ := 0.0, 0.0, 0.0
-	for _, el := range model.Elements {
-		minX = min(minX, el.From[0])
-		minY = min(minY, el.From[1])
-		minZ = min(minZ, el.From[2])
-		maxX = max(maxX, el.To[0])
-		maxY = max(maxY, el.To[1])
-		maxZ = max(maxZ, el.To[2])
-	}
-	return []float32{float32(minX), float32(minY), float32(minZ)},
-		[]float32{float32(maxX), float32(maxY), float32(maxZ)}
-}

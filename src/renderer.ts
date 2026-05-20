@@ -128,6 +128,7 @@ export class Context {
     gl: WebGL2RenderingContext
     clearColor: vec4
     cuboidDataTex?: WebGLTexture
+    cuboidTextureData?: Uint32Array
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -158,6 +159,7 @@ export class Context {
 
     loadTexture(path: string, done?: () => void): WebGLTexture {
         const gl = this.gl;
+        const self = this;
 
         // Create a WebGL 2 texture array
         var texture = gl.createTexture();
@@ -173,7 +175,7 @@ export class Context {
             1024
         );
 
-        // Asynchronously load the 512x512 image
+        // Asynchronously load the image
         var image = new Image();
         image.src = path;
         image.addEventListener('load', function () {
@@ -183,6 +185,8 @@ export class Context {
             canvas.height = 512;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(image, 0, 0);
+
+            // Slices are always extracted from the top 512x512 portion
             const imgData = ctx.getImageData(0, 0, 512, 512);
             const srcPixels = imgData.data;
 

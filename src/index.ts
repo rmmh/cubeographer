@@ -7,7 +7,7 @@ import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
-import { Gunzip } from 'fflate';
+import { Gunzip, gunzipSync } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
@@ -807,46 +807,19 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
 context.cuboidDataTex = cuboidDataTexture;
+context.cuboidTextureData = cuboidTextureData;
 
-fetch("textures/layer_ubos.json")
-    .then(r => r.json())
-    .then(data => {
-        const cuboidList = data["CUBOID"] || [];
-        for (let i = 0; i < cuboidList.length; i++) {
-            if (i >= 65536) break;
-            const entry = cuboidList[i];
-            if (entry && entry.from && entry.to) {
-                const offset = 16 * i;
-                let fx = toHalf(entry.from[0]);
-                let fy = toHalf(entry.from[1]);
-                let fz = toHalf(entry.from[2]);
-                let tx = toHalf(entry.to[0]);
-                let ty = toHalf(entry.to[1]);
-                let tz = toHalf(entry.to[2]);
-
-                cuboidTextureData[offset + 0] = fx | (fy << 16);
-                cuboidTextureData[offset + 1] = fz | (tx << 16);
-                cuboidTextureData[offset + 2] = ty | (tz << 16);
-                cuboidTextureData[offset + 3] = entry.tint ? 1 : 0;
-                if (entry.uvs) {
-                    for (let f = 0; f < 6; f++) {
-                        if (entry.uvs[f]) {
-                            let tid = entry.tex_ids ? entry.tex_ids[f] : i;
-                            let tx = tid % 32;
-                            let ty = Math.floor(tid / 32);
-
-                            const uMin = entry.uvs[f][0] / 16.0 + tx;
-                            const vMin = entry.uvs[f][1] / 16.0 + ty;
-                            const uMax = entry.uvs[f][2] / 16.0 + tx;
-                            const vMax = entry.uvs[f][3] / 16.0 + ty;
-
-                            cuboidTextureData[offset + 4 + 2 * f] = Math.round(uMin * 256.0) | (Math.round(vMin * 256.0) << 16);
-                            cuboidTextureData[offset + 4 + 2 * f + 1] = Math.round(uMax * 256.0) | (Math.round(vMax * 256.0) << 16);
-                        }
-                    }
-                }
-            }
-        }
+fetch("textures/cuboid_metadata.bin.gz")
+    .then(r => r.arrayBuffer())
+    .then(arrayBuffer => {
+        const decompressed = gunzipSync(new Uint8Array(arrayBuffer));
+        const metadataUint32 = new Uint32Array(
+            decompressed.buffer,
+            decompressed.byteOffset,
+            decompressed.byteLength / 4
+        );
+        const copyLength = Math.min(metadataUint32.length, cuboidTextureData.length);
+        cuboidTextureData.set(metadataUint32.subarray(0, copyLength));
 
         gl.bindTexture(gl.TEXTURE_2D, cuboidDataTexture);
         gl.texSubImage2D(
@@ -858,11 +831,10 @@ fetch("textures/layer_ubos.json")
             gl.UNSIGNED_INT,
             cuboidTextureData
         );
-
         render();
     })
     .catch(err => {
-        console.error("failed to load layer_ubos.json", err);
+        console.error("failed to load cuboid_metadata.bin.gz", err);
     });
 
 setTimeout(function () {

@@ -46,9 +46,14 @@ func generate(outDir string) {
 		log.Fatal(err)
 	}
 
-	meta, atlases, ubos := render.Prepare(pack, *genDebug)
+	meta, atlases, cuboidMetadata := render.Prepare(pack, *genDebug)
 
 	os.MkdirAll(path.Join(outDir, "textures"), 0755)
+
+	err = os.WriteFile(path.Join(outDir, "textures", "cuboid_metadata.bin.gz"), cuboidMetadata, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	for layer, atlas := range atlases {
 		f, err := os.Create(path.Join(outDir, "textures", fmt.Sprintf("atlas%d.png", layer)))
@@ -60,15 +65,6 @@ func generate(outDir string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-	}
-
-	uboBuf, err := json.Marshal(ubos)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = os.WriteFile(path.Join(outDir, "textures", "layer_ubos.json"), uboBuf, 0644)
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	layerCounts := map[int]int{}
