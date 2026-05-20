@@ -47,12 +47,15 @@ vec3 unpackPos(uint p) { // 24b pos (8b,8b,8b each) => vec3
 }
 
 vec3 unpackColor(int blockId, uint color) {
-#ifdef CUBOID
-    return vec3(1.0);
-#endif
+
     // TODO: read biome color from texture?
+#ifdef CUBOID
+    uvec4 p0 = fetchCuboidPixel(blockId, 0);
+    if (p0.a == 0u) return vec3(1.0);
+#else
     if ((color & (1u << 31)) == 0u)
         return vec3(1.0);
+#endif
 #ifdef WATER_ID
     if (blockId == WATER_ID)
         return vec3(0.2, 0.4, 0.93);
@@ -61,13 +64,16 @@ vec3 unpackColor(int blockId, uint color) {
 }
 
 bool shouldDiscard(int face, uint s) {
+#ifdef CUBOID
+    if (face == 4) return false;
+#endif
     return (s & uint(1 << face)) == 0u;
 }
 
 void main()	{
     vec3 unpackedPos = unpackPos(attr.x);
 #ifdef CUBOID
-    int blockId = int((attr.x >> 24u) | ((attr.y >> 30u) << 8u));
+    int blockId = int((attr.x >> 24u) | ((attr.y >> 30u) << 8u) | (((attr.y >> 4u) & 1u) << 10u));
 #else
     int blockId = int(attr.x >> 24u);
 #endif
