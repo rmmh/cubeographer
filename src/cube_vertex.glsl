@@ -64,19 +64,13 @@ vec3 unpackColor(int blockId, uint color) {
 }
 
 bool shouldDiscard(int face, uint s, int blockId) {
-#ifdef CUBOID
-    if (face == 4) {
-        uvec4 p0 = fetchCuboidPixel(blockId, 0);
-        return (p0.a & 2u) != 0u;
-    }
-#endif
     return (s & uint(1 << face)) == 0u;
 }
 
 void main()	{
     vec3 unpackedPos = unpackPos(attr.x);
 #ifdef CUBOID
-    int blockId = int((attr.x >> 24u) | ((attr.y >> 30u) << 8u) | (((attr.y >> 4u) & 1u) << 10u));
+    int blockId = int((attr.x >> 24u) | (((attr.y >> 24u) & 255u) << 8u));
 #else
     int blockId = int(attr.x >> 24u);
 #endif
@@ -107,7 +101,13 @@ void main()	{
         gl_Position = vec4(1e20);
         return;
     }
+#ifdef CUBOID
+    uint light3b = (attr.y >> uint(6 + face * 3)) & 7u;
+    uint light4b = (light3b << 1u) | (light3b >> 2u);
+    float sideLight = float(light4b) / 15.0 * 0.7 + 0.3;
+#else
     float sideLight = float( (attr.y>>uint(6+face*4))&0xFu)/15.0 * 0.7 + 0.3;
+#endif
 #ifdef FALLBACK
     bool sideSpecial = false;
     blockId |= int(attr.y>>22) & 256;

@@ -70,11 +70,9 @@ Positional Packing in `attr.x`:
   - Represents rectangular prism-shaped blocks with 6 independent textures.
   - "Texture id" becomes "cuboid ID", which is an index into the cuboid UBO.
   - `attr.y` packing:
-  - Bits  0 -  3: Active visible faces mask (West, East, South, North)
-  - Bit      4: 11th bit of the 11-bit cuboid ID. (Top face visibility is now assumed always true)
-  - Bit      5: Down face visibility
-  - Bits  6 - 29: Per-face lighting values (4 bits per face for 6 faces; order: West, East, South, North, Up, Down)
-  - Bits 30 - 31: Top 2 bits of the 11-bit cuboid ID (Tint is now stored in UBO metadata).
+  - Bits  0 -  5: Active visible faces mask (West, East, South, North, Up, Down)
+  - Bits  6 - 23: Per-face lighting values (3 bits per face for 6 faces; order: West, East, South, North, Up, Down)
+  - Bits 24 - 31: Top 8 bits of the 16-bit cuboid ID (Tint is now stored in UBO metadata).
 
 6. CUBE_FALLBACK (LayerCubeFallback)
   - A general fallback layer for complex models that are otherwise unsupported.
@@ -442,7 +440,6 @@ func rotateUV180(uv []float64) []float64 {
 	return []float64{uv[2], uv[3], uv[0], uv[1]}
 }
 
-
 func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransform map[string]func([]float64) []float64) {
 	orig := make(map[string]rp.BlockModelFace, len(order))
 	for _, name := range order {
@@ -794,7 +791,6 @@ type cuboidKey struct {
 	UVs      [6][4]float32
 	Textures [6]string
 	Tint     bool
-	TopEmpty bool
 }
 
 func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, map[string][]UBOModelEntry) {
@@ -970,9 +966,6 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				} else {
 					for _, tex := range model.Textures {
 						splatTexture(layer, tex, 0)
-						if layer == LayerCuboid {
-							splatTexture(LayerCubeFallback, tex, 0)
-						}
 					}
 				}
 
@@ -993,17 +986,17 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 						}
 					}
 					key.Tint = (model.Template[1] & (1 << 31)) != 0
-					key.TopEmpty = len(model.Textures) > 4 && model.Textures[4] == "air"
 
 					if existingTid, ok := cuboidCache[key]; ok {
 						tid = existingTid
 					} else {
-						if cuboidCount >= 2047 {
-							// UBO is full (2047 max)! Fallback to LayerCubeFallback
-							// fmt.Println("cuboid UBO full for", ent.DisplayName)
+						if cuboidCount >= 65535 {
+							// UBO is full (65535 max)! Fallback to LayerCubeFallback
+							fmt.Println("cuboid UBO full for", ent.DisplayName)
 							layer = LayerCubeFallback
 							model.Layer = LayerCubeFallback
 							tName := rp.RemoveDefaultPrefix(model.Textures[0])
+							splatTexture(LayerCubeFallback, tName, 0)
 							tid = texIDs[LayerCubeFallback][tName]
 						} else {
 							cuboidCount++
@@ -1018,12 +1011,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								}
 							}
 							cuboidEntries[tid] = UBOModelEntry{
-								From:     model.Bounds[:3],
-								To:       model.Bounds[3:],
-								UVs:      model.UVs,
-								TexIDs:   texIds,
-								Tint:     key.Tint,
-								TopEmpty: key.TopEmpty,
+								From:   model.Bounds[:3],
+								To:     model.Bounds[3:],
+								UVs:    model.UVs,
+								TexIDs: texIds,
+								Tint:   key.Tint,
 							}
 						}
 					}
@@ -1037,12 +1029,10 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					}
 				}
 
-				model.Template[0] |= uint32(tid) << 24
+				model.Template[0] |= uint32(tid&0xFF) << 24
 				if layer == LayerCuboid {
-					model.Template[1] &= ^uint32(1 << 31) // clear tint bit to avoid collision
-					model.Template[1] &= ^uint32(1 << 4)  // clear bit 4 (up face visibility)
-					model.Template[1] |= uint32((tid&0x3FF)>>8) << 30
-					model.Template[1] |= uint32((tid>>10)&1) << 4
+					model.Template[1] &= ^uint32(0xFF000000) // clear top 8 bits (bits 24-31)
+					model.Template[1] |= uint32((tid>>8)&0xFF) << 24
 				} else {
 					model.Template[1] |= uint32(tid>>8) << 30
 				}
@@ -1160,12 +1150,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 }
 
 type UBOModelEntry struct {
-	From     []float32   `json:"from"`
-	To       []float32   `json:"to"`
-	UVs      [][]float32 `json:"uvs,omitempty"`
-	TexIDs   []int       `json:"tex_ids,omitempty"`
-	Tint     bool        `json:"tint,omitempty"`
-	TopEmpty bool        `json:"top_empty,omitempty"`
+	From   []float32   `json:"from"`
+	To     []float32   `json:"to"`
+	UVs    [][]float32 `json:"uvs,omitempty"`
+	TexIDs []int       `json:"tex_ids,omitempty"`
+	Tint   bool        `json:"tint,omitempty"`
 }
 
 func getModelBounds(model *rp.Model) ([]float32, []float32) {

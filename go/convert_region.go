@@ -269,7 +269,24 @@ func scanRegion(conf *scanRegionConfig) error {
 							// x: 8b z: 8b y: 8b   8+8+8=24b
 							if sideVis&tmpl[i+1] != 0 {
 								binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
-								binary.LittleEndian.PutUint32(buf[blen+4:], tmpl[i+1]&^0b111111|sideLight<<6|(sideVis&tmpl[i+1]))
+								var yVal uint32
+								if render.LayerNumber(layer) == render.LayerCuboid {
+									cuboidSideLight := ((sideLight >> 1) & 7) |
+										((sideLight >> 2) & 0x38) |
+										((sideLight >> 3) & 0x1C0) |
+										((sideLight >> 4) & 0xE00) |
+										((sideLight >> 5) & 0x7000) |
+										((sideLight >> 6) & 0x38000)
+									// Cuboid template attr.y:
+									// - Bits 24-31: top 8 bits of 16-bit cuboid ID.
+									// - Bits 0-5: face presence mask.
+									// We clear bottom 6 bits of the template, OR in cuboidSideLight (18 bits) at bits 6-23,
+									// and OR in the visibility mask (sideVis & tmpl[i+1]).
+									yVal = (tmpl[i+1] & ^uint32(0b111111)) | (cuboidSideLight << 6) | (sideVis & tmpl[i+1])
+								} else {
+									yVal = (tmpl[i+1] & ^uint32(0b111111)) | (sideLight << 6) | (sideVis & tmpl[i+1])
+								}
+								binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
 								blen += 8
 							}
 						}
