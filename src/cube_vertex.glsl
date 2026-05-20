@@ -82,10 +82,11 @@ void main()	{
 
 #ifdef CUBOID
     uvec4 p0 = fetchCuboidPixel(blockId, 0);
-    uint packedFrom = p0.r;
-    uint packedTo = p0.g;
-    vec3 from = vec3(float(packedFrom & 255u), float((packedFrom >> 8u) & 255u), float((packedFrom >> 16u) & 255u));
-    vec3 to = vec3(float(packedTo & 255u), float((packedTo >> 8u) & 255u), float((packedTo >> 16u) & 255u));
+    vec2 fxy = unpackHalf2x16(p0.r);
+    vec2 fz_tx = unpackHalf2x16(p0.g);
+    vec2 tytz = unpackHalf2x16(p0.b);
+    vec3 from = vec3(fxy.x, fxy.y, fz_tx.x);
+    vec3 to = vec3(fz_tx.y, tytz.x, tytz.y);
     vec3 worldMidpoint = unpackedPos + offset + (from + to) / 32.0;
     bool shouldFlip = dot(normal, cameraPosition - worldMidpoint) < 0.0;
 #else

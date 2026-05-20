@@ -819,7 +819,9 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			}
 			tex := pack.Textures[name]
 			if tex == nil {
-				fmt.Println("warn: nil texture for", ent.Name, name)
+				if genDebug == "all" {
+					fmt.Println("warn: nil texture for", ent.Name, name)
+				}
 				return
 			}
 			x0 := (place * 16) % 512
@@ -891,6 +893,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				} else {
 					if cuboidCount >= 511 {
 						// UBO is full (512 max)! Fallback to LayerCubeFallback
+						fmt.Println("cuboid UBO full for", ent.DisplayName)
 						layer = LayerCubeFallback
 						model.Layer = LayerCubeFallback
 						tName := rp.RemoveDefaultPrefix(model.Textures[0])
@@ -912,9 +915,6 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 							To:     model.Bounds[3:],
 							UVs:    model.UVs,
 							TexIDs: texIds,
-						}
-						if ent.Name == "minecraft:cake" {
-							fmt.Printf("DEBUG CAKE tid=%d model.UVs=%v\n", tid, model.UVs)
 						}
 					}
 				}

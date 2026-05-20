@@ -751,15 +751,23 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     controls.update();
 }
 
+
+const _f16 = new Float16Array(1);
+const _u16 = new Uint16Array(_f16.buffer);
+function toHalf(val: number): number {
+    _f16[0] = val;
+    return _u16[0];
+}
+
 const cuboidTextureData = new Uint32Array(512 * 512 * 4);
 
 // Default to standard full cube [0, 0, 0] -> [16, 16, 16] for all slots
 // and default UVs [0, 0, 16, 16] for all faces using Option 2 (4 pixels per cuboid)
 for (let i = 0; i < 65536; i++) {
     const offset = 16 * i;
-    cuboidTextureData[offset + 0] = 0;
-    cuboidTextureData[offset + 1] = 16 | (16 << 8) | (16 << 16);
-    cuboidTextureData[offset + 2] = 0; // unused
+    cuboidTextureData[offset + 0] = toHalf(0) | (toHalf(0) << 16);
+    cuboidTextureData[offset + 1] = toHalf(0) | (toHalf(16) << 16);
+    cuboidTextureData[offset + 2] = toHalf(16) | (toHalf(16) << 16);
     cuboidTextureData[offset + 3] = 0; // unused
 
     const tx = i % 32;
@@ -809,8 +817,16 @@ fetch("textures/layer_ubos.json")
             const entry = cuboidList[i];
             if (entry && entry.from && entry.to) {
                 const offset = 16 * i;
-                cuboidTextureData[offset + 0] = entry.from[0] | (entry.from[1] << 8) | (entry.from[2] << 16);
-                cuboidTextureData[offset + 1] = entry.to[0] | (entry.to[1] << 8) | (entry.to[2] << 16);
+                let fx = toHalf(entry.from[0]);
+                let fy = toHalf(entry.from[1]);
+                let fz = toHalf(entry.from[2]);
+                let tx = toHalf(entry.to[0]);
+                let ty = toHalf(entry.to[1]);
+                let tz = toHalf(entry.to[2]);
+
+                cuboidTextureData[offset + 0] = fx | (fy << 16);
+                cuboidTextureData[offset + 1] = fz | (tx << 16);
+                cuboidTextureData[offset + 2] = ty | (tz << 16);
                 if (entry.uvs) {
                     for (let f = 0; f < 6; f++) {
                         if (entry.uvs[f]) {
