@@ -30,11 +30,13 @@ bool isSolid(vec3 p) {
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z < 0.0 || p.z > 1.0)
         return false;
 
-    float top_depth   = texture(texTop,   vec2(p.x,        p.z)).r;
-    float north_depth = texture(texNorth, vec2(p.x, 1.0 - p.y)).r;
-    float south_depth = texture(texSouth, vec2(p.x, 1.0 - p.y)).r;
-    float east_depth  = texture(texEast,  vec2(p.z, 1.0 - p.y)).r;
-    float west_depth  = texture(texWest,  vec2(p.z, 1.0 - p.y)).r;
+    ivec3 ip = clamp(ivec3(floor(p * vec3(256.0, 160.0, 256.0))), ivec3(0), ivec3(255, 159, 255));
+
+    float top_depth   = texelFetch(texTop,   ivec2(ip.x, ip.z), 0).r;
+    float north_depth = texelFetch(texNorth, ivec2(ip.x, 159 - ip.y), 0).r;
+    float south_depth = texelFetch(texSouth, ivec2(ip.x, 159 - ip.y), 0).r;
+    float east_depth  = texelFetch(texEast,  ivec2(ip.z, 159 - ip.y), 0).r;
+    float west_depth  = texelFetch(texWest,  ivec2(ip.z, 159 - ip.y), 0).r;
 
     bool solid_top   = (top_depth   < 0.999) && (p.y <= top_depth   + DEPTH_BIAS);
     bool solid_north = (north_depth < 0.999) && (p.z <= north_depth + DEPTH_BIAS);
@@ -62,65 +64,113 @@ void main() {
     if (t_enter > t_exit) discard;
     if (isSolid(rayOrigin)) discard;
 
-    const float stepSize = 0.003;
+    int hitFace = 0;
+    if (tMin.x >= tMin.y && tMin.x >= tMin.z) {
+        hitFace = 2;
+    } else if (tMin.y >= tMin.x && tMin.y >= tMin.z) {
+        hitFace = 0;
+    } else {
+        hitFace = 1;
+    }
+
+    const vec3 invGridDim = vec3(1.0 / 512.0, 1.0 / 320.0, 1.0 / 512.0);
+    vec3 rayStart = rayOrigin + t_enter * rayDir;
+    ivec3 ip = clamp(ivec3(floor(rayStart * vec3(512.0, 320.0, 512.0))), ivec3(0), ivec3(511, 319, 511));
+
+    ivec3 stepVec = ivec3(
+        rayDir.x >= 0.0 ? 1 : -1,
+        rayDir.y >= 0.0 ? 1 : -1,
+        rayDir.z >= 0.0 ? 1 : -1
+    );
+
+    vec3 safeRayDir = vec3(
+        abs(rayDir.x) < 1e-9 ? 1e-9 : rayDir.x,
+        abs(rayDir.y) < 1e-9 ? 1e-9 : rayDir.y,
+        abs(rayDir.z) < 1e-9 ? 1e-9 : rayDir.z
+    );
+
+    vec3 deltaT = invGridDim / abs(safeRayDir);
+
+    vec3 nextVoxelBoundary = vec3(
+        rayDir.x >= 0.0 ? float(ip.x + 1) : float(ip.x),
+        rayDir.y >= 0.0 ? float(ip.y + 1) : float(ip.y),
+        rayDir.z >= 0.0 ? float(ip.z + 1) : float(ip.z)
+    );
+
+    vec3 nextT = t_enter + (nextVoxelBoundary * invGridDim - rayStart) / safeRayDir;
+
+    float t_current = t_enter;
     bool hit = false;
     vec3 hitPos = vec3(0.0);
-    float t_last_miss = t_enter;
 
-    for (float t = t_enter; t < t_exit; t += stepSize) {
-        vec3 p = rayOrigin + t * rayDir;
-        if (isSolid(p)) {
-            // Binary search between last miss and first hit to reduce stair-stepping.
-            float t_lo = t_last_miss;
-            float t_hi = t;
-            for (int i = 0; i < 6; i++) {
-                float t_mid = (t_lo + t_hi) * 0.5;
-                if (isSolid(rayOrigin + t_mid * rayDir))
-                    t_hi = t_mid;
-                else
-                    t_lo = t_mid;
-            }
-            hitPos = rayOrigin + t_hi * rayDir;
-            hit = true;
+    // Precise DDA traversal loop
+    for (int stepIdx = 0; stepIdx < 1344; stepIdx++) {
+        if (t_current >= t_exit) {
             break;
         }
-        t_last_miss = t;
+
+        vec3 p = (vec3(ip) + 0.5) * invGridDim;
+        if (isSolid(p)) {
+            hit = true;
+            hitPos = rayOrigin + t_current * rayDir;
+            break;
+        }
+
+        if (nextT.x < nextT.y) {
+            if (nextT.x < nextT.z) {
+                t_current = nextT.x;
+                nextT.x += deltaT.x;
+                ip.x += stepVec.x;
+                hitFace = 2;
+                if (ip.x < 0 || ip.x >= 512) break;
+            } else {
+                t_current = nextT.z;
+                nextT.z += deltaT.z;
+                ip.z += stepVec.z;
+                hitFace = 1;
+                if (ip.z < 0 || ip.z >= 512) break;
+            }
+        } else {
+            if (nextT.y < nextT.z) {
+                t_current = nextT.y;
+                nextT.y += deltaT.y;
+                ip.y += stepVec.y;
+                hitFace = 0;
+                if (ip.y < 0 || ip.y >= 320) break;
+            } else {
+                t_current = nextT.z;
+                nextT.z += deltaT.z;
+                ip.z += stepVec.z;
+                hitFace = 1;
+                if (ip.z < 0 || ip.z >= 512) break;
+            }
+        }
     }
 
     if (!hit) discard;
 
-    vec2 uv_top   = vec2(hitPos.x,        hitPos.z);
-    vec2 uv_north = vec2(hitPos.x, 1.0 - hitPos.y);
-    vec2 uv_south = vec2(hitPos.x, 1.0 - hitPos.y);
-    vec2 uv_east  = vec2(hitPos.z, 1.0 - hitPos.y);
-    vec2 uv_west  = vec2(hitPos.z, 1.0 - hitPos.y);
-
-    float d_top   = abs(hitPos.y - texture(texTop,   uv_top).r);
-    float d_north = abs(hitPos.z - texture(texNorth, uv_north).r);
-    float d_south = abs(hitPos.z - texture(texSouth, uv_south).r);
-    float d_east  = abs(hitPos.x - texture(texEast,  uv_east).r);
-    float d_west  = abs(hitPos.x - texture(texWest,  uv_west).r);
-
-    float min_d = min(min(min(min(d_top, d_north), d_south), d_east), d_west);
-
     vec3 voxelColor = vec3(0.0);
     vec3 normal = vec3(0.0, 1.0, 0.0);
 
-    if (min_d == d_top) {
-        voxelColor = texture(texTopColor, uv_top).rgb;
-        normal = vec3(0.0, 1.0, 0.0);
-    } else if (min_d == d_north) {
-        voxelColor = texture(texNorthColor, uv_north).rgb;
-        normal = vec3(0.0, 0.0, 1.0);
-    } else if (min_d == d_south) {
-        voxelColor = texture(texSouthColor, uv_south).rgb;
-        normal = vec3(0.0, 0.0, -1.0);
-    } else if (min_d == d_east) {
-        voxelColor = texture(texEastColor, uv_east).rgb;
-        normal = vec3(1.0, 0.0, 0.0);
-    } else {
-        voxelColor = texture(texWestColor, uv_west).rgb;
-        normal = vec3(-1.0, 0.0, 0.0);
+    if (hitFace == 0) {
+        normal = vec3(0.0, rayDir.y < 0.0 ? 1.0 : -1.0, 0.0);
+        voxelColor = texelFetch(texTopColor, ivec2(ip.x / 2, ip.z / 2), 0).rgb;
+    } else if (hitFace == 1) {
+        normal = vec3(0.0, 0.0, rayDir.z < 0.0 ? 1.0 : -1.0);
+        ivec2 coord = ivec2(ip.x / 2, (319 - ip.y) / 2);
+        if (normal.z > 0.0) {
+            voxelColor = texelFetch(texNorthColor, coord, 0).rgb;
+        } else {
+            voxelColor = texelFetch(texSouthColor, coord, 0).rgb;
+        }
+    } else { // hitFace == 2
+        normal = vec3(rayDir.x < 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+        ivec2 coord = ivec2(ip.z / 2, (319 - ip.y) / 2);
+        if (normal.x > 0.0) {
+            voxelColor = texelFetch(texEastColor, coord, 0).rgb;
+        } else {
+            voxelColor = texelFetch(texWestColor, coord, 0).rgb;
+        }
     }
 
     float diff = max(0.5, dot(vec3(abs(normal.x), normal.y, abs(normal.z)), vec3(0.6, 1.0, 0.8)));
