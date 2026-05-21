@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	"image/png"
 	"math"
 	"os"
@@ -145,33 +144,32 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 	os.MkdirAll(tilesDir, 0755)
 	os.MkdirAll(lodsDir, 0755)
 
-	topColorPath := path.Join(tilesDir, fmt.Sprintf("r.%d.%d.jpg", rs.rx, rs.rz))
+	topColorPath := path.Join(tilesDir, fmt.Sprintf("r.%d.%d.png", rs.rx, rs.rz))
 	fTop, err := os.Create(topColorPath)
 	if err != nil {
 		return err
 	}
 	defer fTop.Close()
-	err = jpeg.Encode(fTop, topColorImg, &jpeg.Options{Quality: 90})
+	err = png.Encode(fTop, topColorImg)
 	if err != nil {
 		return err
 	}
 
 	type assetInfo struct {
-		id    byte
-		img   image.Image
-		isPng bool
+		id  byte
+		img image.Image
 	}
 
 	assets := []assetInfo{
-		{0, topDepthImg, true},
-		{1, northColorImg, false},
-		{2, northDepthImg, true},
-		{3, southColorImg, false},
-		{4, southDepthImg, true},
-		{5, eastColorImg, false},
-		{6, eastDepthImg, true},
-		{7, westColorImg, false},
-		{8, westDepthImg, true},
+		{0, topDepthImg},
+		{1, northColorImg},
+		{2, northDepthImg},
+		{3, southColorImg},
+		{4, southDepthImg},
+		{5, eastColorImg},
+		{6, eastDepthImg},
+		{7, westColorImg},
+		{8, westDepthImg},
 	}
 
 	binPath := path.Join(lodsDir, fmt.Sprintf("r.%d.%d.bin", rs.rx, rs.rz))
@@ -183,11 +181,7 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 
 	for _, asset := range assets {
 		var imgBuf bytes.Buffer
-		if asset.isPng {
-			err = png.Encode(&imgBuf, asset.img)
-		} else {
-			err = jpeg.Encode(&imgBuf, asset.img, &jpeg.Options{Quality: 90})
-		}
+		err = png.Encode(&imgBuf, asset.img)
 		if err != nil {
 			return err
 		}

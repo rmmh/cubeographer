@@ -24,14 +24,14 @@ export const regionLODs = new Map<string, RegionLOD>();
 function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement, isDepth: boolean): WebGLTexture {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    const notUsingSpector = false;
+    const notUsingSpector = true;
     const kind = notUsingSpector && isDepth ? gl.RED : gl.RGBA;
     const format = notUsingSpector && isDepth ? gl.R8 : gl.RGBA8;
     gl.texImage2D(gl.TEXTURE_2D, 0, format, image.width, image.height, 0, kind, gl.UNSIGNED_BYTE, image);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, isDepth ? gl.NEAREST : gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, isDepth ? gl.NEAREST : gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     return tex;
 }
 
@@ -59,7 +59,7 @@ export async function fetchRegionLOD(rx: number, rz: number, context: renderer.C
     regionLODs.set(key, lod);
 
     try {
-        const topColorImgPromise = fetchImage(`map/tiles/r.${rx}.${rz}.jpg`);
+        const topColorImgPromise = fetchImage(`map/tiles/r.${rx}.${rz}.png`);
 
         const binResponse = await fetch(`map/lods/r.${rx}.${rz}.bin`);
         if (!binResponse.ok) {
@@ -84,8 +84,7 @@ export async function fetchRegionLOD(rx: number, rz: number, context: renderer.C
             const value = uint8Array.subarray(offset, offset + length);
             offset += length;
 
-            const isPng = (type === 0 || type === 2 || type === 4 || type === 6 || type === 8);
-            const blob = new Blob([value], { type: isPng ? 'image/png' : 'image/jpeg' });
+            const blob = new Blob([value], { type: 'image/png' });
             const url = URL.createObjectURL(blob);
 
             const imgIdx = imgPromises.length;

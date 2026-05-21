@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	cmtRe = regexp.MustCompile(`([^/]*)/map/(?:tiles/|lods/)?r\.(-?\d+)\.(-?\d+)(?:\.\d+\.cmt|\.jpg|\.bin)$`)
+	cmtRe = regexp.MustCompile(`([^/]*)/map/(?:tiles/|lods/)?r\.(-?\d+)\.(-?\d+)(?:\.\d+\.cmt|\.jpg|\.png|\.bin)$`)
 )
 
 type workItem struct {
