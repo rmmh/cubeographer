@@ -35,6 +35,86 @@ function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement, is
     return tex;
 }
 
+function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLImageElement, isMin: boolean): WebGLTexture {
+    const tex = gl.createTexture();
+    if (!tex) throw new Error("Failed to create WebGL texture");
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+
+    const width = image.width;
+    const height = image.height;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error("Could not create 2d canvas context");
+    ctx.drawImage(image, 0, 0);
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const srcPixels = imgData.data;
+
+    let lastWidth = width;
+    let lastHeight = height;
+    let lastPixels = new Uint8Array(width * height);
+    for (let i = 0; i < width * height; i++) {
+        lastPixels[i] = srcPixels[i * 4];
+    }
+
+    const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
+
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.R8, width, height);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RED, gl.UNSIGNED_BYTE, lastPixels);
+
+    for (let level = 1; level < levels; level++) {
+        const nextWidth = Math.max(1, lastWidth >> 1);
+        const nextHeight = Math.max(1, lastHeight >> 1);
+        const nextPixels = new Uint8Array(nextWidth * nextHeight);
+
+        for (let y = 0; y < nextHeight; y++) {
+            for (let x = 0; x < nextWidth; x++) {
+                const srcX0 = x * 2;
+                const srcX1 = Math.min(lastWidth - 1, x * 2 + 1);
+                const srcY0 = y * 2;
+                const srcY1 = Math.min(lastHeight - 1, y * 2 + 1);
+
+                const val00 = lastPixels[srcX0 + srcY0 * lastWidth];
+                const val10 = lastPixels[srcX1 + srcY0 * lastWidth];
+                const val01 = lastPixels[srcX0 + srcY1 * lastWidth];
+                const val11 = lastPixels[srcX1 + srcY1 * lastWidth];
+
+                const vals = [val00, val10, val01, val11];
+                const solidVals = vals.filter(v => v < 255);
+                let targetVal: number;
+                if (solidVals.length > 0) {
+                    if (isMin) {
+                        targetVal = Math.min(...solidVals);
+                    } else {
+                        targetVal = Math.max(...solidVals);
+                    }
+                } else {
+                    targetVal = 255;
+                }
+
+                nextPixels[x + y * nextWidth] = targetVal;
+            }
+        }
+
+        gl.texSubImage2D(gl.TEXTURE_2D, level, 0, 0, nextWidth, nextHeight, gl.RED, gl.UNSIGNED_BYTE, nextPixels);
+
+        lastWidth = nextWidth;
+        lastHeight = nextHeight;
+        lastPixels = nextPixels;
+    }
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    return tex;
+}
+
 function fetchImage(url: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -102,7 +182,7 @@ export async function fetchRegionLOD(rx: number, rz: number, context: renderer.C
 
         const gl2 = context.gl as WebGL2RenderingContext;
 
-        const getTex = (type: number, isDepth: boolean) => {
+        const getTex = (type: number, isDepth: boolean, isMin?: boolean) => {
             const idx = typeToImgIndex[type];
             if (idx === undefined) {
                 const tex = gl2.createTexture();
@@ -111,20 +191,23 @@ export async function fetchRegionLOD(rx: number, rz: number, context: renderer.C
                 return tex;
             }
             const img = sideImgs[idx];
+            if (isDepth) {
+                return createDepthTextureWithMipmaps(gl2, img, !!isMin);
+            }
             return create2DTexture(gl2, img, isDepth);
         };
 
         lod.textures = {
             texTopColor: create2DTexture(gl2, topColorImg, false),
-            texTop: getTex(0, true),
+            texTop: getTex(0, true, false),
             texNorthColor: getTex(1, false),
-            texNorth: getTex(2, true),
+            texNorth: getTex(2, true, false),
             texSouthColor: getTex(3, false),
-            texSouth: getTex(4, true),
+            texSouth: getTex(4, true, true),
             texEastColor: getTex(5, false),
-            texEast: getTex(6, true),
+            texEast: getTex(6, true, false),
             texWestColor: getTex(7, false),
-            texWest: getTex(8, true)
+            texWest: getTex(8, true, true)
         };
         lod.loaded = true;
         render();

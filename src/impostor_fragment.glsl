@@ -47,6 +47,35 @@ bool isSolid(vec3 p) {
     return solid_top && solid_north && solid_south && solid_east && solid_west;
 }
 
+bool isSolidCoarse(vec3 p, int level) {
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z < 0.0 || p.z > 1.0)
+        return false;
+
+    ivec3 dims = ivec3(256 >> level, 160 >> level, 256 >> level);
+    ivec3 ip = clamp(ivec3(floor(p * vec3(dims))), ivec3(0), dims - ivec3(1));
+
+    float top_depth   = texelFetch(texTop,   ivec2(ip.x, ip.z), level).r;
+    float north_depth = texelFetch(texNorth, ivec2(ip.x, dims.y - 1 - ip.y), level).r;
+    float south_depth = texelFetch(texSouth, ivec2(ip.x, dims.y - 1 - ip.y), level).r;
+    float east_depth  = texelFetch(texEast,  ivec2(ip.z, dims.y - 1 - ip.y), level).r;
+    float west_depth  = texelFetch(texWest,  ivec2(ip.z, dims.y - 1 - ip.y), level).r;
+
+    float x_min = float(ip.x) / float(dims.x);
+    float x_max = float(ip.x + 1) / float(dims.x);
+    float y_min = float(ip.y) / float(dims.y);
+    float y_max = float(ip.y + 1) / float(dims.y);
+    float z_min = float(ip.z) / float(dims.z);
+    float z_max = float(ip.z + 1) / float(dims.z);
+
+    bool solid_top   = (top_depth   < 0.999) && (y_min <= top_depth   + DEPTH_BIAS);
+    bool solid_north = (north_depth < 0.999) && (z_min <= north_depth + DEPTH_BIAS);
+    bool solid_south = (south_depth < 0.999) && (z_max >= south_depth - DEPTH_BIAS);
+    bool solid_east  = (east_depth  < 0.999) && (x_min <= east_depth  + DEPTH_BIAS);
+    bool solid_west  = (west_depth  < 0.999) && (x_max >= west_depth  - DEPTH_BIAS);
+
+    return solid_top && solid_north && solid_south && solid_east && solid_west;
+}
+
 void main() {
     vec3 rayOrigin = vLocalCam;
     vec3 rayDir = normalize(vLocalPos - vLocalCam);
@@ -110,6 +139,51 @@ void main() {
         }
 
         vec3 p = (vec3(ip) + 0.5) * invGridDim;
+
+        // Hierarchical DDA space skipping
+        int skipLevel = -1;
+        for (int lvl = 3; lvl >= 1; lvl--) {
+            if (!isSolidCoarse(p, lvl)) {
+                skipLevel = lvl;
+                break;
+            }
+        }
+
+        if (skipLevel >= 0) {
+            int S = 1 << (skipLevel + 1);
+            ivec3 ip_coarse = ip / S;
+
+            vec3 coarseBoundary = vec3(
+                stepVec.x >= 0 ? float((ip_coarse.x + 1) * S) : float(ip_coarse.x * S),
+                stepVec.y >= 0 ? float((ip_coarse.y + 1) * S) : float(ip_coarse.y * S),
+                stepVec.z >= 0 ? float((ip_coarse.z + 1) * S) : float(ip_coarse.z * S)
+            );
+
+            vec3 t_boundary = t_enter + (coarseBoundary * invGridDim - rayStart) / safeRayDir;
+            float t_exit_block = min(t_boundary.x, min(t_boundary.y, t_boundary.z));
+
+            if (t_exit_block > t_current) {
+                t_current = t_exit_block;
+                if (t_boundary.x <= t_boundary.y && t_boundary.x <= t_boundary.z) {
+                    hitFace = 2;
+                } else if (t_boundary.y <= t_boundary.x && t_boundary.y <= t_boundary.z) {
+                    hitFace = 0;
+                } else {
+                    hitFace = 1;
+                }
+                vec3 p_next = rayOrigin + (t_current + 1e-6) * rayDir;
+                ip = clamp(ivec3(floor(p_next * vec3(512.0, 320.0, 512.0))), ivec3(0), ivec3(511, 319, 511));
+
+                vec3 nextVoxelBoundary = vec3(
+                    rayDir.x >= 0.0 ? float(ip.x + 1) : float(ip.x),
+                    rayDir.y >= 0.0 ? float(ip.y + 1) : float(ip.y),
+                    rayDir.z >= 0.0 ? float(ip.z + 1) : float(ip.z)
+                );
+                nextT = t_enter + (nextVoxelBoundary * invGridDim - rayStart) / safeRayDir;
+                continue;
+            }
+        }
+
         if (isSolid(p)) {
             hit = true;
             hitPos = rayOrigin + t_current * rayDir;
