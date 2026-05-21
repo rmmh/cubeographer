@@ -168,7 +168,15 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 		}
 	}
 
+	totalCount := 0
 	for _, lbs := range layerBlocks {
+		totalCount += len(lbs) - 1
+	}
+
+	for _, lbs := range layerBlocks {
+		if lbs[0] == "MISSING" || strings.Contains(lbs[0], "FALLBACK") {
+			lbs[0] = fmt.Sprintf("%s (%.2f%%)", lbs[0], float64(len(lbs)-1)/float64(totalCount)*100.0)
+		}
 		if len(lbs) > 3 {
 			fmt.Printf("%s (%d): %s ... %s\n", lbs[0], len(lbs)-1, lbs[1], lbs[len(lbs)-1])
 		} else {

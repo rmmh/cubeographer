@@ -366,9 +366,34 @@ class Frustum {
         return true;
 
     }
+
+    intersectsRegion(rx: number, rz: number): boolean {
+        let sphereCenter = vec3.fromValues(rx * 512 + 256, 160, rz * 512 + 256);
+        let sphereRadius = Math.sqrt(256 * 256 + 160 * 160 + 256 * 256);
+
+        const halfAngle = this.coneAngle * .5;
+        const sinAngle = Math.sin(halfAngle);
+        const tanAngle = Math.tan(halfAngle);
+        const tanAngleSqPlusOne = 1 + tanAngle * tanAngle;
+
+        if (!sphereCone(sphereCenter, sphereRadius, this.coneOrigin, this.coneNormal,
+            sinAngle, tanAngleSqPlusOne)) {
+            return false;
+        }
+        return true;
+    }
 }
 
-export function render(context: Context, camera: PerspectiveCamera, scene: Set<Chunk>, layers: InstancedLayer[], cube: Mesh) {
+export function render(
+    context: Context,
+    camera: PerspectiveCamera,
+    scene: Set<Chunk>,
+    layers: InstancedLayer[],
+    cube: Mesh,
+    impostorGeometry?: Geometry,
+    impostorMaterial?: Material,
+    regionLODs?: Map<string, any>
+) {
     const gl = context.gl;
 
     if (!(gl.canvas instanceof HTMLCanvasElement))
@@ -412,8 +437,7 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
         return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
     })
 
-
-    culledChunks = culledChunks.slice(0, 64);
+    culledChunks = culledChunks.slice(0, 8);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {
@@ -521,6 +545,62 @@ export function render(context: Context, camera: PerspectiveCamera, scene: Set<C
                 layer.geometry.verts,       // num vertices per instance
                 chunkLayer.size,  // num instances
             );
+        }
+    }
+
+    // --- Render Region Impostors ---
+    if (impostorGeometry && impostorMaterial && regionLODs) {
+        // Find which regions are already rendered with chunks
+        const renderedRegions = new Set<string>();
+        for (const chunk of culledChunks) {
+            if (!chunk.occluded) {
+                const rx = Math.floor(chunk.position[0] / 512);
+                const rz = Math.floor(chunk.position[2] / 512);
+                renderedRegions.add(`${rx},${rz}`);
+            }
+        }
+
+        gl.disable(gl.BLEND);
+        gl.enable(gl.DEPTH_TEST);
+
+        for (const [key, lod] of regionLODs.entries()) {
+            if (!lod.loaded || !lod.textures) continue;
+            if (renderedRegions.has(key)) continue;
+
+            // Frustum cull
+            if (!frustum.intersectsRegion(lod.rx, lod.rz)) continue;
+
+            bind(impostorMaterial, impostorGeometry);
+
+            if (impostorMaterial.uniformSetters.uCameraPosition) {
+                impostorMaterial.uniformSetters.uCameraPosition(camera.position);
+            }
+
+            const regionOffset = vec3.fromValues(lod.rx * 512, 0, lod.rz * 512);
+            if (impostorMaterial.uniformSetters.uRegionOffset) {
+                impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
+            }
+
+            const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
+            if (impostorMaterial.uniformSetters.modelViewMatrix) {
+                impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
+            }
+
+            // Bind textures
+            const texs = lod.textures;
+            impostorMaterial.uniformSetters.texTop(texs.texTop);
+            impostorMaterial.uniformSetters.texNorth(texs.texNorth);
+            impostorMaterial.uniformSetters.texSouth(texs.texSouth);
+            impostorMaterial.uniformSetters.texEast(texs.texEast);
+            impostorMaterial.uniformSetters.texWest(texs.texWest);
+
+            impostorMaterial.uniformSetters.texTopColor(texs.texTopColor);
+            impostorMaterial.uniformSetters.texNorthColor(texs.texNorthColor);
+            impostorMaterial.uniformSetters.texSouthColor(texs.texSouthColor);
+            impostorMaterial.uniformSetters.texEastColor(texs.texEastColor);
+            impostorMaterial.uniformSetters.texWestColor(texs.texWestColor);
+
+            gl.drawArrays(gl.TRIANGLES, 0, impostorGeometry.verts);
         }
     }
 }

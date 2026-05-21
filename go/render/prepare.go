@@ -114,6 +114,7 @@ type BlockEntry struct {
 	States      [][]string     `json:"states,omitempty"`
 	Solid       bool           `json:"solid,omitempty"`
 	Templates   [][]ModelEntry `json:"templates"`
+	Colors      []string       `json:"colors"`
 }
 
 type BlockEntryMetadata struct {
@@ -1115,6 +1116,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 
 	for i := range *blockEntries {
 		ent := &(*blockEntries)[i]
+		ent.updateColors(pack.Textures)
 		ent.Solid = len(ent.Templates) > 0
 
 		for sIdx := range ent.Templates {
@@ -1153,4 +1155,3 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 
 	return meta, atlases, byteBuf
 }
-

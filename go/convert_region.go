@@ -371,5 +371,10 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 	}
 
+	lodErr := computeRegionLODs(&rs, conf)
+	if lodErr != nil {
+		log.Printf("error computing region LODs for %s: %v", conf.file, lodErr)
+	}
+
 	return err
 }

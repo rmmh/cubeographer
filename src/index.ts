@@ -7,11 +7,14 @@ import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
+const impostorVertexShader = require('./impostor_vertex.glsl');
+const impostorFragmentShader = require('./impostor_fragment.glsl');
 import { Gunzip, gunzipSync } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 import { createOrbitTargetFinder, VoxelBitset } from './voxel';
+import { fetchRegionLOD, makeImpostorGeometry, regionLODs } from './lod';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
 
@@ -582,7 +585,7 @@ function renderFrame() {
     mat4.copy(lastView, camera.view);
 
 
-    renderer.render(context, camera, scene, layers, cube);
+    renderer.render(context, camera, scene, layers, cube, impostorGeometry, impostorMaterial, regionLODs);
 
     stats.end();
 };
@@ -629,6 +632,9 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
         yield value;
     }
 }
+
+const impostorGeometry = makeImpostorGeometry(context.gl as WebGL2RenderingContext);
+const impostorMaterial = new renderer.Material(context.gl as WebGL2RenderingContext, impostorVertexShader, impostorFragmentShader);
 
 function fetchRegion(x: number, z: number, off: number) {
     const controller = new AbortController();
@@ -746,46 +752,19 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
             }
         }
     }
+    // Fetch region LODs for a grid centered on the high-res area
+    const pad = 3;
+    for (let x = xs - pad; x <= xe + pad; x++) {
+        for (let z = zs - pad; z <= ze + pad; z++) {
+            fetchRegionLOD(x, z, context, render);
+        }
+    }
     vec3.set(camera.position, xo * 512, 120, zo * 512);
     vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
     controls.update();
 }
 
-
-const _f16 = new Float16Array(1);
-const _u16 = new Uint16Array(_f16.buffer);
-function toHalf(val: number): number {
-    _f16[0] = val;
-    return _u16[0];
-}
-
 const cuboidTextureData = new Uint32Array(512 * 512 * 4);
-
-// Default to standard full cube [0, 0, 0] -> [16, 16, 16] for all slots
-// and default UVs [0, 0, 16, 16] for all faces using Option 2 (4 pixels per cuboid)
-for (let i = 0; i < 65536; i++) {
-    const offset = 16 * i;
-    cuboidTextureData[offset + 0] = toHalf(0) | (toHalf(0) << 16);
-    cuboidTextureData[offset + 1] = toHalf(0) | (toHalf(16) << 16);
-    cuboidTextureData[offset + 2] = toHalf(16) | (toHalf(16) << 16);
-    cuboidTextureData[offset + 3] = 0; // unused
-
-    const tx = i % 32;
-    const ty = Math.floor(i / 32);
-
-    for (let f = 0; f < 6; f++) {
-        const uMin = tx;
-        const vMin = ty;
-        const uMax = 1 + tx;
-        const vMax = 1 + ty;
-
-        const packedMin = Math.round(uMin * 256.0) | (Math.round(vMin * 256.0) << 16);
-        const packedMax = Math.round(uMax * 256.0) | (Math.round(vMax * 256.0) << 16);
-
-        cuboidTextureData[offset + 4 + 2 * f] = packedMin;
-        cuboidTextureData[offset + 4 + 2 * f + 1] = packedMax;
-    }
-}
 
 const gl = context.gl;
 const cuboidDataTexture = gl.createTexture();
@@ -838,11 +817,12 @@ fetch("textures/cuboid_metadata.bin.gz")
     });
 
 setTimeout(function () {
-    const choice: string = 'center';
+    const choice: string = 'hermit';
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
-        case 'test': fetchRange(0, 1, 0, 1, 0, 0, 0); break;
+        case 'hermit': fetchRange(-1, -1, -1, -1, 0, 0, 0); break;
+        case 'test': fetchRange(0, 0, 0, 0, 0, 0, 0); break;
         default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
     }
 

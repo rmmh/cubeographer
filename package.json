@@ -8,5 +8,9 @@
     "@types/lodash": "^4.17.20",
     "esbuild": "^0.25.11",
     "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prod": "node build.mjs --prod"
   }
 }

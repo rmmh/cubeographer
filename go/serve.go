@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	cmtRe = regexp.MustCompile(`([^/]*)/map/r\.(-?\d+)\.(-?\d+)\.\d+\.cmt$`)
+	cmtRe = regexp.MustCompile(`([^/]*)/map/(?:tiles/|lods/)?r\.(-?\d+)\.(-?\d+)(?:\.\d+\.cmt|\.jpg|\.bin)$`)
 )
 
 type workItem struct {
@@ -120,8 +120,12 @@ func (s *server) awaitUpdate(filename string) {
 }
 
 func (s *server) mapHandler(w http.ResponseWriter, r *http.Request) {
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && strings.HasSuffix(r.URL.Path, ".cmt") {
 		w.Header().Add("Content-Encoding", "gzip")
+	}
+	if strings.Contains(r.URL.Path, "..") {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 	w.Header().Add("Cache-Control", "no-cache")
 	log.Printf("%s stale=%v", r.URL.Path, s.isStale(r.URL.Path))
@@ -173,10 +177,10 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	r.HandleFunc("/", s.indexHandler)
 	r.HandleFunc("/index.js", s.indexJsHandler)
 	r.HandleFunc("/textures/{texture}", s.textureHandler)
-	r.HandleFunc("/map/{path}", s.mapHandler)
+	r.HandleFunc("/map/{path:.*}", s.mapHandler)
 
 	r.HandleFunc("/{world}/", s.indexHandler)
-	r.HandleFunc("/{world}/map/{path}", s.mapHandler)
+	r.HandleFunc("/{world}/map/{path:.*}", s.mapHandler)
 	r.HandleFunc("/{world}/index.js", s.worldRedirHandler)
 	r.HandleFunc("/{world}/textures/{texture}", s.worldRedirHandler)
 
