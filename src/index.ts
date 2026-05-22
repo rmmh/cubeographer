@@ -5,6 +5,7 @@ steal from https://shlegeris.com/2017/01/06/hash-maps.html
 
 import './index.css';
 
+import * as twgl from 'twgl.js';
 import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
@@ -657,8 +658,8 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     }
 }
 
-const impostorGeometry = makeImpostorGeometry(context.gl as WebGL2RenderingContext);
-const impostorMaterial = new renderer.Material(context.gl as WebGL2RenderingContext, impostorVertexShader, impostorFragmentShader);
+const impostorGeometry = makeImpostorGeometry(context.gl);
+const impostorMaterial = new renderer.Material(context.gl, impostorVertexShader, impostorFragmentShader);
 
 function fetchRegion(x: number, z: number, off: number) {
     const key = `${x},${z},${off}`;
@@ -812,23 +813,17 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
 const cuboidTextureData = new Uint32Array(512 * 512 * 4);
 
 const gl = context.gl;
-const cuboidDataTexture = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, cuboidDataTexture);
-gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA32UI,
-    512,
-    512,
-    0,
-    gl.RGBA_INTEGER,
-    gl.UNSIGNED_INT,
-    cuboidTextureData
-);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+const cuboidDataTexture = twgl.createTexture(gl, {
+    target: gl.TEXTURE_2D,
+    internalFormat: gl.RGBA32UI,
+    width: 512,
+    height: 512,
+    format: gl.RGBA_INTEGER,
+    type: gl.UNSIGNED_INT,
+    src: cuboidTextureData,
+    minMag: gl.NEAREST,
+    wrap: gl.CLAMP_TO_EDGE,
+});
 
 context.cuboidDataTex = cuboidDataTexture;
 context.cuboidTextureData = cuboidTextureData;
@@ -845,16 +840,14 @@ fetch("textures/cuboid_metadata.bin.gz")
         const copyLength = Math.min(metadataUint32.length, cuboidTextureData.length);
         cuboidTextureData.set(metadataUint32.subarray(0, copyLength));
 
-        gl.bindTexture(gl.TEXTURE_2D, cuboidDataTexture);
-        gl.texSubImage2D(
-            gl.TEXTURE_2D,
-            0,
-            0, 0,
-            512, 512,
-            gl.RGBA_INTEGER,
-            gl.UNSIGNED_INT,
-            cuboidTextureData
-        );
+        twgl.setTextureFromArray(gl, cuboidDataTexture, cuboidTextureData, {
+            target: gl.TEXTURE_2D,
+            internalFormat: gl.RGBA32UI,
+            format: gl.RGBA_INTEGER,
+            type: gl.UNSIGNED_INT,
+            width: 512,
+            height: 512,
+        });
         render();
     })
     .catch(err => {

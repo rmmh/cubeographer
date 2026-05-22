@@ -1,17 +1,15 @@
 import { mat4, vec3, vec4 } from 'gl-matrix';
+import * as twgl from 'twgl.js';
 
 function readDepthAtPixel(context: any, ndcX: number, ndcY: number): number {
-    const gl = context.gl as WebGL2RenderingContext;
+    const gl = context.gl;
     if (!context.fboDepth) return 1.0;
 
     // Create resources for depth reading on-demand (only once)
-    if (!context._depthReadFBO) {
-        context._depthReadFBO = gl.createFramebuffer();
-        context._depthReadTex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, context._depthReadTex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, context._depthReadFBO);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, context._depthReadTex, 0);
+    if (!context._depthReadFBOInfo) {
+        context._depthReadFBOInfo = twgl.createFramebufferInfo(gl, [
+            { internalFormat: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE, minMag: gl.NEAREST, wrap: gl.CLAMP_TO_EDGE }
+        ], 1, 1);
 
         // Create shader program
         const vs = `#version 300 es
@@ -41,40 +39,26 @@ function readDepthAtPixel(context: any, ndcX: number, ndcY: number): number {
             }
         `;
 
-        const vsShader = gl.createShader(gl.VERTEX_SHADER)!;
-        gl.shaderSource(vsShader, vs);
-        gl.compileShader(vsShader);
-
-        const fsShader = gl.createShader(gl.FRAGMENT_SHADER)!;
-        gl.shaderSource(fsShader, fs);
-        gl.compileShader(fsShader);
-
-        const program = gl.createProgram()!;
-        gl.attachShader(program, vsShader);
-        gl.attachShader(program, fsShader);
-        gl.linkProgram(program);
-
-        context._depthReadProgram = program;
-        context._depthReadUniformDepthTex = gl.getUniformLocation(program, "uDepthTex");
-        context._depthReadUniformTexCoord = gl.getUniformLocation(program, "uTexCoord");
+        context._depthReadProgramInfo = twgl.createProgramInfo(gl, [vs, fs]);
     }
 
     // Now, perform the 1x1 render pass to read depth
     const prevFBO = gl.getParameter(gl.FRAMEBUFFER_BINDING);
     const prevViewport = gl.getParameter(gl.VIEWPORT);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, context._depthReadFBO);
-    gl.viewport(0, 0, 1, 1);
+    twgl.bindFramebufferInfo(gl, context._depthReadFBOInfo);
 
-    gl.useProgram(context._depthReadProgram);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, context.fboDepth);
-    gl.uniform1i(context._depthReadUniformDepthTex, 0);
+    const programInfo = context._depthReadProgramInfo;
+    gl.useProgram(programInfo.program);
 
     // ndcX and ndcY are in [-1, 1], map to [0, 1]
     const u = ndcX * 0.5 + 0.5;
     const v = ndcY * 0.5 + 0.5;
-    gl.uniform2f(context._depthReadUniformTexCoord, u, v);
+
+    twgl.setUniforms(programInfo, {
+        uDepthTex: context.fboDepth,
+        uTexCoord: [u, v]
+    });
 
     // Disable state that might affect drawing a simple quad
     gl.disable(gl.DEPTH_TEST);

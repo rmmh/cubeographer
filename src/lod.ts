@@ -1,5 +1,6 @@
 import { vec3 } from "gl-matrix";
 import * as renderer from './renderer';
+import * as twgl from 'twgl.js';
 
 interface RegionLOD {
     rx: number;
@@ -20,17 +21,18 @@ interface RegionLOD {
 }
 
 function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement | ImageBitmap, isDepth: boolean): WebGLTexture {
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
     const notUsingSpector = true;
     const kind = notUsingSpector && isDepth ? gl.RED : gl.RGBA;
     const format = notUsingSpector && isDepth ? gl.R8 : gl.RGBA8;
-    gl.texImage2D(gl.TEXTURE_2D, 0, format, image.width, image.height, 0, kind, gl.UNSIGNED_BYTE, image);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    return tex;
+    return twgl.createTexture(gl, {
+        target: gl.TEXTURE_2D,
+        internalFormat: format,
+        format: kind,
+        type: gl.UNSIGNED_BYTE,
+        src: image,
+        minMag: gl.NEAREST,
+        wrap: gl.CLAMP_TO_EDGE
+    });
 }
 
 function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLImageElement | ImageBitmap, isMin: boolean): WebGLTexture {
@@ -105,10 +107,11 @@ function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLIm
     }
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
 
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    twgl.setTextureParameters(gl, tex, {
+        wrap: gl.CLAMP_TO_EDGE,
+        min: gl.NEAREST_MIPMAP_NEAREST,
+        mag: gl.NEAREST
+    });
 
     return tex;
 }
@@ -187,25 +190,23 @@ export function fetchRegionLOD(
                 ]);
 
                 const context = sceneGraph.context;
-                const gl2 = context.gl as WebGL2RenderingContext;
 
                 const getTex = (type: number, isDepth: boolean, isMin?: boolean) => {
                     const idx = typeToImgIndex[type];
                     if (idx === undefined) {
-                        const tex = gl2.createTexture();
-                        gl2.bindTexture(gl2.TEXTURE_2D, tex);
-                        gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 1, 1, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-                        return tex;
+                        return twgl.createTexture(context.gl, {
+                            src: [255, 255, 255, 255]
+                        });
                     }
                     const img = sideImgs[idx];
                     if (isDepth) {
-                        return createDepthTextureWithMipmaps(gl2, img, !!isMin);
+                        return createDepthTextureWithMipmaps(context.gl, img, !!isMin);
                     }
-                    return create2DTexture(gl2, img, isDepth);
+                    return create2DTexture(context.gl, img, isDepth);
                 };
 
                 const textures = {
-                    texTopColor: create2DTexture(gl2, topColorImg, false),
+                    texTopColor: create2DTexture(context.gl, topColorImg, false),
                     texTop: getTex(0, true, false),
                     texNorthColor: getTex(1, false),
                     texNorth: getTex(2, true, false),

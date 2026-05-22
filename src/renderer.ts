@@ -1,32 +1,32 @@
 import { glMatrix, mat4, quat, vec3, vec4 } from 'gl-matrix';
 
-import * as webgl_utils from "./webgl_utils";
+import * as twgl from 'twgl.js';
 import { generateTextureArrayMipmaps } from "./downscale";
 import { safeLookAt } from "./camera";
 import { renderBoundaries } from './render_debug';
 
 export class Material {
-    gl: WebGLRenderingContext;
+    gl: WebGL2RenderingContext;
     program: WebGLProgram;
     uniformSetters: { [name: string]: any };
     attribSetters: { [name: string]: any };
-    bufferInfo: webgl_utils.BufferInfo
 
     constructor(gl: WebGL2RenderingContext, vertexShader: string, fragmentShader: string) {
         this.gl = gl;
-        this.program = webgl_utils.createProgramFromSources(gl, [vertexShader, fragmentShader]);
-        this.uniformSetters = webgl_utils.createUniformSetters(gl, this.program);
-        this.attribSetters = webgl_utils.createAttributeSetters(gl, this.program);
+        const programInfo = twgl.createProgramInfo(gl, [vertexShader, fragmentShader]);
+        this.program = programInfo.program;
+        this.uniformSetters = programInfo.uniformSetters;
+        this.attribSetters = programInfo.attribSetters;
     }
 }
 
 export class Geometry {
-    attributes: { [name: string]: webgl_utils.AttribInfo }
+    attributes: { [name: string]: twgl.AttribInfo }
     layerLengths: Uint32Array
     verts: number
 
-    constructor(public gl: WebGLRenderingContext, attributes?: { [name: string]: webgl_utils.AttribInfo }) {
-        this.attributes = attributes;
+    constructor(public gl: WebGL2RenderingContext, attributes?: { [name: string]: twgl.AttribInfo }) {
+        this.attributes = attributes || {};
         this.verts = 3;
     }
 
@@ -35,19 +35,18 @@ export class Geometry {
     }
 
     setAttributes(arrays: { [name: string]: any }) {
-        this.attributes = webgl_utils.createAttribsFromArrays(this.gl, arrays);
+        this.attributes = twgl.createAttribsFromArrays(this.gl, arrays);
     }
 
     addAttribute(name: string, array: any) {
-        Object.assign(this.attributes, webgl_utils.createAttribsFromArrays(this.gl, { [name]: array }));
+        Object.assign(this.attributes, twgl.createAttribsFromArrays(this.gl, { [name]: array }));
     }
 
     updateAttribute(name: string, array: any, offset?: number) {
         if (!(name in this.attributes)) {
             throw new Error("unknown attribute: " + name);
         }
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.attributes[name].buffer);
-        this.gl.bufferSubData(this.gl.ARRAY_BUFFER, offset || 0, array);
+        twgl.setAttribInfoBufferFromArray(this.gl, this.attributes[name], array, offset || 0);
     }
 }
 
@@ -88,35 +87,44 @@ export class Chunk {
     position: vec3
     minY: number
     maxY: number
-    layers: { [name: string]: webgl_utils.AttribInfo }
+    layers: { [name: string]: twgl.AttribInfo }
     occluded: boolean
     query: WebGLQuery
     queryInProgress: boolean
     voxelBitset?: any
 
-    constructor(public gl: WebGLRenderingContext) {
+    constructor(public gl: WebGL2RenderingContext) {
         this.position = vec3.create();
         this.query = null;
         this.queryInProgress = false;
         this.occluded = false;
         this.minY = 0
         this.maxY = 255
+        this.layers = {};
     }
 
     setLayers(arrays: { [name: string]: any }) {
-        this.layers = webgl_utils.createAttribsFromArrays(this.gl, arrays);
+        this.layers = twgl.createAttribsFromArrays(this.gl, arrays);
+        for (const [name, arraySpec] of Object.entries(arrays)) {
+            if (arraySpec && arraySpec.retain) {
+                this.layers[name].data = arraySpec.data.buffer;
+            }
+        }
     }
 
     addAttribute(name: string, array: any) {
-        Object.assign(this.layers, webgl_utils.createAttribsFromArrays(this.gl, { [name]: array }));
+        const newAttribs = twgl.createAttribsFromArrays(this.gl, { [name]: array });
+        if (array && array.retain) {
+            newAttribs[name].data = array.data.buffer;
+        }
+        Object.assign(this.layers, newAttribs);
     }
 
     updateAttribute(name: string, array: any, offset?: number) {
         if (!(name in this.layers)) {
             throw new Error("unknown attribute: " + name);
         }
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.layers[name].buffer);
-        this.gl.bufferSubData(this.gl.ARRAY_BUFFER, offset || 0, array);
+        twgl.setAttribInfoBufferFromArray(this.gl, this.layers[name], array, offset || 0);
         if (this.layers[name].data) {
             let buf = new Uint8Array(this.layers[name].data);
             buf.set(array, offset);
@@ -130,47 +138,28 @@ export class Context {
     clearColor: vec4
     cuboidDataTex?: WebGLTexture
     cuboidTextureData?: Uint32Array
-    fbo: WebGLFramebuffer | null = null
-    fboColor: WebGLRenderbuffer | null = null
-    fboDepth: WebGLTexture | null = null
-    fboWidth = 0
-    fboHeight = 0
+    fboInfo: twgl.FramebufferInfo | null = null
+    get fbo(): WebGLFramebuffer | null {
+        return this.fboInfo ? this.fboInfo.framebuffer : null;
+    }
+    get fboDepth(): WebGLTexture | null {
+        return this.fboInfo ? (this.fboInfo.attachments[1] as WebGLTexture) : null;
+    }
     renderToFBO: boolean = false
     boundaryMaterial?: Material
     boundaryGeometry?: Geometry
 
     updateFBO(width: number, height: number) {
         const gl = this.gl;
-        if (this.fbo && this.fboWidth === width && this.fboHeight === height) {
-            return;
+        const attachments = [
+            { format: gl.RGBA8, samples: 1 },
+            { attachmentPoint: gl.DEPTH_ATTACHMENT, internalFormat: gl.DEPTH_COMPONENT32F, format: gl.DEPTH_COMPONENT, type: gl.FLOAT, minMag: gl.NEAREST, wrap: gl.CLAMP_TO_EDGE }
+        ];
+        if (!this.fboInfo) {
+            this.fboInfo = twgl.createFramebufferInfo(gl, attachments, width, height);
+        } else if (this.fboInfo.width !== width || this.fboInfo.height !== height) {
+            twgl.resizeFramebufferInfo(gl, this.fboInfo, attachments, width, height);
         }
-        if (this.fbo) {
-            gl.deleteFramebuffer(this.fbo);
-            gl.deleteRenderbuffer(this.fboColor);
-            gl.deleteTexture(this.fboDepth);
-        }
-        this.fboWidth = width;
-        this.fboHeight = height;
-
-        this.fbo = gl.createFramebuffer();
-        this.fboColor = gl.createRenderbuffer();
-        this.fboDepth = gl.createTexture();
-
-        gl.bindRenderbuffer(gl.RENDERBUFFER, this.fboColor);
-        gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, width, height);
-
-        gl.bindTexture(gl.TEXTURE_2D, this.fboDepth);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.fboColor);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.fboDepth, 0);
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
     constructor(canvas: HTMLCanvasElement) {
@@ -267,17 +256,17 @@ export class Context {
                 slicedPixels
             );
 
-            // Setup texture wrapping and filtering parameters
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-
             // Generate custom gamma-aware and transparency-weighted mipmaps
             generateTextureArrayMipmaps(gl, texture, slicedPixels, 4);
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST);
 
-            // 4 levels means 16px -> 1
-            gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, 4);
+            // Setup texture wrapping and filtering parameters
+            twgl.setTextureParameters(gl, texture, {
+                target: gl.TEXTURE_2D_ARRAY,
+                wrap: gl.CLAMP_TO_EDGE,
+                mag: gl.NEAREST,
+                min: gl.NEAREST_MIPMAP_NEAREST,
+                maxLevel: 4
+            });
 
             if (done) done();
         });
@@ -735,9 +724,9 @@ export function render(
 
     if (context.renderToFBO) {
         context.updateFBO(gl.canvas.width, gl.canvas.height);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, context.fbo);
+        twgl.bindFramebufferInfo(gl, context.fboInfo);
     } else {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        twgl.bindFramebufferInfo(gl, null);
     }
 
     gl.clearColor(context.clearColor[0], context.clearColor[1],
@@ -747,9 +736,6 @@ export function render(
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.GREATER); // Use GREATER depth function for inverse-Z
     gl.clearDepth(0.0); // Clear depth to 0.0 (far plane) for inverse-Z
-
-    // Tell WebGL how to convert from clip space to pixels
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
     // Clear the canvas AND the depth buffer.
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);

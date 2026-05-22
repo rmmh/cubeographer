@@ -334,7 +334,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
         }
 
         try {
-            const gl = sceneGraph.context.gl as WebGL2RenderingContext;
+            const gl = sceneGraph.context.gl;
             const texs = region.impostor.textures;
             const generatedCanvases: { [type: number]: HTMLCanvasElement } = {};
 
