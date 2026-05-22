@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io/fs"
 	"log"
 	"os"
 	"path"
@@ -26,7 +26,7 @@ func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 }
 
 func convert(numProcs int, regionDir, outDir string, filters []string, prune bool) {
-	files, err := ioutil.ReadDir(regionDir)
+	files, err := os.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 		}
 	}
 
-	work := make(chan os.FileInfo)
+	work := make(chan fs.FileInfo)
 	var wg sync.WaitGroup
 	for i := 0; i < numProcs; i++ {
 		go func() {
@@ -56,7 +56,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 					prune:  prune,
 				})
 				if err != nil {
-					log.Fatal(err)
+					log.Fatal("error converting ", file.Name(), ": ", err)
 				}
 				wg.Done()
 			}
@@ -79,8 +79,15 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 				continue
 			}
 		}
+		info, err := file.Info()
+		if err != nil {
+			log.Println("error getting file info: ", file.Name(), err)
+		}
+		if info.Size() == 0 || info.IsDir() {
+			continue
+		}
 		wg.Add(1)
-		work <- file
+		work <- info
 	}
 	wg.Wait()
 }

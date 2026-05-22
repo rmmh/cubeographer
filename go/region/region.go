@@ -225,7 +225,7 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 			log.Printf("chunk misplaced (corrupt region file?)-- expected %d,%d got %d,%d\n", xPos, zPos, chunkXPos, chunkZPos)
 			continue
 		}
-		if chunkStatus != "" && chunkStatus != "minecraft:full" {
+		if chunkStatus != "" && (chunkStatus != "minecraft:full" && chunkStatus != "full") {
 			continue // skip proto-chunks
 		}
 		if len(ys) == 25 && len(palettes[24]) > 1 && false {

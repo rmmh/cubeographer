@@ -796,7 +796,7 @@ function fetchRegion(x: number, z: number, off: number) {
 
 // fetchRegion(1,1,0,-1.2,-1.2);
 
-function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: number, xo: number, zo: number) {
+function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: number, xo: number, zo: number, pad: number = 4) {
     for (let o = 0; o < 4; o++) {
         for (let x = xs; x <= xe; x++) {
             for (let z = zs; z <= ze; z++) {
@@ -805,7 +805,6 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
         }
     }
     // Fetch region LODs for a grid centered on the high-res area
-    const pad = 3;
     for (let x = xs - pad; x <= xe + pad; x++) {
         for (let z = zs - pad; z <= ze + pad; z++) {
             fetchRegionLOD(x, z, sceneGraph, camera.position, render);
@@ -861,10 +860,11 @@ fetch("textures/cuboid_metadata.bin.gz")
     });
 
 setTimeout(function () {
-    const choice: string = 'hermit';
+    const choice: string = 'greenfield';
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
+        case 'greenfield': fetchRange(2, 2, 2, 2, 0, 0, 0, 10); break;
         case 'hermit': fetchRange(-1, -1, -1, -1, 0, 0, 0); break;
         case 'test': fetchRange(0, 0, 0, 0, 0, 0, 0); break;
         default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
