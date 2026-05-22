@@ -3,6 +3,7 @@ import { glMatrix, mat4, quat, vec3, vec4 } from 'gl-matrix';
 import * as webgl_utils from "./webgl_utils";
 import { generateTextureArrayMipmaps } from "./downscale";
 import { safeLookAt } from "./camera";
+import { renderBoundaries } from './render_debug';
 
 export class Material {
     gl: WebGLRenderingContext;
@@ -135,6 +136,8 @@ export class Context {
     fboWidth = 0
     fboHeight = 0
     renderToFBO: boolean = false
+    boundaryMaterial?: Material
+    boundaryGeometry?: Geometry
 
     updateFBO(width: number, height: number) {
         const gl = this.gl;
@@ -538,8 +541,24 @@ export class RequestManager {
 export class SceneGraph {
     regions = new Map<string, RegionNode>();
     requestManager = new RequestManager();
+    maxHighResChunks = 8;
+    showBoundaries = false;
+    private listeners = new Set<() => void>();
 
     constructor(public context: Context) { }
+
+    subscribe(listener: () => void): () => void {
+        this.listeners.add(listener);
+        return () => {
+            this.listeners.delete(listener);
+        };
+    }
+
+    notify() {
+        for (const listener of this.listeners) {
+            listener();
+        }
+    }
 
     getOrCreateRegion(rx: number, rz: number): RegionNode {
         const key = `${rx},${rz}`;
@@ -582,6 +601,7 @@ export class SceneGraph {
         if (chunkDataCallback) {
             chunkDataCallback(regionlet.chunk);
         }
+        this.notify();
     }
 
     updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null) {
@@ -591,6 +611,7 @@ export class SceneGraph {
         if (textures) {
             region.impostor.textures = textures;
         }
+        this.notify();
     }
 
     cull(camera: PerspectiveCamera): {
@@ -626,15 +647,15 @@ export class SceneGraph {
         // 2. Sort all visible regionlets by distance to camera (closest first)
         allVisibleRegionlets.sort((a, b) => a.distSq - b.distSq);
 
-        // 3. Define the target fetch set (top 8 closest visible chunks, loaded or not)
-        const targetRegionlets = allVisibleRegionlets.slice(0, 8);
+        // 3. Define the target fetch set (top closest visible chunks, loaded or not)
+        const targetRegionlets = allVisibleRegionlets.slice(0, this.maxHighResChunks);
         const targetSet = new Set<RegionletNode>(targetRegionlets.map(x => x.rlet));
 
         // 4. Identify all visible chunks that are actually LOADED
         const loadedVisible = allVisibleRegionlets.filter(x => x.rlet.status === 'READY' || x.rlet.status === 'STREAM');
 
-        // 5. Determine which chunks will actually be rendered (top 8 closest loaded chunks)
-        const renderedChunks = loadedVisible.slice(0, 8);
+        // 5. Determine which chunks will actually be rendered (top closest loaded chunks)
+        const renderedChunks = loadedVisible.slice(0, this.maxHighResChunks);
         const renderedChunkSet = new Set<RegionletNode>(renderedChunks.map(x => x.rlet));
 
         // 6. Decide rendering and fetching per region
@@ -764,8 +785,8 @@ export function render(
         return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
     });
 
-    // Limit to rendering top 8 chunks to match original behavior / performance target
-    const renderedChunks = culledChunks.slice(0, 8);
+    // Limit to rendering top chunks to match original behavior / performance target
+    const renderedChunks = culledChunks.slice(0, sceneGraph.maxHighResChunks);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {
@@ -825,7 +846,7 @@ export function render(
         vec3.add(bpos, bpos, b.chunk.position);
         return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
     });
-    for (const rlet of sortedMissing.slice(0, 8)) {
+    for (const rlet of sortedMissing.slice(0, sceneGraph.maxHighResChunks)) {
         queryChunk(rlet.chunk, 0, 255);
     }
 
@@ -926,6 +947,11 @@ export function render(
 
             gl.drawArrays(gl.TRIANGLES, 0, impostorGeometry.verts);
         }
+    }
+
+    // 6. Draw Boundary Boxes (Wireframes)
+    if (sceneGraph.showBoundaries) {
+        renderBoundaries(gl, context, camera, sceneGraph, cube, renderedChunks, cullResults, projectionMatrix);
     }
 
     if (context.renderToFBO) {

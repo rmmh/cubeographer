@@ -3,6 +3,8 @@ TODO: open addressing for block insertion/deletion
 steal from https://shlegeris.com/2017/01/06/hash-maps.html
 */
 
+import './index.css';
+
 import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
@@ -15,6 +17,7 @@ import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 import { createOrbitTargetFinder } from './voxel';
 import { fetchRegionLOD, makeImpostorGeometry } from './lod';
+import { setupGUI } from './gui';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
 
@@ -751,6 +754,7 @@ function fetchRegion(x: number, z: number, off: number) {
                         layerNumber++;
                     }
                     render();
+                    sceneGraph.notify();
                 }
 
                 let minY = 255, maxY = 0;
@@ -868,4 +872,8 @@ setTimeout(function () {
     }
 
     maybeSetCameraFromLocstring();
-}, 500)
+}, 500);
+
+// --- DEBUG MENU & REGION INSPECTOR SETUP ---
+setupGUI(sceneGraph, controls, context, render);
+
