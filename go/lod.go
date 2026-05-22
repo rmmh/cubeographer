@@ -25,7 +25,7 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 				for ox := 0; ox < 2; ox++ {
 					for oy := 0; oy < 2; oy++ {
 						for oz := 0; oz < 2; oz++ {
-							b, _, _, _ := rs.get(2*x+ox, 2*y+oy, 2*z+oz)
+							b, _, _, _ := rs.get(2*x+ox, 2*y+oy+1, 2*z+oz)
 							if b != 0 {
 								blocks[x+y*W+z*W*H] = b
 								break voxelScan

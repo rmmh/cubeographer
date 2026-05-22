@@ -78,6 +78,7 @@ bool isSolidCoarse(vec3 p, int level) {
 
 void main() {
     vec3 rayOrigin = vLocalCam;
+    rayOrigin.y -= 1.0 / 320.0;
     vec3 rayDir = normalize(vLocalPos - vLocalCam);
 
     // IEEE 754 division by zero produces ±infinity, which is correct for slab intersection.
