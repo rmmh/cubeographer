@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	cmtRe = regexp.MustCompile(`([^/]*)/map/(?:tiles/|lods/)?r\.(-?\d+)\.(-?\d+)(?:\.\d+\.cmt|\.jpg|\.png|\.bin)$`)
+	cmtRe = regexp.MustCompile(`([^/]*)/map/(?:tiles/|lods/)?r\.(-?\d+)\.(-?\d+)(?:\.\d+\.cmt|\.png|\.bin)$`)
 )
 
 type workItem struct {
@@ -47,13 +47,7 @@ func (s *server) indexHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path.Join(s.dataDir, "index.html"))
 }
 
-func (s *server) indexJsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Cache-Control", "no-cache")
-	http.ServeFile(w, r, path.Join(s.dataDir, "index.js"))
-}
-
-func (s *server) textureHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Cache-Control", "no-cache")
+func (s *server) staticHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path.Join(s.dataDir, r.URL.Path))
 }
 
@@ -175,8 +169,9 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	}
 
 	r.HandleFunc("/", s.indexHandler)
-	r.HandleFunc("/index.js", s.indexJsHandler)
-	r.HandleFunc("/textures/{texture}", s.textureHandler)
+	r.HandleFunc("/index.css", s.staticHandler)
+	r.HandleFunc("/index.js", s.staticHandler)
+	r.HandleFunc("/textures/{texture}", s.staticHandler)
 	r.HandleFunc("/map/{path:.*}", s.mapHandler)
 
 	r.HandleFunc("/{world}/", s.indexHandler)
