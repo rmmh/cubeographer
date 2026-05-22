@@ -19,9 +19,7 @@ interface RegionLOD {
     loaded: boolean;
 }
 
-export const regionLODs = new Map<string, RegionLOD>();
-
-function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement, isDepth: boolean): WebGLTexture {
+function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement | ImageBitmap, isDepth: boolean): WebGLTexture {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     const notUsingSpector = true;
@@ -35,7 +33,7 @@ function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement, is
     return tex;
 }
 
-function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLImageElement, isMin: boolean): WebGLTexture {
+function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLImageElement | ImageBitmap, isMin: boolean): WebGLTexture {
     const tex = gl.createTexture();
     if (!tex) throw new Error("Failed to create WebGL texture");
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -115,107 +113,129 @@ function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLIm
     return tex;
 }
 
-function fetchImage(url: string): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = (err) => reject(err);
-        img.src = url;
-    });
-}
-
-export async function fetchRegionLOD(rx: number, rz: number, context: renderer.Context, render: () => void): Promise<RegionLOD | null> {
+export function fetchRegionLOD(
+    rx: number,
+    rz: number,
+    sceneGraph: renderer.SceneGraph,
+    cameraPosition: any,
+    render: () => void
+) {
     const key = `${rx},${rz}`;
-    if (regionLODs.has(key)) {
-        return regionLODs.get(key);
+    const region = sceneGraph.getOrCreateRegion(rx, rz);
+    if (region.impostor.status !== 'NONE') {
+        return;
     }
 
-    const lod: RegionLOD = {
-        rx,
-        rz,
-        textures: null,
-        loaded: false
-    };
-    regionLODs.set(key, lod);
+    console.log("Fetching region LOD", key);
+    sceneGraph.updateImpostorStatus(rx, rz, 'FETCH');
 
-    try {
-        const topColorImgPromise = fetchImage(`map/tiles/r.${rx}.${rz}.png`);
+    // Calculate distance to region center as priority (closer is higher priority, i.e., lower priority number)
+    const rCenter = [rx * 512 + 256, 120, rz * 512 + 256];
+    const dx = cameraPosition[0] - rCenter[0];
+    const dy = cameraPosition[1] - rCenter[1];
+    const dz = cameraPosition[2] - rCenter[2];
+    const priority = dx * dx + dy * dy + dz * dz;
 
-        const binResponse = await fetch(`map/lods/r.${rx}.${rz}.bin`);
-        if (!binResponse.ok) {
-            throw new Error(`failed to fetch LOD bin for region ${rx},${rz}`);
-        }
-        const binBuffer = await binResponse.arrayBuffer();
-        const uint8Array = new Uint8Array(binBuffer);
-        const dataView = new DataView(binBuffer);
+    sceneGraph.requestManager.enqueue({
+        type: 'IMPOSTOR',
+        key: `impostor:${key}`,
+        priority,
+        run: async () => {
+            try {
+                const topColorImgPromise = fetch(`map/tiles/r.${rx}.${rz}.png`)
+                    .then(res => {
+                        if (!res.ok) throw new Error(`failed to fetch top color tile for region ${rx},${rz}`);
+                        return res.blob();
+                    })
+                    .then(blob => createImageBitmap(blob));
 
-        let offset = 0;
-        const imgPromises: Promise<HTMLImageElement>[] = [];
-        const typeToImgIndex: { [type: number]: number } = {};
+                const binResponse = await fetch(`map/lods/r.${rx}.${rz}.bin`);
+                if (!binResponse.ok) {
+                    throw new Error(`failed to fetch LOD bin for region ${rx},${rz}`);
+                }
+                const binBuffer = await binResponse.arrayBuffer();
+                const uint8Array = new Uint8Array(binBuffer);
+                const dataView = new DataView(binBuffer);
 
-        while (offset < uint8Array.length) {
-            if (offset + 5 > uint8Array.length) break;
-            const type = uint8Array[offset];
-            offset += 1;
-            const length = dataView.getUint32(offset, true);
-            offset += 4;
-            if (offset + length > uint8Array.length) break;
+                let offset = 0;
+                const imgPromises: Promise<ImageBitmap>[] = [];
+                const typeToImgIndex: { [type: number]: number } = {};
 
-            const value = uint8Array.subarray(offset, offset + length);
-            offset += length;
+                while (offset < uint8Array.length) {
+                    if (offset + 5 > uint8Array.length) break;
+                    const type = uint8Array[offset];
+                    offset += 1;
+                    const length = dataView.getUint32(offset, true);
+                    offset += 4;
+                    if (offset + length > uint8Array.length) break;
 
-            const blob = new Blob([value], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
+                    const value = uint8Array.subarray(offset, offset + length);
+                    offset += length;
 
-            const imgIdx = imgPromises.length;
-            imgPromises.push(fetchImage(url).then(img => {
-                URL.revokeObjectURL(url);
-                return img;
-            }));
-            typeToImgIndex[type] = imgIdx;
-        }
+                    const blob = new Blob([value], { type: 'image/png' });
+                    const imgIdx = imgPromises.length;
+                    imgPromises.push(createImageBitmap(blob, {
+                        colorSpaceConversion: 'none',
+                        premultiplyAlpha: 'none'
+                    }));
+                    typeToImgIndex[type] = imgIdx;
+                }
 
-        const [topColorImg, ...sideImgs] = await Promise.all([
-            topColorImgPromise,
-            ...imgPromises
-        ]);
+                const [topColorImg, ...sideImgs] = await Promise.all([
+                    topColorImgPromise,
+                    ...imgPromises
+                ]);
 
-        const gl2 = context.gl as WebGL2RenderingContext;
+                const context = sceneGraph.context;
+                const gl2 = context.gl as WebGL2RenderingContext;
 
-        const getTex = (type: number, isDepth: boolean, isMin?: boolean) => {
-            const idx = typeToImgIndex[type];
-            if (idx === undefined) {
-                const tex = gl2.createTexture();
-                gl2.bindTexture(gl2.TEXTURE_2D, tex);
-                gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 1, 1, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-                return tex;
+                const getTex = (type: number, isDepth: boolean, isMin?: boolean) => {
+                    const idx = typeToImgIndex[type];
+                    if (idx === undefined) {
+                        const tex = gl2.createTexture();
+                        gl2.bindTexture(gl2.TEXTURE_2D, tex);
+                        gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 1, 1, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+                        return tex;
+                    }
+                    const img = sideImgs[idx];
+                    if (isDepth) {
+                        return createDepthTextureWithMipmaps(gl2, img, !!isMin);
+                    }
+                    return create2DTexture(gl2, img, isDepth);
+                };
+
+                const textures = {
+                    texTopColor: create2DTexture(gl2, topColorImg, false),
+                    texTop: getTex(0, true, false),
+                    texNorthColor: getTex(1, false),
+                    texNorth: getTex(2, true, false),
+                    texSouthColor: getTex(3, false),
+                    texSouth: getTex(4, true, true),
+                    texEastColor: getTex(5, false),
+                    texEast: getTex(6, true, false),
+                    texWestColor: getTex(7, false),
+                    texWest: getTex(8, true, true)
+                };
+
+                // Clean up ImageBitmaps from memory immediately after texture upload
+                for (const img of sideImgs) {
+                    if (img instanceof ImageBitmap) {
+                        img.close();
+                    }
+                }
+                if (topColorImg instanceof ImageBitmap) {
+                    topColorImg.close();
+                }
+
+                sceneGraph.updateImpostorStatus(rx, rz, 'READY', textures);
+                render();
+            } catch (e) {
+                sceneGraph.updateImpostorStatus(rx, rz, 'ERROR');
+                console.warn(`LOD loading failed for region ${rx},${rz}:`, e);
+                throw e;
             }
-            const img = sideImgs[idx];
-            if (isDepth) {
-                return createDepthTextureWithMipmaps(gl2, img, !!isMin);
-            }
-            return create2DTexture(gl2, img, isDepth);
-        };
-
-        lod.textures = {
-            texTopColor: create2DTexture(gl2, topColorImg, false),
-            texTop: getTex(0, true, false),
-            texNorthColor: getTex(1, false),
-            texNorth: getTex(2, true, false),
-            texSouthColor: getTex(3, false),
-            texSouth: getTex(4, true, true),
-            texEastColor: getTex(5, false),
-            texEast: getTex(6, true, false),
-            texWestColor: getTex(7, false),
-            texWest: getTex(8, true, true)
-        };
-        lod.loaded = true;
-        render();
-        return lod;
-    } catch (e) {
-        console.warn(`LOD loading failed for region ${rx},${rz}:`, e);
-        return null;
-    }
+        }
+    });
 }
 
 export function makeImpostorGeometry(gl: WebGL2RenderingContext): renderer.Geometry {

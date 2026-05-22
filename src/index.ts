@@ -13,8 +13,8 @@ import { Gunzip, gunzipSync } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
-import { createOrbitTargetFinder, VoxelBitset } from './voxel';
-import { fetchRegionLOD, makeImpostorGeometry, regionLODs } from './lod';
+import { createOrbitTargetFinder } from './voxel';
+import { fetchRegionLOD, makeImpostorGeometry } from './lod';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
 
@@ -45,7 +45,7 @@ let PROD = 1;
 
 const space = PROD ? 512 : 64;
 
-const scene: Set<renderer.Chunk> = new Set();
+const sceneGraph = new renderer.SceneGraph(context);
 
 const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
@@ -122,7 +122,11 @@ controls.screenSpacePanning = true;
 controls.minDistance = 1;
 controls.maxDistance = space * 2;
 
-controls.getOrbitTarget = createOrbitTargetFinder(context, camera, scene);
+controls.getOrbitTarget = createOrbitTargetFinder(context, camera, sceneGraph, () => {
+    context.renderToFBO = true;
+    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, impostorMaterial);
+    context.renderToFBO = false;
+});
 
 const CUBE_ATTRIB_STRIDE = 2;
 
@@ -585,10 +589,27 @@ function renderFrame() {
     mat4.copy(lastView, camera.view);
 
 
-    renderer.render(context, camera, scene, layers, cube, impostorGeometry, impostorMaterial, regionLODs);
+    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, impostorMaterial);
+
+    // Dynamic loading pass: trigger loads for any missing visible elements
+    updateDynamicLoading();
 
     stats.end();
 };
+
+function updateDynamicLoading() {
+    const cullResults = sceneGraph.cull(camera);
+
+    // Trigger regionlet fetches (network queue handles limits)
+    for (const rlet of cullResults.missingRegionlets) {
+        fetchRegion(rlet.rx, rlet.rz, rlet.off);
+    }
+
+    // Trigger impostor fetches (network queue handles limits)
+    for (const lod of cullResults.missingImpostors) {
+        fetchRegionLOD(lod.rx, lod.rz, sceneGraph, camera.position, render);
+    }
+}
 
 render();
 
@@ -637,106 +658,126 @@ const impostorGeometry = makeImpostorGeometry(context.gl as WebGL2RenderingConte
 const impostorMaterial = new renderer.Material(context.gl as WebGL2RenderingContext, impostorVertexShader, impostorFragmentShader);
 
 function fetchRegion(x: number, z: number, off: number) {
-    const controller = new AbortController();
-    const { signal } = controller;
-    fetch(`map/r.${x}.${z}.${off}.cmt`, { signal }).then(
-        async response => {
-            if (!response.ok) {
-                return;
-            }
+    const key = `${x},${z},${off}`;
+    const region = sceneGraph.getOrCreateRegion(x, z);
+    const regionlet = region.regionlets[off];
+    if (regionlet.status !== 'NONE') {
+        return;
+    }
 
-            const stream = asyncIterableFromStream(response.body);
-            const header = (await stream.next()).value;
-            const magic = new TextDecoder("utf-8").decode(header.subarray(0, 8));
-            if (magic != "COMTE00\n") {
-                console.error(`invalid comte data file (expected magic "COMTE00\\n", got "${magic}"`);
-                controller.abort();
-                return;
-            }
-            const headerLength = new Uint32Array(header.slice(8, 8 + 4).buffer)[0];
-            let meta = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
+    sceneGraph.updateRegionletStatus(x, z, off, 'FETCH');
 
-            let sectionLengths: Array<number> = meta.layers.map((x: { length: number }) => x.length);
-            let length = sectionLengths.reduce((a, b) => a + b);
-
-            let value = header.subarray(12 + headerLength);
-            let done = false;
-
-            console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", meta, sectionLengths);
-
-            let chunk = context.Chunk();
-
-            vec3.set(chunk.position, x * 512 + (off & 1) * 256, 0, z * 512 + (off & 2) * 128);
-
-            let layerSpecs: any = {};
-            for (const layer of meta.layers) {
-                layerSpecs[layer.name] = {
-                    data: new Uint32Array(layer.length / 4), retain: true,
-                    numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
-                };
-            }
-
-            chunk.setLayers(layerSpecs);
-
-            scene.add(chunk);
-
-            let offset = 0;
-            let layerNumber = 0;
-
-            while (!done) {
-                if (value.length == 0) {
-                    ({ value, done } = await stream.next());
-                    continue;
-                }
-
-                let wanted = Math.min(value.length, sectionLengths[layerNumber] - offset);
-                let tail = value.subarray(wanted);
-                value = value.subarray(0, wanted);
-
-                let layerName = meta.layers[layerNumber].name;
-                chunk.updateAttribute(layerName, value, offset);
-                offset += value.length;
-                chunk.layers[layerName].size = Math.floor(offset / (CUBE_ATTRIB_STRIDE * 4));
-
-                value = tail;
-
-                while (offset === sectionLengths[layerNumber]) {
-                    offset = 0;
-                    layerNumber++;
-                }
-                render();
-            }
-
-            let minY = 255, maxY = 0;
-            const bitset = new VoxelBitset();
-            for (const [name, value] of Object.entries(chunk.layers)) {
-                if (value.data) {
-                    const buf = new Uint8Array(value.data);
-                    for (let o = 0; o < buf.length; o += value.stride) {
-                        let y = buf[o];
-                        minY = Math.min(minY, y);
-                        maxY = Math.max(maxY, y);
-                    }
-                    const data = new Uint32Array(value.data);
-                    const size = value.size;
-                    for (let i = 0; i < size; i++) {
-                        const attrX = data[2 * i];
-                        const unpackedX = (attrX >> 16) & 255;
-                        const unpackedY = attrX & 255;
-                        const unpackedZ = (attrX >> 8) & 255;
-                        bitset.add(unpackedX, unpackedY, unpackedZ);
-                    }
-                    // Free CPU-side voxel buffer data to save CPU RAM
-                    value.data = null;
-                }
-            }
-            chunk.voxelBitset = bitset;
-            chunk.minY = minY;
-            chunk.maxY = maxY;
-            console.debug("done streaming", response.url, minY, maxY);
-        },
-        reason => console.log("rejected", reason)
+    // Calculate priority based on distance to the regionlet center
+    const rletCenter = vec3.fromValues(
+        x * 512 + (off & 1) * 256 + 128,
+        120,
+        z * 512 + (off & 2) * 128 + 128
     );
+    const priority = vec3.sqrDist(camera.position, rletCenter);
+
+    sceneGraph.requestManager.enqueue({
+        type: 'REGIONLET',
+        key: `regionlet:${key}`,
+        priority,
+        run: async () => {
+            const controller = new AbortController();
+            const { signal } = controller;
+            try {
+                const response = await fetch(`map/r.${x}.${z}.${off}.cmt`, { signal });
+                if (!response.ok) {
+                    throw new Error(`failed to fetch cmt: ${response.statusText}`);
+                }
+
+                sceneGraph.updateRegionletStatus(x, z, off, 'STREAM');
+
+                const stream = asyncIterableFromStream(response.body);
+                const headerObj = await stream.next();
+                if (headerObj.done || !headerObj.value) {
+                    throw new Error("Empty stream or missing header");
+                }
+                const header = headerObj.value;
+                const magic = new TextDecoder("utf-8").decode(header.subarray(0, 8));
+                if (magic != "COMTE00\n") {
+                    controller.abort();
+                    throw new Error(`invalid comte data file magic: ${magic}`);
+                }
+                const headerLength = new Uint32Array(header.slice(8, 8 + 4).buffer)[0];
+                let meta = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
+
+                let sectionLengths: Array<number> = meta.layers.map((l: { length: number }) => l.length);
+                let length = sectionLengths.reduce((a, b) => a + b);
+
+                let value = header.subarray(12 + headerLength);
+                let done = false;
+
+                console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", meta, sectionLengths);
+
+                const chunk = regionlet.chunk;
+
+                let layerSpecs: any = {};
+                for (const layer of meta.layers) {
+                    layerSpecs[layer.name] = {
+                        data: new Uint32Array(layer.length / 4), retain: true,
+                        numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                    };
+                }
+
+                chunk.setLayers(layerSpecs);
+
+
+
+                let offset = 0;
+                let layerNumber = 0;
+
+                while (!done) {
+                    if (value.length == 0) {
+                        ({ value, done } = await stream.next());
+                        continue;
+                    }
+
+                    let wanted = Math.min(value.length, sectionLengths[layerNumber] - offset);
+                    let tail = value.subarray(wanted);
+                    value = value.subarray(0, wanted);
+
+                    let layerName = meta.layers[layerNumber].name;
+                    chunk.updateAttribute(layerName, value, offset);
+                    offset += value.length;
+                    chunk.layers[layerName].size = Math.floor(offset / (CUBE_ATTRIB_STRIDE * 4));
+
+                    value = tail;
+
+                    while (offset === sectionLengths[layerNumber]) {
+                        offset = 0;
+                        layerNumber++;
+                    }
+                    render();
+                }
+
+                let minY = 255, maxY = 0;
+                for (const [name, value] of Object.entries(chunk.layers)) {
+                    if (value.data) {
+                        const buf = new Uint8Array(value.data);
+                        for (let o = 0; o < buf.length; o += value.stride) {
+                            let y = buf[o];
+                            minY = Math.min(minY, y);
+                            maxY = Math.max(maxY, y);
+                        }
+                        value.data = null;
+                    }
+                }
+                chunk.minY = minY;
+                chunk.maxY = maxY;
+
+                sceneGraph.updateRegionletStatus(x, z, off, 'READY');
+                console.debug("done streaming", response.url, minY, maxY);
+                render();
+            } catch (e) {
+                sceneGraph.updateRegionletStatus(x, z, off, 'ERROR');
+                console.warn(`CMT loading failed for regionlet ${x},${z},${off}:`, e);
+                throw e;
+            }
+        }
+    });
 }
 
 // interesting coords:
@@ -756,7 +797,7 @@ function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: numbe
     const pad = 3;
     for (let x = xs - pad; x <= xe + pad; x++) {
         for (let z = zs - pad; z <= ze + pad; z++) {
-            fetchRegionLOD(x, z, context, render);
+            fetchRegionLOD(x, z, sceneGraph, camera.position, render);
         }
     }
     vec3.set(camera.position, xo * 512, 120, zo * 512);

@@ -129,10 +129,53 @@ export class Context {
     clearColor: vec4
     cuboidDataTex?: WebGLTexture
     cuboidTextureData?: Uint32Array
+    fbo: WebGLFramebuffer | null = null
+    fboColor: WebGLRenderbuffer | null = null
+    fboDepth: WebGLTexture | null = null
+    fboWidth = 0
+    fboHeight = 0
+    renderToFBO: boolean = false
+
+    updateFBO(width: number, height: number) {
+        const gl = this.gl;
+        if (this.fbo && this.fboWidth === width && this.fboHeight === height) {
+            return;
+        }
+        if (this.fbo) {
+            gl.deleteFramebuffer(this.fbo);
+            gl.deleteRenderbuffer(this.fboColor);
+            gl.deleteTexture(this.fboDepth);
+        }
+        this.fboWidth = width;
+        this.fboHeight = height;
+
+        this.fbo = gl.createFramebuffer();
+        this.fboColor = gl.createRenderbuffer();
+        this.fboDepth = gl.createTexture();
+
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.fboColor);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, width, height);
+
+        gl.bindTexture(gl.TEXTURE_2D, this.fboDepth);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, this.fboColor);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.fboDepth, 0);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
-        this.gl = this.canvas.getContext('webgl2');
+        this.gl = this.canvas.getContext('webgl2', {
+            depth: true,
+            antialias: true
+        });
         this.clearColor = vec4.fromValues(1, 1, 1, 1);
     }
 
@@ -276,6 +319,12 @@ export class PerspectiveCamera implements Camera {
 
     update() {
         mat4.perspective(this.proj, glMatrix.toRadian(this.fov), this.aspect, this.near, this.far);
+        // Modify projection matrix for infinite far plane and inverse-Z depth mapping:
+        // - Near plane maps to Z_ndc = +1 (window depth 1.0)
+        // - Far plane at infinity maps to Z_ndc = -1 (window depth 0.0)
+        this.proj[10] = 1.0;
+        this.proj[14] = 2.0 * this.near;
+
         // TODO: add ortho mode with correct zooming, shaders (flipping is broken), etc
         // const orthoscale = 128;
         // mat4.ortho(this.proj, -orthoscale * this.aspect, orthoscale * this.aspect, -orthoscale, orthoscale, -5000, 5000)
@@ -296,6 +345,11 @@ function sphereCone(sphereCenter: vec3, sphereRadius: number,
     coneOrigin: vec3, coneNormal: vec3,
     sinAngle: number, tanAngleSqPlusOne: number): boolean {
     const diff = vec3.sub(vec3.create(), sphereCenter, coneOrigin);
+
+    // If the cone origin (camera) is inside the sphere, it always intersects the frustum!
+    if (vec3.sqrLen(diff) <= sphereRadius * sphereRadius) {
+        return true;
+    }
 
     // this code is somehow broken. unfortunate. this approximation helps slightly.
     let cos = Math.sqrt(1 - sinAngle * sinAngle);
@@ -330,7 +384,7 @@ function sphereCone(sphereCenter: vec3, sphereRadius: number,
     }
 }
 
-class Frustum {
+export class Frustum {
     coneOrigin: vec3
     coneNormal: vec3
     coneAngle: number // radians
@@ -384,26 +438,294 @@ class Frustum {
     }
 }
 
+// --- Scene Graph & Request Queue Types ---
+export type RegionletStatus = 'NONE' | 'FETCH' | 'STREAM' | 'READY' | 'ERROR';
+export type ImpostorStatus = 'NONE' | 'FETCH' | 'READY' | 'ERROR';
+export type RequestType = 'REGIONLET' | 'IMPOSTOR';
+
+export interface RegionletNode {
+    rx: number;
+    rz: number;
+    off: number;
+    status: RegionletStatus;
+    chunk: Chunk;
+}
+
+export interface ImpostorNode {
+    rx: number;
+    rz: number;
+    status: ImpostorStatus;
+    textures: any | null;
+    loaded: boolean;
+}
+
+export interface RegionNode {
+    rx: number;
+    rz: number;
+    impostor: ImpostorNode;
+    regionlets: [RegionletNode, RegionletNode, RegionletNode, RegionletNode];
+}
+
+export interface QueuedRequest {
+    type: RequestType;
+    key: string;
+    priority: number;
+    run: () => Promise<void>;
+}
+
+export class RequestManager {
+    private activeRequests = new Map<string, QueuedRequest>();
+    private queue: QueuedRequest[] = [];
+
+    public maxConcurrent = {
+        REGIONLET: 4,
+        IMPOSTOR: 2
+    };
+
+    public inProgress = {
+        REGIONLET: 0,
+        IMPOSTOR: 0
+    };
+
+    enqueue(req: QueuedRequest) {
+        if (this.activeRequests.has(req.key) || this.queue.some(r => r.key === req.key)) {
+            return;
+        }
+        this.queue.push(req);
+        this.sortQueue();
+        this.tick();
+    }
+
+    private sortQueue() {
+        this.queue.sort((a, b) => a.priority - b.priority);
+    }
+
+    private tick() {
+        while (true) {
+            let startedAny = false;
+            for (let i = 0; i < this.queue.length; i++) {
+                const req = this.queue[i];
+                if (this.inProgress[req.type] < this.maxConcurrent[req.type]) {
+                    this.queue.splice(i, 1);
+                    this.activeRequests.set(req.key, req);
+                    this.inProgress[req.type]++;
+                    req.run().then(
+                        () => {
+                            this.activeRequests.delete(req.key);
+                            this.inProgress[req.type]--;
+                            this.tick();
+                        },
+                        (err) => {
+                            console.error(`Request ${req.key} failed:`, err);
+                            this.activeRequests.delete(req.key);
+                            this.inProgress[req.type]--;
+                            this.tick();
+                        }
+                    );
+                    startedAny = true;
+                    break;
+                }
+            }
+            if (!startedAny) break;
+        }
+    }
+
+    getInProgressCount(type: RequestType): number {
+        return this.inProgress[type];
+    }
+}
+
+export class SceneGraph {
+    regions = new Map<string, RegionNode>();
+    requestManager = new RequestManager();
+
+    constructor(public context: Context) { }
+
+    getOrCreateRegion(rx: number, rz: number): RegionNode {
+        const key = `${rx},${rz}`;
+        if (this.regions.has(key)) {
+            return this.regions.get(key)!;
+        }
+
+        const regionlets: RegionletNode[] = [];
+        for (let off = 0; off < 4; off++) {
+            const chunk = new Chunk(this.context.gl);
+            vec3.set(chunk.position, rx * 512 + (off & 1) * 256, 0, rz * 512 + (off & 2) * 128);
+            chunk.minY = 0;
+            chunk.maxY = 255;
+            regionlets.push({
+                rx, rz, off,
+                status: 'NONE',
+                chunk
+            });
+        }
+
+        const node: RegionNode = {
+            rx, rz,
+            impostor: {
+                rx, rz,
+                status: 'NONE',
+                textures: null,
+                loaded: false
+            },
+            regionlets: regionlets as [RegionletNode, RegionletNode, RegionletNode, RegionletNode]
+        };
+
+        this.regions.set(key, node);
+        return node;
+    }
+
+    updateRegionletStatus(rx: number, rz: number, off: number, status: RegionletStatus, chunkDataCallback?: (chunk: Chunk) => void) {
+        const region = this.getOrCreateRegion(rx, rz);
+        const regionlet = region.regionlets[off];
+        regionlet.status = status;
+        if (chunkDataCallback) {
+            chunkDataCallback(regionlet.chunk);
+        }
+    }
+
+    updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null) {
+        const region = this.getOrCreateRegion(rx, rz);
+        region.impostor.status = status;
+        region.impostor.loaded = (status === 'READY');
+        if (textures) {
+            region.impostor.textures = textures;
+        }
+    }
+
+    cull(camera: PerspectiveCamera): {
+        chunks: Chunk[];
+        impostors: ImpostorNode[];
+        missingRegionlets: RegionletNode[];
+        missingImpostors: ImpostorNode[];
+    } {
+        const frustum = new Frustum(camera);
+        const chunksToRender: Chunk[] = [];
+        const impostorsToRender: ImpostorNode[] = [];
+        const missingRegionlets: RegionletNode[] = [];
+        const missingImpostors: ImpostorNode[] = [];
+
+        // 1. Gather all visible regionlets across all regions in the frustum (loaded or not)
+        const allVisibleRegionlets: { rlet: RegionletNode; distSq: number }[] = [];
+
+        for (const region of this.regions.values()) {
+            if (!frustum.intersectsRegion(region.rx, region.rz)) {
+                continue;
+            }
+
+            for (const rlet of region.regionlets) {
+                if (frustum.intersects(rlet.chunk)) {
+                    const rletCenter = vec3.fromValues(128, 128, 128);
+                    vec3.add(rletCenter, rletCenter, rlet.chunk.position);
+                    const distSq = vec3.sqrDist(camera.position, rletCenter);
+                    allVisibleRegionlets.push({ rlet, distSq });
+                }
+            }
+        }
+
+        // 2. Sort all visible regionlets by distance to camera (closest first)
+        allVisibleRegionlets.sort((a, b) => a.distSq - b.distSq);
+
+        // 3. Define the target fetch set (top 8 closest visible chunks, loaded or not)
+        const targetRegionlets = allVisibleRegionlets.slice(0, 8);
+        const targetSet = new Set<RegionletNode>(targetRegionlets.map(x => x.rlet));
+
+        // 4. Identify all visible chunks that are actually LOADED
+        const loadedVisible = allVisibleRegionlets.filter(x => x.rlet.status === 'READY' || x.rlet.status === 'STREAM');
+
+        // 5. Determine which chunks will actually be rendered (top 8 closest loaded chunks)
+        const renderedChunks = loadedVisible.slice(0, 8);
+        const renderedChunkSet = new Set<RegionletNode>(renderedChunks.map(x => x.rlet));
+
+        // 6. Decide rendering and fetching per region
+        for (const region of this.regions.values()) {
+            if (!frustum.intersectsRegion(region.rx, region.rz)) {
+                continue;
+            }
+
+            // Find all regionlets in this region that intersect the frustum
+            const regionVisibleRlets = region.regionlets.filter(rlet =>
+                allVisibleRegionlets.some(x => x.rlet === rlet)
+            );
+
+            if (regionVisibleRlets.length === 0) {
+                continue;
+            }
+
+            // A region is fully rendered as chunks if all of its visible regionlets are actually being rendered as chunks
+            const allVisibleAreRendered = regionVisibleRlets.every(rlet => renderedChunkSet.has(rlet));
+
+            if (allVisibleAreRendered) {
+                // Render them as chunks!
+                for (const rlet of regionVisibleRlets) {
+                    chunksToRender.push(rlet.chunk);
+                }
+            } else {
+                // Not fully rendered as chunks (some visible regionlets are missing or sliced out):
+                // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
+                for (const rlet of region.regionlets) {
+                    if (rlet.status !== 'READY' && rlet.status !== 'STREAM') {
+                        if (targetSet.has(rlet) && !rlet.chunk.occluded) {
+                            missingRegionlets.push(rlet);
+                        }
+                    }
+                }
+
+                // B) Render the region's LOD impostor if loaded
+                if (region.impostor.status === 'READY' && region.impostor.textures) {
+                    impostorsToRender.push(region.impostor);
+                } else {
+                    // C) Fetch impostor if missing
+                    if (region.impostor.status === 'NONE') {
+                        missingImpostors.push(region.impostor);
+                    }
+                    // D) Render any loaded regionlets that are in our renderedChunkSet as fallback
+                    for (const rlet of regionVisibleRlets) {
+                        if (renderedChunkSet.has(rlet)) {
+                            chunksToRender.push(rlet.chunk);
+                        }
+                    }
+                }
+            }
+        }
+
+        return {
+            chunks: chunksToRender,
+            impostors: impostorsToRender,
+            missingRegionlets,
+            missingImpostors
+        };
+    }
+}
+
 export function render(
     context: Context,
     camera: PerspectiveCamera,
-    scene: Set<Chunk>,
+    sceneGraph: SceneGraph,
     layers: InstancedLayer[],
     cube: Mesh,
     impostorGeometry?: Geometry,
-    impostorMaterial?: Material,
-    regionLODs?: Map<string, any>
+    impostorMaterial?: Material
 ) {
     const gl = context.gl;
 
     if (!(gl.canvas instanceof HTMLCanvasElement))
         return;
 
+    if (context.renderToFBO) {
+        context.updateFBO(gl.canvas.width, gl.canvas.height);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, context.fbo);
+    } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
     gl.clearColor(context.clearColor[0], context.clearColor[1],
         context.clearColor[2], context.clearColor[3]);
 
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.GREATER); // Use GREATER depth function for inverse-Z
+    gl.clearDepth(0.0); // Clear depth to 0.0 (far plane) for inverse-Z
 
     // Tell WebGL how to convert from clip space to pixels
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
@@ -412,32 +734,38 @@ export function render(
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // Enable alpha blending
-    // TODO: disable for purely solid passes
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
     // Compute the projection matrix
     var projectionMatrix = camera.getProjection();
 
-    const frustum = new Frustum(camera);
-
-    let culledChunks: Chunk[] = [];
-
-    for (const chunk of scene) {
-        if (frustum.intersects(chunk)) {
-            culledChunks.push(chunk);
+    // 1. Process/update occlusion query results from previous frames
+    for (const region of sceneGraph.regions.values()) {
+        for (const rlet of region.regionlets) {
+            const chunk = rlet.chunk;
+            if (chunk.query && chunk.queryInProgress && gl.getQueryParameter(chunk.query, gl.QUERY_RESULT_AVAILABLE)) {
+                chunk.occluded = !gl.getQueryParameter(chunk.query, gl.QUERY_RESULT);
+                chunk.queryInProgress = false;
+            }
         }
     }
 
+    // 2. Perform frustum and visibility culling on the Scene Graph
+    const cullResults = sceneGraph.cull(camera);
+    let culledChunks = cullResults.chunks;
+
+    // Sort renderable chunks by distance to camera
     culledChunks.sort((a, b) => {
         const apos = vec3.fromValues(128, 128, 128);
         const bpos = vec3.fromValues(128, 128, 128);
         vec3.add(apos, apos, a.position);
         vec3.add(bpos, bpos, b.position);
         return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
-    })
+    });
 
-    culledChunks = culledChunks.slice(0, 8);
+    // Limit to rendering top 8 chunks to match original behavior / performance target
+    const renderedChunks = culledChunks.slice(0, 8);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {
@@ -454,6 +782,54 @@ export function render(
         }
     }
 
+    // 3. Occlusion query pass (performed BEFORE rendering standard layers to avoid bind swapping)
+    const queryChunk = (chunk: Chunk, minY: number, maxY: number) => {
+        if (chunk.query === null) {
+            chunk.query = gl.createQuery();
+        }
+        if (!chunk.queryInProgress) {
+            bind(cube.material, cube.geometry);
+            cube.material.uniformSetters.modelViewMatrix(camera.getView());
+            cube.material.uniformSetters.scale(vec3.fromValues(256, 1 + maxY - minY, 256));
+
+            gl.enable(gl.CULL_FACE);
+            gl.colorMask(false, false, false, false);
+            gl.depthMask(false);
+
+            gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, chunk.query);
+            const offset = vec3.fromValues(0, minY, 0);
+            vec3.add(offset, offset, chunk.position);
+            cube.material.uniformSetters.offset(offset);
+            gl.drawArrays(gl.TRIANGLES, 0, 12 * 3);
+            gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
+
+            gl.colorMask(true, true, true, true);
+            gl.depthMask(true);
+            gl.disable(gl.CULL_FACE);
+
+            chunk.queryInProgress = true;
+        }
+    };
+
+    // Trigger occlusion queries for far loaded chunks
+    for (let i = 5; i < renderedChunks.length; i++) {
+        queryChunk(renderedChunks[i], renderedChunks[i].minY, renderedChunks[i].maxY);
+    }
+
+    // Trigger occlusion queries for the closest missing chunks in frustum (culling missing things)
+    const sortedMissing = cullResults.missingRegionlets.slice();
+    sortedMissing.sort((a, b) => {
+        const apos = vec3.fromValues(128, 128, 128);
+        const bpos = vec3.fromValues(128, 128, 128);
+        vec3.add(apos, apos, a.chunk.position);
+        vec3.add(bpos, bpos, b.chunk.position);
+        return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
+    });
+    for (const rlet of sortedMissing.slice(0, 8)) {
+        queryChunk(rlet.chunk, 0, 255);
+    }
+
+    // 4. Render main geometry layers
     for (const layer of layers) {
         if (!layer) continue;
         let mat = layer.material;
@@ -482,48 +858,11 @@ export function render(
         }
 
         let chunkNum = 0;
-        for (const chunk of culledChunks) {
+        for (const chunk of renderedChunks) {
             chunkNum++;
             const chunkLayer = chunk.layers[layer.name];
             if (!chunkLayer || chunkLayer.size == 0) {
                 continue;
-            }
-
-            if (layer.name == 'CUBE' && chunkNum >= 5) {
-                // inspired by https://tsherif.github.io/webgl2examples/occlusion.html
-                if (chunk.query === null) {
-                    chunk.query = gl.createQuery();
-                }
-                if (chunk.queryInProgress && gl.getQueryParameter(chunk.query, gl.QUERY_RESULT_AVAILABLE)) {
-                    chunk.occluded = !gl.getQueryParameter(chunk.query, gl.QUERY_RESULT);
-                    chunk.queryInProgress = false;
-                }
-                if (!chunk.queryInProgress) {
-                    let mat = cube.material;
-                    bind(cube.material, cube.geometry);
-                    mat.uniformSetters.modelViewMatrix(camera.getView());
-                    mat.uniformSetters.scale(vec3.fromValues(256, 1 + chunk.maxY - chunk.minY, 256));
-
-                    gl.enable(gl.CULL_FACE);
-                    gl.colorMask(false, false, false, false);
-                    gl.depthMask(false);
-
-                    gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, chunk.query);
-                    const offset = vec3.fromValues(0, chunk.minY, 0);
-                    vec3.add(offset, offset, chunk.position);
-                    mat.uniformSetters.offset(offset);
-                    gl.drawArrays(gl.TRIANGLES, 0, 12 * 3);
-                    gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
-
-                    gl.colorMask(true, true, true, true);
-                    gl.depthMask(true);
-                    gl.disable(gl.CULL_FACE);
-
-                    chunk.queryInProgress = true;
-
-                    bind(layer.material, layer.geometry);
-                    layer.material.uniformSetters.atlas(layer.texture);
-                }
             }
 
             if (chunkNum >= 5 && chunk.occluded) {
@@ -534,41 +873,26 @@ export function render(
             if (mat.uniformSetters.offset)
                 mat.uniformSetters.offset(chunk.position);
 
-            // TODO: modelViewMatrix & projectionMatrix?
             var matrix = mat4.translate(mat4.create(), camera.getView(), chunk.position);
             if (mat.uniformSetters.modelViewMatrix)
                 mat.uniformSetters.modelViewMatrix(matrix);
 
             gl.drawArraysInstanced(
                 gl.TRIANGLES,
-                0,           // offset
-                layer.geometry.verts,       // num vertices per instance
-                chunkLayer.size,  // num instances
+                0,
+                layer.geometry.verts,
+                chunkLayer.size,
             );
         }
     }
 
-    // --- Render Region Impostors ---
-    if (impostorGeometry && impostorMaterial && regionLODs) {
-        // Find which regions are already rendered with chunks
-        const renderedRegions = new Set<string>();
-        for (const chunk of culledChunks) {
-            if (!chunk.occluded) {
-                const rx = Math.floor(chunk.position[0] / 512);
-                const rz = Math.floor(chunk.position[2] / 512);
-                renderedRegions.add(`${rx},${rz}`);
-            }
-        }
-
+    // 5. Render Region Impostors as fallback
+    if (impostorGeometry && impostorMaterial) {
         gl.disable(gl.BLEND);
         gl.enable(gl.DEPTH_TEST);
 
-        for (const [key, lod] of regionLODs.entries()) {
+        for (const lod of cullResults.impostors) {
             if (!lod.loaded || !lod.textures) continue;
-            if (renderedRegions.has(key)) continue;
-
-            // Frustum cull
-            if (!frustum.intersectsRegion(lod.rx, lod.rz)) continue;
 
             bind(impostorMaterial, impostorGeometry);
 
@@ -602,5 +926,9 @@ export function render(
 
             gl.drawArrays(gl.TRIANGLES, 0, impostorGeometry.verts);
         }
+    }
+
+    if (context.renderToFBO) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 }
