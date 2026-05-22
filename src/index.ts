@@ -864,7 +864,7 @@ setTimeout(function () {
     switch (choice) {
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
         case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
-        case 'greenfield': fetchRange(2, 2, 2, 2, 0, 0, 0, 10); break;
+        case 'greenfield': fetchRange(2, 2, 2, 2, 0, 0, 0, 15); break;
         case 'hermit': fetchRange(-1, -1, -1, -1, 0, 0, 0); break;
         case 'test': fetchRange(0, 0, 0, 0, 0, 0, 0); break;
         default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;

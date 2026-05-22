@@ -1119,30 +1119,60 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		ent.updateColors(pack.Textures)
 		ent.Solid = len(ent.Templates) > 0
 
+		debugBlock := genDebug == ent.Name || genDebug == rp.RemoveDefaultPrefix(ent.Name)
+
+		if debugBlock {
+			fmt.Printf("DEBUG SOLID START %s: templates len: %d\n", ent.Name, len(ent.Templates))
+		}
 		for sIdx := range ent.Templates {
+			if !IsValidState(sIdx, ent.States) {
+				if debugBlock {
+					fmt.Printf("  sIdx %d is invalid state combination! Skipping.\n", sIdx)
+				}
+				continue
+			}
 			variantSolid := false
-			for _, model := range ent.Templates[sIdx] {
+			if debugBlock {
+				fmt.Printf("  sIdx %d models len: %d\n", sIdx, len(ent.Templates[sIdx]))
+			}
+			for modelIdx, model := range ent.Templates[sIdx] {
 				layer := model.Layer
+				if debugBlock {
+					fmt.Printf("    model %d layer: %s (%d)\n", modelIdx, LayerNames[layer], layer)
+				}
 				// A block is only solid if ALL of its templates are LayerCube or LayerVoxel (standard full cubes),
 				// and all textures used by those states are opaque.
 				if layer == LayerCube || layer == LayerVoxel {
 					modelSolid := true
 					for _, tex := range model.Textures {
-						if textureClasses[tex] != TexOpaque {
+						texClass := textureClasses[tex]
+						if debugBlock {
+							fmt.Printf("      texture %s class: %v\n", tex, texClass)
+						}
+						if texClass != TexOpaque {
 							modelSolid = false
 							break
 						}
 					}
 					if modelSolid {
 						variantSolid = true
+						if debugBlock {
+							fmt.Printf("      model solid! setting variantSolid = true\n")
+						}
 						break
 					}
 				}
 			}
 			if !variantSolid {
+				if debugBlock {
+					fmt.Printf("  variant %d not solid! marking ent.Solid = false\n", sIdx)
+				}
 				ent.Solid = false
 				break
 			}
+		}
+		if debugBlock {
+			fmt.Printf("DEBUG SOLID END %s: Solid = %t\n", ent.Name, ent.Solid)
 		}
 
 		cleanName := rp.RemoveDefaultPrefix(ent.Name)

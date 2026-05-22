@@ -145,3 +145,20 @@ func (s Statemap) Max() Stateval {
 	}
 	return state
 }
+
+func IsValidState(sIdx int, sl [][]string) bool {
+	if len(sl) == 0 {
+		return true
+	}
+	offset := 0
+	for _, attrs := range sl {
+		numValues := len(attrs) - 1
+		attrBits := bits.Len(uint(numValues - 1))
+		val := (sIdx >> offset) & ((1 << attrBits) - 1)
+		if val >= numValues {
+			return false
+		}
+		offset += attrBits
+	}
+	return true
+}

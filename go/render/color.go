@@ -99,7 +99,6 @@ func (be *BlockEntry) updateColors(textures map[string]image.Image) {
 		totg /= pixelCount
 		totb /= pixelCount
 
-		fmt.Println("color", totr, totg, totb, pixelCount)
 		be.Colors[i] = fmt.Sprintf("%02x%02x%02x", uint8(totr), uint8(totg), uint8(totb))
 	}
 }
