@@ -13,9 +13,9 @@ export function renderBoundaries(
 ) {
     if (!context.boundaryGeometry) {
         const FLD = [0, 0, 1], FLU = [0, 1, 1],
-              FRD = [1, 0, 1], FRU = [1, 1, 1],
-              BLD = [0, 0, 0], BLU = [0, 1, 0],
-              BRD = [1, 0, 0], BRU = [1, 1, 0];
+            FRD = [1, 0, 1], FRU = [1, 1, 1],
+            BLD = [0, 0, 0], BLU = [0, 1, 0],
+            BRD = [1, 0, 0], BRU = [1, 1, 0];
 
         const positions: number[] = [];
 
@@ -95,10 +95,6 @@ export function renderBoundaries(
     const mat = context.boundaryMaterial;
     const geo = context.boundaryGeometry;
 
-    const prevDepthFunc = gl.getParameter(gl.DEPTH_FUNC);
-    const prevDepthWrite = gl.getParameter(gl.DEPTH_WRITEMASK);
-    const prevBlend = gl.isEnabled(gl.BLEND);
-
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.GEQUAL); // allow equal depth for boundaries overlay
     gl.depthMask(false);
@@ -151,12 +147,13 @@ export function renderBoundaries(
 
     // B. Impostor boundaries
     const impostorColor = vec3.fromValues(1.0, 0.0, 0.6); // Vibrant magenta
-    const impostorScale = vec3.fromValues(512.0, 320.0, 512.0);
     for (const lod of cullResults.impostors) {
         if (!lod.loaded || !lod.textures) continue;
 
+        const maxHeight = lod.maxHeight ?? 320.0;
+        const impostorScale = vec3.fromValues(512.0, maxHeight, 512.0);
         const regionOffset = vec3.fromValues(lod.rx * 512.0, 0.0, lod.rz * 512.0);
-        const center = vec3.fromValues(regionOffset[0] + 256.0, 160.0, regionOffset[2] + 256.0);
+        const center = vec3.fromValues(regionOffset[0] + 256.0, maxHeight * 0.5, regionOffset[2] + 256.0);
         const distSq = vec3.sqrDist(camera.position, center);
 
         items.push({
@@ -197,11 +194,7 @@ export function renderBoundaries(
     }
 
     // Restore WebGL state
-    gl.depthFunc(prevDepthFunc);
-    gl.depthMask(prevDepthWrite);
-    if (prevBlend) {
-        gl.enable(gl.BLEND);
-    } else {
-        gl.disable(gl.BLEND);
-    }
+    gl.depthFunc(gl.GREATER);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
 }

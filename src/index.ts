@@ -689,6 +689,9 @@ function fetchRegion(x: number, z: number, off: number) {
             try {
                 const response = await fetch(`map/r.${x}.${z}.${off}.cmt`, { signal });
                 if (!response.ok) {
+                    if (response.status == 404) {
+                        throw new Error("404");
+                    }
                     throw new Error(`failed to fetch cmt: ${response.statusText}`);
                 }
 
@@ -778,6 +781,9 @@ function fetchRegion(x: number, z: number, off: number) {
                 render();
             } catch (e) {
                 sceneGraph.updateRegionletStatus(x, z, off, 'ERROR');
+                if ((e as Error).message == "404") {
+                    return;
+                }
                 console.warn(`CMT loading failed for regionlet ${x},${z},${off}:`, e);
                 throw e;
             }

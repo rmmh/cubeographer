@@ -449,6 +449,7 @@ export interface ImpostorNode {
     status: ImpostorStatus;
     textures: any | null;
     loaded: boolean;
+    maxHeight?: number;
 }
 
 export interface RegionNode {
@@ -574,7 +575,8 @@ export class SceneGraph {
                 rx, rz,
                 status: 'NONE',
                 textures: null,
-                loaded: false
+                loaded: false,
+                maxHeight: 320.0
             },
             regionlets: regionlets as [RegionletNode, RegionletNode, RegionletNode, RegionletNode]
         };
@@ -593,12 +595,15 @@ export class SceneGraph {
         this.notify();
     }
 
-    updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null) {
+    updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null, maxHeight?: number) {
         const region = this.getOrCreateRegion(rx, rz);
         region.impostor.status = status;
         region.impostor.loaded = (status === 'READY');
         if (textures) {
             region.impostor.textures = textures;
+        }
+        if (maxHeight !== undefined) {
+            region.impostor.maxHeight = maxHeight;
         }
         this.notify();
     }
@@ -910,6 +915,10 @@ export function render(
             const regionOffset = vec3.fromValues(lod.rx * 512, 0, lod.rz * 512);
             if (impostorMaterial.uniformSetters.uRegionOffset) {
                 impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
+            }
+
+            if (impostorMaterial.uniformSetters.uMaxHeight) {
+                impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
             }
 
             const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);

@@ -404,7 +404,11 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
         const height = isTop ? '256px' : '160px';
         return (
             <div className="side-card" key={name}>
-                <div className="side-card-title">{name} View</div>
+                <div className="side-card-title">{name} View
+                    {isTop && region && (
+                        <span className="meta-row">Max Height: {region.impostor.maxHeight}</span>
+                    )}</div>
+
                 <div className="side-images-row">
                     {colorCanvas ? (
                         <div className="side-img-box">
