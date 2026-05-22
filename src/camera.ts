@@ -138,7 +138,7 @@ class OrbitControls extends EventDispatcher {
     // Mouse buttons
     mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
     // Touch fingers
-    touches = { ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN };
+    touches = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE };
 
     // for reset
     target0: vec3
@@ -266,21 +266,7 @@ class OrbitControls extends EventDispatcher {
         this.spherical.phi = Math.max(this.minPolarAngle, Math.min(this.maxPolarAngle, this.spherical.phi));
         this.spherical.makeSafe();
 
-        const oldRadius = this.spherical.radius;
         let newRadius = this.spherical.radius * this.scale;
-        if (this.scale > 1) {
-            // Zooming out: enforce a minimum absolute step to prevent crawling when close
-            const minStep = 1.0;
-            if (newRadius - oldRadius < minStep) {
-                newRadius = oldRadius + minStep;
-            }
-        } else if (this.scale < 1) {
-            // Zooming in: enforce a minimum absolute step to keep it snappy
-            const minStep = 1.0;
-            if (oldRadius - newRadius < minStep) {
-                newRadius = oldRadius - minStep;
-            }
-        }
         this.spherical.radius = newRadius;
         // restrict radius to be between desired limits
         this.spherical.radius = Math.max(this.minDistance, Math.min(this.maxDistance, this.spherical.radius));
@@ -376,7 +362,53 @@ class OrbitControls extends EventDispatcher {
     private dollyStart = vec2.create();
     private dollyEnd = vec2.create();
     private dollyDelta = vec2.create();
+    private tempTouchClient = vec2.create();
 
+    private updateOrbitTarget(clientX: number, clientY: number): boolean {
+        if (!this.getOrbitTarget) return false;
+        const newTarget = this.getOrbitTarget(clientX, clientY);
+        if (!newTarget) return false;
+
+        const distance = vec3.distance(this.object.position, newTarget);
+        if (distance > this.maxDistance) {
+            let dir = vec3.sub(vec3.create(), newTarget, this.object.position);
+            safeNormalize(dir, dir);
+            vec3.scaleAndAdd(newTarget, this.object.position, dir, this.maxDistance);
+        }
+
+        // Calculate base orientation relative to newTarget using native lookAt
+        let tempView = mat4.create();
+        safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
+        let qBase = quat.create();
+        mat4.getRotation(qBase, tempView);
+
+        // Calculate look direction in camera local space of this base orientation
+        let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
+        safeNormalize(lookDir, lookDir);
+        vec3.transformQuat(this.localOffset, lookDir, qBase);
+
+        // Update orbit target
+        vec3.copy(this.orbitTarget, newTarget);
+        return true;
+    }
+    private setTouchPageCoords(event: TouchEvent, out: vec2) {
+        if (event.touches.length === 1) {
+            vec2.set(out, event.touches[0].pageX, event.touches[0].pageY);
+        } else {
+            const x = 0.5 * (event.touches[0].pageX + event.touches[1].pageX);
+            const y = 0.5 * (event.touches[0].pageY + event.touches[1].pageY);
+            vec2.set(out, x, y);
+        }
+    }
+    private setTouchClientCoords(event: TouchEvent, out: vec2) {
+        if (event.touches.length === 1) {
+            vec2.set(out, event.touches[0].clientX, event.touches[0].clientY);
+        } else {
+            const x = 0.5 * (event.touches[0].clientX + event.touches[1].clientX);
+            const y = 0.5 * (event.touches[0].clientY + event.touches[1].clientY);
+            vec2.set(out, x, y);
+        }
+    }
     private getAutoRotationAngle() {
         return 2 * Math.PI / 60 / 60 * this.autoRotateSpeed;
     }
@@ -602,32 +634,18 @@ class OrbitControls extends EventDispatcher {
         }
     }
     private handleTouchStartRotate(event: TouchEvent) {
-        if (event.touches.length == 1) {
-            vec2.set(this.rotateStart, event.touches[0].pageX, event.touches[0].pageY);
-        } else {
-            var x = 0.5 * (event.touches[0].pageX + event.touches[1].pageX);
-            var y = 0.5 * (event.touches[0].pageY + event.touches[1].pageY);
-            vec2.set(this.rotateStart, x, y);
-        }
+        this.setTouchPageCoords(event, this.rotateStart);
     }
     private handleTouchStartPan(event: TouchEvent) {
-        if (event.touches.length == 1) {
-            vec2.set(this.panStart, event.touches[0].pageX, event.touches[0].pageY);
-            this.initializePanDistance(event.touches[0].clientX, event.touches[0].clientY);
-        } else {
-            var x = 0.5 * (event.touches[0].pageX + event.touches[1].pageX);
-            var y = 0.5 * (event.touches[0].pageY + event.touches[1].pageY);
-            vec2.set(this.panStart, x, y);
-            var cx = 0.5 * (event.touches[0].clientX + event.touches[1].clientX);
-            var cy = 0.5 * (event.touches[0].clientY + event.touches[1].clientY);
-            this.initializePanDistance(cx, cy);
-        }
+        this.setTouchPageCoords(event, this.panStart);
+        this.setTouchClientCoords(event, this.tempTouchClient);
+        this.initializePanDistance(this.tempTouchClient[0], this.tempTouchClient[1]);
     }
     private handleTouchStartDolly(event: TouchEvent) {
         var dx = event.touches[0].pageX - event.touches[1].pageX;
         var dy = event.touches[0].pageY - event.touches[1].pageY;
         var distance = Math.sqrt(dx * dx + dy * dy);
-        vec2.set(this.dollyStart, 0, distance);
+        vec2.set(this.dollyStart, distance, 0);
     }
     private handleTouchStartDollyPan(event: TouchEvent) {
         if (this.enableZoom) this.handleTouchStartDolly(event);
@@ -638,13 +656,7 @@ class OrbitControls extends EventDispatcher {
         if (this.enableRotate) this.handleTouchStartRotate(event);
     }
     private handleTouchMoveRotate(event: TouchEvent) {
-        if (event.touches.length == 1) {
-            vec2.set(this.rotateEnd, event.touches[0].pageX, event.touches[0].pageY);
-        } else {
-            var x = 0.5 * (event.touches[0].pageX + event.touches[1].pageX);
-            var y = 0.5 * (event.touches[0].pageY + event.touches[1].pageY);
-            vec2.set(this.rotateEnd, x, y);
-        }
+        this.setTouchPageCoords(event, this.rotateEnd);
         vec2.sub(this.rotateDelta, this.rotateEnd, this.rotateStart)
         vec2.scale(this.rotateDelta, this.rotateDelta, this.rotateSpeed);
         var element = this.domElement;
@@ -653,24 +665,18 @@ class OrbitControls extends EventDispatcher {
         vec2.copy(this.rotateStart, this.rotateEnd);
     }
     private handleTouchMovePan(event: TouchEvent) {
-        if (event.touches.length == 1) {
-            vec2.set(this.panEnd, event.touches[0].pageX, event.touches[0].pageY);
-        } else {
-            var x = 0.5 * (event.touches[0].pageX + event.touches[1].pageX);
-            var y = 0.5 * (event.touches[0].pageY + event.touches[1].pageY);
-            vec2.set(this.panEnd, x, y);
-        }
+        this.setTouchPageCoords(event, this.panEnd);
         vec2.sub(this.panDelta, this.panEnd, this.panStart)
         vec2.scale(this.panDelta, this.panDelta, this.panSpeed);
-        this.pan(this.panDelta[0], this.panDelta[0]);
+        this.pan(this.panDelta[0], this.panDelta[1]);
         vec2.copy(this.panStart, this.panEnd);
     }
     private handleTouchMoveDolly(event: TouchEvent) {
         var dx = event.touches[0].pageX - event.touches[1].pageX;
         var dy = event.touches[0].pageY - event.touches[1].pageY;
         var distance = Math.sqrt(dx * dx + dy * dy);
-        vec2.set(this.dollyEnd, 0, distance);
-        vec2.set(this.dollyDelta, 0, Math.pow(this.dollyEnd[0] / this.dollyStart[0], this.zoomSpeed));
+        vec2.set(this.dollyEnd, distance, 0);
+        vec2.set(this.dollyDelta, Math.pow(this.dollyEnd[0] / this.dollyStart[0], this.zoomSpeed), 0);
         this.dollyOut(this.dollyDelta[0]);
         vec2.copy(this.dollyStart, this.dollyEnd);
     }
@@ -751,24 +757,8 @@ class OrbitControls extends EventDispatcher {
                     this.state = STATE.PAN;
                 } else {
                     if (this.enableRotate === false) return;
-                    if (this.getOrbitTarget) {
-                        const newTarget = this.getOrbitTarget(event.clientX, event.clientY);
-                        if (newTarget) {
-                            // Calculate base orientation relative to newTarget using native lookAt
-                            let tempView = mat4.create();
-                            safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
-                            let qBase = quat.create();
-                            mat4.getRotation(qBase, tempView);
-
-                            // Calculate look direction in camera local space of this base orientation
-                            let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                            safeNormalize(lookDir, lookDir);
-                            vec3.transformQuat(this.localOffset, lookDir, qBase);
-
-                            // Update orbit target
-                            vec3.copy(this.orbitTarget, newTarget);
-                            this.update();
-                        }
+                    if (this.updateOrbitTarget(event.clientX, event.clientY)) {
+                        this.update();
                     }
                     this.handleMouseDownRotate(event);
                     this.state = STATE.ROTATE;
@@ -827,24 +817,9 @@ class OrbitControls extends EventDispatcher {
         this.dispatchEvent(this.startEvent);
 
         const now = performance.now();
-        if (this.getOrbitTarget && now - this.lastZoomTargetTime > 500) {
+        if (now - this.lastZoomTargetTime > 500) {
             this.lastZoomTargetTime = now;
-            const newTarget = this.getOrbitTarget(event.clientX, event.clientY);
-            if (newTarget) {
-                // Calculate base orientation relative to newTarget using native lookAt
-                let tempView = mat4.create();
-                safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
-                let qBase = quat.create();
-                mat4.getRotation(qBase, tempView);
-
-                // Calculate look direction in camera local space of this base orientation
-                let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                safeNormalize(lookDir, lookDir);
-                vec3.transformQuat(this.localOffset, lookDir, qBase);
-
-                // Update orbit target
-                vec3.copy(this.orbitTarget, newTarget);
-            }
+            this.updateOrbitTarget(event.clientX, event.clientY);
         }
 
         this.handleMouseWheel(event);
@@ -897,22 +872,8 @@ class OrbitControls extends EventDispatcher {
                 switch (this.touches.ONE) {
                     case TOUCH.ROTATE:
                         if (this.enableRotate === false) return;
-                        if (this.getOrbitTarget && event.touches.length === 1) {
-                            const newTarget = this.getOrbitTarget(event.touches[0].clientX, event.touches[0].clientY);
-                            if (newTarget) {
-                                // Calculate base orientation relative to newTarget using native lookAt
-                                let tempView = mat4.create();
-                                safeLookAt(tempView, this.object.position, newTarget, vec3.fromValues(0, 1, 0));
-                                let qBase = quat.create();
-                                mat4.getRotation(qBase, tempView);
-
-                                // Calculate look direction in camera local space of this base orientation
-                                let lookDir = vec3.sub(vec3.create(), this.target, this.object.position);
-                                safeNormalize(lookDir, lookDir);
-                                vec3.transformQuat(this.localOffset, lookDir, qBase);
-
-                                // Update orbit target
-                                vec3.copy(this.orbitTarget, newTarget);
+                        if (event.touches.length === 1) {
+                            if (this.updateOrbitTarget(event.touches[0].clientX, event.touches[0].clientY)) {
                                 this.update();
                             }
                         }
