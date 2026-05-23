@@ -17,6 +17,8 @@ import (
 	"github.com/samber/lo"
 )
 
+var debugFlag = flag.String("debug", "", "comma-separated debug options")
+
 func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 	blockmeta, err := os.ReadFile(path.Join(outDir, "blockmeta.json"))
 	if err != nil {
@@ -54,6 +56,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 					file:   file.Name(),
 					bm:     bm,
 					prune:  prune,
+					debug:  *debugFlag,
 				})
 				if err != nil {
 					log.Fatal("error converting ", file.Name(), ": ", err)

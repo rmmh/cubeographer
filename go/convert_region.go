@@ -17,11 +17,14 @@ import (
 
 	"github.com/rmmh/cubeographer/go/region"
 	"github.com/rmmh/cubeographer/go/render"
+	rp "github.com/rmmh/cubeographer/go/resourcepack"
+	"github.com/rmmh/cubeographer/go/zvcr"
 )
 
 type regionState struct {
 	openRegion region.ReadRegionFunc
 	dir        string
+	ext        string
 	bm         *region.BlockMapper
 	rx, rz     int
 	cdata      []region.ChunkDatum
@@ -64,7 +67,7 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 					wanted = append(wanted, i)
 				}
 			}
-			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d.mca", ox, oz))
+			ap := path.Join(rs.dir, fmt.Sprintf("r.%d.%d%s", ox, oz, rs.ext))
 			chunks, err := rs.openRegion(ap, rs.bm, wanted)
 			if err != nil {
 				rs.cadj[key] = make([]region.ChunkDatum, 1024)
@@ -125,16 +128,20 @@ type scanRegionConfig struct {
 	readRegion  region.ReadRegionFunc
 
 	prune bool
+	debug string
 }
 
 func scanRegion(conf *scanRegionConfig) error {
-	if !strings.HasSuffix(conf.file, ".mca") {
-		return errors.New("file has wrong suffix (not .mca): " + conf.file)
-	}
-
-	readRegion := region.ReadRegion
-	if conf.readRegion != nil {
-		readRegion = conf.readRegion
+	ext := path.Ext(conf.file)
+	readRegion := conf.readRegion
+	if readRegion == nil {
+		if ext == ".zvcr3" {
+			readRegion = zvcr.ReadZVCR
+		} else if ext == ".mca" {
+			readRegion = region.ReadRegion
+		} else {
+			return errors.New("file has wrong suffix (not .mca or .zvcr3): " + conf.file)
+		}
 	}
 
 	bm := conf.bm
@@ -157,6 +164,7 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	rs := regionState{
 		dir:        conf.dir,
+		ext:        ext,
 		bm:         bm,
 		rx:         rx,
 		rz:         rz,
@@ -303,7 +311,9 @@ func scanRegion(conf *scanRegionConfig) error {
 		os.MkdirAll(conf.outdir, 0755)
 	}
 
-	nameBase := path.Join(conf.outdir, strings.TrimSuffix(path.Base(conf.file), ".mca"))
+	baseName := path.Base(conf.file)
+	baseName = strings.TrimSuffix(baseName, ext)
+	nameBase := path.Join(conf.outdir, baseName)
 	outLen := 0
 	outLenComp := int64(0)
 	// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
@@ -351,7 +361,19 @@ func scanRegion(conf *scanRegionConfig) error {
 
 	fmt.Println(conf.dir, conf.file, regionSize/1024, "KiB region,", outLen/1024, "KiB =>", outLenComp/1024, "KiB gzipped tiles")
 
-	if false {
+	hasDebug := func(opt string) bool {
+		if conf.debug == "" {
+			return false
+		}
+		for _, o := range strings.Split(conf.debug, ",") {
+			if o == opt {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasDebug("blockcount") {
 		presentBlocks := []uint16{}
 		for bid, count := range blockCounts {
 			if count > 0 {
@@ -359,15 +381,11 @@ func scanRegion(conf *scanRegionConfig) error {
 			}
 		}
 		sort.Slice(presentBlocks, func(i, j int) bool {
-			return blockCounts[presentBlocks[i]] < blockCounts[presentBlocks[j]]
+			return blockCounts[presentBlocks[i]] > blockCounts[presentBlocks[j]]
 		})
+		fmt.Printf("Block counts for %s:\n", conf.file)
 		for _, bid := range presentBlocks {
-			if blockCounts[bid] < 100 {
-				continue
-			}
-			if render.LayerNumber(bm.Layer[bid][0][0]) == render.LayerCubeFallback {
-				fmt.Println(bm.NidToName[bid], blockCounts[bid])
-			}
+			fmt.Printf("  %s: %d\n", rp.RemoveDefaultPrefix(bm.NidToName[bid]), blockCounts[bid])
 		}
 	}
 

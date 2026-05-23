@@ -124,3 +124,10 @@ func (bm *BlockMapper) IsSolid(b uint16) bool {
 	// instead of trying to track every transparent block, keep a list of *known* solid blocks
 	return bm.solid[b>>6]&(1<<(b&63)) != 0
 }
+
+func (bm *BlockMapper) GetStateval(nid uint16, props []string) render.Stateval {
+	if int(nid) < len(bm.nidToSmap) && bm.nidToSmap[nid] != nil {
+		return bm.nidToSmap[nid].GetList(props)
+	}
+	return 0
+}
