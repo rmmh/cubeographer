@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"image/color"
 	"strconv"
+	"strings"
 
 	"github.com/rmmh/cubeographer/go/render"
 	"github.com/rmmh/cubeographer/go/resourcepack"
@@ -22,7 +23,7 @@ type BlockMapper struct {
 	nidToSmap          []render.Statemap
 	Tmpl               [][][][]uint32
 	Layer              [][][]uint8
-	Colors             [][]color.RGBA
+	Colors             [][][]color.RGBA
 }
 
 func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
@@ -33,7 +34,7 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 		solid:     []uint64{},
 		Tmpl:      [][][][]uint32{nil},
 		Layer:     [][][]uint8{nil},
-		Colors:    [][]color.RGBA{nil},
+		Colors:    [][][]color.RGBA{nil},
 	}
 
 	err := json.Unmarshal(buf, &bm.meta)
@@ -66,7 +67,7 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 			}
 			tmpls := [][][]uint32{}
 			layers := [][]uint8{}
-			colors := []color.RGBA{}
+			colors := [][]color.RGBA{}
 			for i, variant := range b.Templates {
 				vtmpls := [][]uint32{}
 				vlayers := []uint8{}
@@ -76,7 +77,7 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 				}
 				tmpls = append(tmpls, vtmpls)
 				layers = append(layers, vlayers)
-				colors = append(colors, convertColor(b.Colors[i]))
+				colors = append(colors, convertColors(b.Colors[i]))
 			}
 			bm.Tmpl = append(bm.Tmpl, tmpls)
 			bm.Layer = append(bm.Layer, layers)
@@ -118,6 +119,18 @@ func convertColor(s string) color.RGBA {
 	c.B = uint8(b)
 	c.A = 255
 	return c
+}
+
+func convertColors(s string) []color.RGBA {
+	if s == "" {
+		return []color.RGBA{{0, 0, 0, 0}}
+	}
+	parts := strings.Split(s, ",")
+	res := make([]color.RGBA, len(parts))
+	for i, part := range parts {
+		res[i] = convertColor(part)
+	}
+	return res
 }
 
 func (bm *BlockMapper) IsSolid(b uint16) bool {
