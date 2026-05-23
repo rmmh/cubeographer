@@ -860,7 +860,7 @@ fetch("textures/cuboid_metadata.bin.gz")
     });
 
 setTimeout(function () {
-    const choice: string = '2b2t';
+    const choice: string = 'greenfield';
     switch (choice) {
         case '2b2t': fetchRange(-129, -129, -11, -11, 0, -129, -11, 5); break;
         case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;

@@ -116,7 +116,16 @@ export function createOrbitTargetFinder(
         // Call the on-demand FBO render pass to fill fboDepth
         const pixelX = Math.floor(x);
         const pixelY = Math.floor(context.canvas.height - y);
-        context.scissorBox = { x: pixelX, y: pixelY, width: 1, height: 1 };
+
+        // Center a 4px target scissor box on (pixelX, pixelY) to cushion subpixel/DPI discrepancies
+        const scissorSize = 4;
+        const halfSize = Math.floor(scissorSize / 2);
+        const scissorX = Math.max(0, pixelX - halfSize);
+        const scissorY = Math.max(0, pixelY - halfSize);
+        const scissorWidth = Math.min(context.canvas.width - scissorX, scissorSize);
+        const scissorHeight = Math.min(context.canvas.height - scissorY, scissorSize);
+
+        context.scissorBox = { x: scissorX, y: scissorY, width: scissorWidth, height: scissorHeight };
         renderSceneToFBO();
         context.scissorBox = null;
 
