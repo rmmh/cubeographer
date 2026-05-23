@@ -51,6 +51,41 @@ const space = PROD ? 512 : 64;
 
 const sceneGraph = new renderer.SceneGraph(context);
 
+let metadataLoadingPromise: Promise<void>;
+
+async function loadMetadata() {
+    try {
+        const response = await fetch('map/metadata.json');
+        if (!response.ok) {
+            throw new Error(`Failed to fetch map/metadata.json: ${response.statusText}`);
+        }
+        const data = await response.json();
+
+        const parseSet = (str: string) => {
+            if (!str) return new Set<string>();
+            return new Set<string>(str.trim().split(/\s+/));
+        };
+
+        sceneGraph.mapMetadata = {
+            full_regions: parseSet(data.full_regions),
+            lod_regions: parseSet(data.lod_regions),
+            tile_regions: parseSet(data.tile_regions),
+            loaded: true
+        };
+        console.debug("Loaded map/metadata.json:", sceneGraph.mapMetadata);
+    } catch (e) {
+        console.warn("Could not load map/metadata.json, falling back to eager loading:", e);
+        sceneGraph.mapMetadata = {
+            full_regions: new Set<string>(),
+            lod_regions: new Set<string>(),
+            tile_regions: new Set<string>(),
+            loaded: false
+        };
+    }
+}
+
+metadataLoadingPromise = loadMetadata();
+
 const stats = new Stats();
 stats.showPanel(0); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
@@ -602,6 +637,9 @@ function renderFrame() {
 };
 
 function updateDynamicLoading() {
+    if (!sceneGraph.mapMetadata) {
+        return; // wait for metadata to load
+    }
     const cullResults = sceneGraph.cull(camera);
 
     // Trigger regionlet fetches (network queue handles limits)
@@ -666,6 +704,12 @@ function fetchRegion(x: number, z: number, off: number) {
     const region = sceneGraph.getOrCreateRegion(x, z);
     const regionlet = region.regionlets[off];
     if (regionlet.status !== 'NONE') {
+        return;
+    }
+
+    const meta = sceneGraph.mapMetadata;
+    if (meta && meta.loaded && !meta.full_regions.has(`${x}.${z}`)) {
+        sceneGraph.updateRegionletStatus(x, z, off, 'ERROR');
         return;
     }
 
@@ -859,7 +903,7 @@ fetch("textures/cuboid_metadata.bin.gz")
         console.error("failed to load cuboid_metadata.bin.gz", err);
     });
 
-setTimeout(function () {
+metadataLoadingPromise.then(() => {
     const choice: string = 'greenfield';
     switch (choice) {
         case '2b2t': fetchRange(-129, -129, -11, -11, 0, -129, -11, 5); break;
@@ -872,7 +916,8 @@ setTimeout(function () {
     }
 
     maybeSetCameraFromLocstring();
-}, 500);
+    updateDynamicLoading();
+});
 
 // --- DEBUG MENU & REGION INSPECTOR SETUP ---
 setupGUI(sceneGraph, controls, context, render);

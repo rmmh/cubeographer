@@ -27,7 +27,7 @@ func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 	return region.LoadBlockMapper(blockmeta)
 }
 
-func convert(numProcs int, regionDir, outDir string, filters []string, prune bool) {
+func convert(numProcs int, regionDir, outDir string, filters []string, prune bool, mode string) {
 	files, err := os.ReadDir(regionDir)
 	if err != nil {
 		log.Fatal(err)
@@ -57,6 +57,7 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 					bm:     bm,
 					prune:  prune,
 					debug:  *debugFlag,
+					mode:   mode,
 				})
 				if err != nil {
 					log.Fatal("error converting ", file.Name(), ": ", err)
@@ -93,6 +94,10 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 		work <- info
 	}
 	wg.Wait()
+	log.Println("generating map metadata...")
+	if err := WriteMapMetadata(outDir, mode); err != nil {
+		log.Println("error writing map metadata:", err)
+	}
 }
 
 func usage() {
@@ -106,7 +111,12 @@ func main() {
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	noPrune := flag.Bool("noprune", false, "don't attempt to hide invisible portions")
 	doConvert := flag.Bool("convert", false, "convert region files for web display")
+	mode := flag.String("mode", "full", "output mode: full (cmt+bin+png), lod (bin+png), or tile (png)")
 	flag.Parse()
+
+	if *mode != "full" && *mode != "lod" && *mode != "tile" {
+		log.Fatalf("invalid mode %q: must be one of full, lod, or tile", *mode)
+	}
 
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -133,7 +143,7 @@ func main() {
 	}
 	if *doConvert {
 		if len(args) > 1 {
-			convert(*numProcs, args[0], args[1], filters, !*noPrune)
+			convert(*numProcs, args[0], args[1], filters, !*noPrune, *mode)
 			return
 		} else {
 			usage()
@@ -141,7 +151,7 @@ func main() {
 		}
 	}
 	if len(args) > 1 {
-		serve(*numProcs, args[0], args[1], !*noPrune)
+		serve(*numProcs, args[0], args[1], !*noPrune, *mode)
 	} else {
 		usage()
 	}

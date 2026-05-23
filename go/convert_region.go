@@ -129,6 +129,7 @@ type scanRegionConfig struct {
 
 	prune bool
 	debug string
+	mode  string
 }
 
 func scanRegion(conf *scanRegionConfig) error {
@@ -172,226 +173,265 @@ func scanRegion(conf *scanRegionConfig) error {
 		openRegion: readRegion,
 	}
 
-	var chunkVis *blockVis
-
-	if conf.prune {
-		chunkVis = makeBlockvis(cdata, bm, visTriakisOctahedral)
-		if len(chunkVis.reachable) > 0 {
-			// fmt.Printf("mid reach=%36b pass=%v\n", chunkVis.reachable[16+16*32], chunkVis.isPassable(16, 0, 16))
-		}
+	mode := conf.mode
+	if mode == "" {
+		mode = "full"
 	}
 
-	var bufs [4][render.NumRenderLayers]bytes.Buffer
+	if mode == "full" {
+		var chunkVis *blockVis
 
-	buf := make([]byte, 64)
-	// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
-
-	// iterate bottom-to-top so that transparency (i.e. ocean water)
-	// has a chance to render the bottom THEN the surface
-
-	waterID := bm.NameToNid["minecraft:water"]
-
-	blockCounts := make([]int, len(bm.Tmpl))
-
-	for y := 0; y <= 320; y++ {
-		for z := 0; z < 512; z++ {
-			// skipping empty rows is a significant speedup for empty regions
-			minX := 0
-			for minX < 512 && cdata[(minX>>4)+(z>>4)*32].Blocks == nil {
-				minX += 16
+		if conf.prune {
+			chunkVis = makeBlockvis(cdata, bm, visTriakisOctahedral)
+			if len(chunkVis.reachable) > 0 {
+				// fmt.Printf("mid reach=%36b pass=%v\n", chunkVis.reachable[16+16*32], chunkVis.isPassable(16, 0, 16))
 			}
-			if minX == 512 {
-				z += 15
-				continue
-			}
-			for x := minX; x < 512; x++ {
-				if cdata[(x>>4)+(z>>4)*32].Blocks == nil {
-					x += 15
+		}
+
+		var bufs [4][render.NumRenderLayers]bytes.Buffer
+
+		buf := make([]byte, 64)
+		// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
+
+		// iterate bottom-to-top so that transparency (i.e. ocean water)
+		// has a chance to render the bottom THEN the surface
+
+		waterID := bm.NameToNid["minecraft:water"]
+
+		blockCounts := make([]int, len(bm.Tmpl))
+
+		for y := 0; y <= 320; y++ {
+			for z := 0; z < 512; z++ {
+				// skipping empty rows is a significant speedup for empty regions
+				minX := 0
+				for minX < 512 && cdata[(minX>>4)+(z>>4)*32].Blocks == nil {
+					minX += 16
+				}
+				if minX == 512 {
+					z += 15
 					continue
 				}
-
-				chunk := &cdata[(x>>4)+(z>>4)*32]
-				if len(chunk.Blocks) <= y>>4 {
-					continue
-				}
-
-				if conf.prune {
-					if !chunkVis.isVisible(x, y, z) {
+				for x := minX; x < 512; x++ {
+					if cdata[(x>>4)+(z>>4)*32].Blocks == nil {
+						x += 15
 						continue
 					}
-				}
 
-				b, bs, bl, bsl := rs.get(x, y, z)
+					chunk := &cdata[(x>>4)+(z>>4)*32]
+					if len(chunk.Blocks) <= y>>4 {
+						continue
+					}
 
-				if b == 0 {
-					continue
-				}
+					if conf.prune {
+						if !chunkVis.isVisible(x, y, z) {
+							continue
+						}
+					}
 
-				ns, nl, nsl := rs.neighs(x, y, z)
+					b, bs, bl, bsl := rs.get(x, y, z)
 
-				sideVis := uint32(0)
-				sideLight := uint32(0)
-				for i, nb := range ns {
-					if b == waterID {
-						if nb == 0 || (nb != waterID && !bm.IsSolid(nb)) {
+					if b == 0 {
+						continue
+					}
+
+					ns, nl, nsl := rs.neighs(x, y, z)
+
+					sideVis := uint32(0)
+					sideLight := uint32(0)
+					for i, nb := range ns {
+						if b == waterID {
+							if nb == 0 || (nb != waterID && !bm.IsSolid(nb)) {
+								sideVis |= 1 << i
+							}
+						} else if !bm.IsSolid(nb) {
 							sideVis |= 1 << i
 						}
-					} else if !bm.IsSolid(nb) {
-						sideVis |= 1 << i
-					}
-					l := nsl[i]
-					if nl[i] > l {
-						l = nl[i]
-					} else if bl > l {
-						l = bl
-					} else if bsl > l {
-						l = bsl
-					}
-					sideLight |= uint32(l) << (4 * i)
-				}
-
-				if sideVis != 0 {
-					blockCounts[b]++
-
-					// extra rendering flags
-					// 0: use sprite+256 for sides
-					// 1: tint according to biome colors
-					// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
-					var tmpls [][]uint32
-					var layers []uint8
-					if int(bs) < len(bm.Tmpl[b]) {
-						tmpls = bm.Tmpl[b][bs]
-						layers = bm.Layer[b][bs]
-					} else {
-						tmpls = bm.Tmpl[b][0]
-						layers = bm.Layer[b][0]
+						l := nsl[i]
+						if nl[i] > l {
+							l = nl[i]
+						} else if bl > l {
+							l = bl
+						} else if bsl > l {
+							l = bsl
+						}
+						sideLight |= uint32(l) << (4 * i)
 					}
 
-					pos := uint32((x&255)<<16 | (z&255)<<8 | y)
+					if sideVis != 0 {
+						blockCounts[b]++
 
-					for eIdx, tmpl := range tmpls {
-						layer := layers[eIdx]
-						blen := 0
+						// extra rendering flags
+						// 0: use sprite+256 for sides
+						// 1: tint according to biome colors
+						// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
+						var tmpls [][]uint32
+						var layers []uint8
+						if int(bs) < len(bm.Tmpl[b]) {
+							tmpls = bm.Tmpl[b][bs]
+							layers = bm.Layer[b][bs]
+						} else {
+							tmpls = bm.Tmpl[b][0]
+							layers = bm.Layer[b][0]
+						}
 
-						for i := 0; i < len(tmpl); i += 2 {
-							// x: 8b z: 8b y: 8b   8+8+8=24b
-							if sideVis&tmpl[i+1] != 0 {
-								binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
-								var yVal uint32
-								if render.LayerNumber(layer) == render.LayerCuboid {
-									cuboidSideLight := ((sideLight >> 1) & 7) |
-										((sideLight >> 2) & 0x38) |
-										((sideLight >> 3) & 0x1C0) |
-										((sideLight >> 4) & 0xE00) |
-										((sideLight >> 5) & 0x7000) |
-										((sideLight >> 6) & 0x38000)
-									// Cuboid template attr.y:
-									// - Bits 24-31: top 8 bits of 16-bit cuboid ID.
-									// - Bits 0-5: face presence mask.
-									// We clear bottom 6 bits of the template, OR in cuboidSideLight (18 bits) at bits 6-23,
-									// and OR in the visibility mask (sideVis & tmpl[i+1]).
-									yVal = (tmpl[i+1] & ^uint32(0b111111)) | (cuboidSideLight << 6) | (sideVis & tmpl[i+1])
-								} else {
-									yVal = (tmpl[i+1] & ^uint32(0b111111)) | (sideLight << 6) | (sideVis & tmpl[i+1])
+						pos := uint32((x&255)<<16 | (z&255)<<8 | y)
+
+						for eIdx, tmpl := range tmpls {
+							layer := layers[eIdx]
+							blen := 0
+
+							for i := 0; i < len(tmpl); i += 2 {
+								// x: 8b z: 8b y: 8b   8+8+8=24b
+								if sideVis&tmpl[i+1] != 0 {
+									binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
+									var yVal uint32
+									if render.LayerNumber(layer) == render.LayerCuboid {
+										cuboidSideLight := ((sideLight >> 1) & 7) |
+											((sideLight >> 2) & 0x38) |
+											((sideLight >> 3) & 0x1C0) |
+											((sideLight >> 4) & 0xE00) |
+											((sideLight >> 5) & 0x7000) |
+											((sideLight >> 6) & 0x38000)
+										// Cuboid template attr.y:
+										// - Bits 24-31: top 8 bits of 16-bit cuboid ID.
+										// - Bits 0-5: face presence mask.
+										// We clear bottom 6 bits of the template, OR in cuboidSideLight (18 bits) at bits 6-23,
+										// and OR in the visibility mask (sideVis & tmpl[i+1]).
+										yVal = (tmpl[i+1] & ^uint32(0b111111)) | (cuboidSideLight << 6) | (sideVis & tmpl[i+1])
+									} else {
+										yVal = (tmpl[i+1] & ^uint32(0b111111)) | (sideLight << 6) | (sideVis & tmpl[i+1])
+									}
+									binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
+									blen += 8
 								}
-								binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
-								blen += 8
+							}
+							if blen > 0 {
+								bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
 							}
 						}
-						if blen > 0 {
-							bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
-						}
 					}
 				}
 			}
 		}
-	}
 
-	if _, err := os.Stat(conf.outdir); os.IsNotExist(err) {
-		os.MkdirAll(conf.outdir, 0755)
-	}
-
-	baseName := path.Base(conf.file)
-	baseName = strings.TrimSuffix(baseName, ext)
-	nameBase := path.Join(conf.outdir, baseName)
-	outLen := 0
-	outLenComp := int64(0)
-	// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
-	outComp := gzip.NewWriter(nil)
-	for bi := range bufs {
-		bs := &bufs[bi]
-		out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
-		if err != nil {
-			log.Println("unable to open dest file")
-			return err
+		if _, err := os.Stat(conf.outdir); os.IsNotExist(err) {
+			os.MkdirAll(conf.outdir, 0755)
 		}
 
-		outComp.Reset(out)
-		outComp.Write([]byte("COMTE00\n"))
+		baseName := path.Base(conf.file)
+		baseName = strings.TrimSuffix(baseName, ext)
+		nameBase := path.Join(conf.outdir, baseName)
+		outLen := 0
+		outLenComp := int64(0)
+		// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
+		outComp := gzip.NewWriter(nil)
+		for bi := range bufs {
+			bs := &bufs[bi]
+			out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
+			if err != nil {
+				log.Println("unable to open dest file")
+				return err
+			}
 
-		var header (struct {
-			Layers [render.NumRenderLayers]struct {
-				Length int    `json:"length"`
-				Name   string `json:"name"`
-			} `json:"layers"`
-		})
+			outComp.Reset(out)
+			outComp.Write([]byte("COMTE00\n"))
 
-		for i, obuf := range bs {
-			header.Layers[i].Length = obuf.Len()
-			header.Layers[i].Name = render.LayerNames[i]
+			var header (struct {
+				Layers [render.NumRenderLayers]struct {
+					Length int    `json:"length"`
+					Name   string `json:"name"`
+				} `json:"layers"`
+			})
+
+			for i, obuf := range bs {
+				header.Layers[i].Length = obuf.Len()
+				header.Layers[i].Name = render.LayerNames[i]
+			}
+			headerJSON, err := json.Marshal(header)
+			if err != nil {
+				log.Fatal(err)
+			}
+			binary.LittleEndian.PutUint32(buf, uint32(len(headerJSON)))
+			outComp.Write(buf[:4])
+			outComp.Write(headerJSON)
+
+			for _, obuf := range bs {
+				outLen += obuf.Len()
+				outComp.Write(obuf.Bytes())
+			}
+			outComp.Flush()
+			outComp.Close()
+			bufOutLen, _ := out.Seek(0, io.SeekEnd)
+			outLenComp += bufOutLen
+			out.Close()
 		}
-		headerJSON, err := json.Marshal(header)
-		if err != nil {
-			log.Fatal(err)
-		}
-		binary.LittleEndian.PutUint32(buf, uint32(len(headerJSON)))
-		outComp.Write(buf[:4])
-		outComp.Write(headerJSON)
 
-		for _, obuf := range bs {
-			outLen += obuf.Len()
-			outComp.Write(obuf.Bytes())
-		}
-		outComp.Flush()
-		outComp.Close()
-		bufOutLen, _ := out.Seek(0, io.SeekEnd)
-		outLenComp += bufOutLen
-		out.Close()
-	}
-
-	fmt.Println(conf.dir, conf.file, regionSize/1024, "KiB region,", outLen/1024, "KiB =>", outLenComp/1024, "KiB gzipped tiles")
-
-	hasDebug := func(opt string) bool {
-		if conf.debug == "" {
+		hasDebug := func(opt string) bool {
+			if conf.debug == "" {
+				return false
+			}
+			for _, o := range strings.Split(conf.debug, ",") {
+				if o == opt {
+					return true
+				}
+			}
 			return false
 		}
-		for _, o := range strings.Split(conf.debug, ",") {
-			if o == opt {
-				return true
-			}
-		}
-		return false
-	}
 
-	if hasDebug("blockcount") {
-		presentBlocks := []uint16{}
-		for bid, count := range blockCounts {
-			if count > 0 {
-				presentBlocks = append(presentBlocks, uint16(bid))
+		if hasDebug("blockcount") {
+			presentBlocks := []uint16{}
+			for bid, count := range blockCounts {
+				if count > 0 {
+					presentBlocks = append(presentBlocks, uint16(bid))
+				}
 			}
-		}
-		sort.Slice(presentBlocks, func(i, j int) bool {
-			return blockCounts[presentBlocks[i]] > blockCounts[presentBlocks[j]]
-		})
-		fmt.Printf("Block counts for %s:\n", conf.file)
-		for _, bid := range presentBlocks {
-			fmt.Printf("  %s: %d\n", rp.RemoveDefaultPrefix(bm.NidToName[bid]), blockCounts[bid])
+			sort.Slice(presentBlocks, func(i, j int) bool {
+				return blockCounts[presentBlocks[i]] > blockCounts[presentBlocks[j]]
+			})
+			fmt.Printf("Block counts for %s:\n", conf.file)
+			for _, bid := range presentBlocks {
+				fmt.Printf("  %s: %d\n", rp.RemoveDefaultPrefix(bm.NidToName[bid]), blockCounts[bid])
+			}
 		}
 	}
 
 	lodErr := computeRegionLODs(&rs, conf)
 	if lodErr != nil {
 		log.Printf("error computing region LODs for %s: %v", conf.file, lodErr)
+	}
+
+	// Mode-aware summary print
+	{
+		baseName := path.Base(conf.file)
+		baseName = strings.TrimSuffix(baseName, ext)
+
+		var parts []string
+		parts = append(parts, fmt.Sprintf("%s %s %d KiB region", conf.dir, conf.file, regionSize/1024))
+
+		if mode == "full" {
+			var cmtSize int64
+			for bi := 0; bi < 4; bi++ {
+				cmtPath := path.Join(conf.outdir, fmt.Sprintf("%s.%d.cmt", baseName, bi))
+				if st, err := os.Stat(cmtPath); err == nil {
+					cmtSize += st.Size()
+				}
+			}
+			parts = append(parts, fmt.Sprintf("cmt %d KiB", cmtSize/1024))
+		}
+
+		if mode == "full" || mode == "lod" {
+			binPath := path.Join(conf.outdir, "lods", fmt.Sprintf("%s.bin", baseName))
+			if st, err := os.Stat(binPath); err == nil {
+				parts = append(parts, fmt.Sprintf("bin %d KiB", st.Size()/1024))
+			}
+		}
+
+		pngPath := path.Join(conf.outdir, "tiles", fmt.Sprintf("%s.png", baseName))
+		if st, err := os.Stat(pngPath); err == nil {
+			parts = append(parts, fmt.Sprintf("png %d KiB", st.Size()/1024))
+		}
+
+		fmt.Println(strings.Join(parts, ", "))
 	}
 
 	return err

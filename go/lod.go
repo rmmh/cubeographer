@@ -199,34 +199,36 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 		{8, westDepthImg},
 	}
 
-	binPath := path.Join(lodsDir, fmt.Sprintf("r.%d.%d.bin", rs.rx, rs.rz))
-	fBin, err := os.Create(binPath)
-	if err != nil {
-		return err
-	}
-	defer fBin.Close()
+	if conf.mode != "tile" {
+		binPath := path.Join(lodsDir, fmt.Sprintf("r.%d.%d.bin", rs.rx, rs.rz))
+		fBin, err := os.Create(binPath)
+		if err != nil {
+			return err
+		}
+		defer fBin.Close()
 
-	for _, asset := range assets {
-		var imgBuf bytes.Buffer
-		err = png.Encode(&imgBuf, asset.img)
-		if err != nil {
-			return err
-		}
+		for _, asset := range assets {
+			var imgBuf bytes.Buffer
+			err = png.Encode(&imgBuf, asset.img)
+			if err != nil {
+				return err
+			}
 
-		dataBytes := imgBuf.Bytes()
-		_, err = fBin.Write([]byte{asset.id})
-		if err != nil {
-			return err
-		}
-		lenBuf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(lenBuf, uint32(len(dataBytes)))
-		_, err = fBin.Write(lenBuf)
-		if err != nil {
-			return err
-		}
-		_, err = fBin.Write(dataBytes)
-		if err != nil {
-			return err
+			dataBytes := imgBuf.Bytes()
+			_, err = fBin.Write([]byte{asset.id})
+			if err != nil {
+				return err
+			}
+			lenBuf := make([]byte, 4)
+			binary.LittleEndian.PutUint32(lenBuf, uint32(len(dataBytes)))
+			_, err = fBin.Write(lenBuf)
+			if err != nil {
+				return err
+			}
+			_, err = fBin.Write(dataBytes)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

@@ -131,10 +131,25 @@ export function fetchRegionLOD(
     cameraPosition: any,
     render: () => void
 ) {
-    const key = `${rx},${rz}`;
+    const key = `${rx}.${rz}`;
     const region = sceneGraph.getOrCreateRegion(rx, rz);
     if (region.impostor.status !== 'NONE') {
         return;
+    }
+
+    const meta = sceneGraph.mapMetadata;
+    if (meta && meta.loaded) {
+        const isFull = meta.full_regions.has(key);
+        const isLod = meta.lod_regions.has(key);
+        const isTile = meta.tile_regions.has(key);
+
+        console.log("YOHOHO");
+
+        if (!isFull && !isLod && !isTile) {
+            // Not in any active metadata regions, skip completely
+            sceneGraph.updateImpostorStatus(rx, rz, 'ERROR');
+            return;
+        }
     }
 
     sceneGraph.updateImpostorStatus(rx, rz, 'FETCH');
@@ -152,6 +167,9 @@ export function fetchRegionLOD(
         priority,
         run: async () => {
             try {
+                const meta = sceneGraph.mapMetadata;
+                const loadBin = !meta || !meta.loaded || meta.full_regions.has(key) || meta.lod_regions.has(key);
+
                 const topColorImgPromise: Promise<ImageBitmap> = fetch(`map/tiles/r.${rx}.${rz}.png`)
                     .then(async (res: Response) => {
                         if (!res.ok) throw new HttpError(res);
@@ -159,11 +177,16 @@ export function fetchRegionLOD(
                         return createImageBitmap(blob);
                     });
 
-                const binPromise: Promise<ArrayBuffer> = fetch(`map/lods/r.${rx}.${rz}.bin`)
-                    .then(async (res: Response) => {
-                        if (!res.ok) throw new HttpError(res);
-                        return res.arrayBuffer();
-                    });
+                let binPromise: Promise<ArrayBuffer | null>;
+                if (loadBin) {
+                    binPromise = fetch(`map/lods/r.${rx}.${rz}.bin`)
+                        .then(async (res: Response) => {
+                            if (!res.ok) throw new HttpError(res);
+                            return res.arrayBuffer();
+                        });
+                } else {
+                    binPromise = Promise.resolve(null);
+                }
 
                 const [topColorImg, binBuffer] = await Promise.allSettled([topColorImgPromise, binPromise]);
                 if (topColorImg.status === 'rejected') {
@@ -172,34 +195,40 @@ export function fetchRegionLOD(
                 if (binBuffer.status === 'rejected') {
                     throw binBuffer.reason;
                 }
-                const uint8Array = new Uint8Array(binBuffer.value);
-                const dataView = new DataView(binBuffer.value);
 
-                let offset = 0;
-                const imgPromises: Promise<ImageBitmap>[] = [];
+                const sideImgs: ImageBitmap[] = [];
                 const typeToImgIndex: { [type: number]: number } = {};
 
-                while (offset < uint8Array.length) {
-                    if (offset + 5 > uint8Array.length) break;
-                    const type = uint8Array[offset];
-                    offset += 1;
-                    const length = dataView.getUint32(offset, true);
-                    offset += 4;
-                    if (offset + length > uint8Array.length) break;
+                if (binBuffer.value !== null) {
+                    const uint8Array = new Uint8Array(binBuffer.value);
+                    const dataView = new DataView(binBuffer.value);
 
-                    const value = uint8Array.subarray(offset, offset + length);
-                    offset += length;
+                    let offset = 0;
+                    const imgPromises: Promise<ImageBitmap>[] = [];
 
-                    const blob = new Blob([value], { type: 'image/png' });
-                    const imgIdx = imgPromises.length;
-                    imgPromises.push(createImageBitmap(blob, {
-                        colorSpaceConversion: 'none',
-                        premultiplyAlpha: 'none'
-                    }));
-                    typeToImgIndex[type] = imgIdx;
+                    while (offset < uint8Array.length) {
+                        if (offset + 5 > uint8Array.length) break;
+                        const type = uint8Array[offset];
+                        offset += 1;
+                        const length = dataView.getUint32(offset, true);
+                        offset += 4;
+                        if (offset + length > uint8Array.length) break;
+
+                        const value = uint8Array.subarray(offset, offset + length);
+                        offset += length;
+
+                        const blob = new Blob([value], { type: 'image/png' });
+                        const imgIdx = imgPromises.length;
+                        imgPromises.push(createImageBitmap(blob, {
+                            colorSpaceConversion: 'none',
+                            premultiplyAlpha: 'none'
+                        }));
+                        typeToImgIndex[type] = imgIdx;
+                    }
+
+                    const loadedSideImgs = await Promise.all(imgPromises);
+                    sideImgs.push(...loadedSideImgs);
                 }
-
-                const sideImgs = await Promise.all(imgPromises);
 
                 const context = sceneGraph.context;
 

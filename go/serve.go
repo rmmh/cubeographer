@@ -32,6 +32,7 @@ type server struct {
 	readRegion map[string]region.ReadRegionFunc
 	dataDir    string
 	pruneCaves bool
+	mode       string
 
 	binaryTime time.Time
 	bm         *region.BlockMapper
@@ -81,6 +82,7 @@ func (s *server) mapWorker() {
 			file:       fmt.Sprintf("r.%d.%d.mca", item.rx, item.rz),
 			bm:         s.bm,
 			prune:      s.pruneCaves,
+			mode:       s.mode,
 		})
 		s.workLock.Lock()
 		for _, wait := range s.working[itemKey] {
@@ -134,7 +136,7 @@ func (s *server) worldRedirHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, r.URL.Path[strings.IndexByte(r.URL.Path[1:], '/')+1:], http.StatusFound)
 }
 
-func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
+func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode string) {
 	binaryStat, err := os.Stat(os.Args[0])
 	if err != nil {
 		log.Fatal(err)
@@ -158,10 +160,21 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 		},
 		dataDir:    dataDir,
 		pruneCaves: pruneCaves,
+		mode:       mode,
 		bm:         bm,
 		binaryTime: binaryStat.ModTime(),
 		workQueue:  make(chan *workItem),
 		working:    make(map[int64][]*workItem),
+	}
+
+	for w := range s.regionDir {
+		mDir := path.Join(dataDir, w, "map")
+		if _, err := os.Stat(mDir); err == nil {
+			log.Printf("generating map metadata for world %q...", w)
+			if err := WriteMapMetadata(mDir, s.mode); err != nil {
+				log.Printf("error writing map metadata for world %q: %v", w, err)
+			}
+		}
 	}
 
 	for i := 0; i < numProcs; i++ {

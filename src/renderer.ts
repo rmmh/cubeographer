@@ -440,6 +440,13 @@ export type RegionletStatus = 'NONE' | 'FETCH' | 'STREAM' | 'READY' | 'ERROR';
 export type ImpostorStatus = 'NONE' | 'FETCH' | 'READY' | 'ERROR';
 export type RequestType = 'REGIONLET' | 'IMPOSTOR';
 
+export interface MapMetadata {
+    full_regions: Set<string>;
+    lod_regions: Set<string>;
+    tile_regions: Set<string>;
+    loaded: boolean;
+}
+
 export interface RegionletNode {
     rx: number;
     rz: number;
@@ -538,6 +545,7 @@ export class SceneGraph {
     requestManager = new RequestManager();
     maxHighResChunks = 8;
     showBoundaries = false;
+    mapMetadata: MapMetadata | null = null;
     private listeners = new Set<() => void>();
 
     constructor(public context: Context) { }
