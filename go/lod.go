@@ -17,6 +17,8 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 	H := 160
 	D := 256
 
+	air := rs.bm.NameToNid["minecraft:air"]
+
 	blocks := make([]uint16, W*H*D)
 	for x := 0; x < W; x++ {
 		for y := 0; y < H; y++ {
@@ -26,7 +28,7 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 					for oy := 0; oy < 2; oy++ {
 						for oz := 0; oz < 2; oz++ {
 							b, _, _, _ := rs.get(2*x+ox, 2*y+oy+1, 2*z+oz)
-							if b != 0 {
+							if b != 0 && b != air {
 								blocks[x+y*W+z*W*H] = b
 								break voxelScan
 							}
@@ -60,7 +62,6 @@ func computeRegionLODs(rs *regionState, conf *scanRegionConfig) error {
 	westColorImg := image.NewRGBA(image.Rect(0, 0, D, H))
 	westDepthImg := image.NewGray(image.Rect(0, 0, D, H))
 
-	air := rs.bm.NameToNid["minecraft:air"]
 	water := rs.bm.NameToNid["minecraft:water"]
 
 	for u := 0; u < W; u++ {

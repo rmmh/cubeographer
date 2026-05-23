@@ -19,7 +19,7 @@ import (
 var clientJarPath = flag.String("jar", "", "use specific client jar")
 var clientJarVersion = flag.String("version", "latest", "specify client version to download")
 
-var genDebug = flag.String("gendebug", "", "debug specific block name, \"all\", or \"improper\"")
+var genDebug = flag.String("gendebug", "", "debug specific block name, \"all\", or \"improper\", \"force\" to recompute")
 
 func generate(outDir string) {
 	fmt.Println("generating textures")
