@@ -199,44 +199,49 @@ export class Context {
 
         // Create a WebGL 2 texture array
         var texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
-
-        // Pre-allocate WebGL 2 immutable 3D texture storage (with 4 mipmap levels)
-        gl.texStorage3D(
-            gl.TEXTURE_2D_ARRAY,
-            5, // 5 levels (16x16, 8x8, 4x4, 2x2, 1x1)
-            gl.RGBA8,
-            16,
-            16,
-            1024
-        );
 
         // Asynchronously load the image
         var image = new Image();
         image.src = path;
         image.addEventListener('load', function () {
+            const w = image.width;
+            const h = image.height;
+            const tilesPerRow = Math.floor(w / 16);
+            const numSlices = Math.floor((w * h) / 256);
+
+            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+
+            // Pre-allocate WebGL 2 immutable 3D texture storage (with 5 mipmap levels)
+            gl.texStorage3D(
+                gl.TEXTURE_2D_ARRAY,
+                5, // 5 levels (16x16, 8x8, 4x4, 2x2, 1x1)
+                gl.RGBA8,
+                16,
+                16,
+                numSlices
+            );
+
             // Draw the loaded image to a temporary canvas to read its pixel data
             const canvas = document.createElement('canvas');
-            canvas.width = 512;
-            canvas.height = 512;
+            canvas.width = w;
+            canvas.height = h;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(image, 0, 0);
 
-            // Slices are always extracted from the top 512x512 portion
-            const imgData = ctx.getImageData(0, 0, 512, 512);
+            const imgData = ctx.getImageData(0, 0, w, h);
             const srcPixels = imgData.data;
 
-            // Allocate a buffer to hold the sliced 1024 tiles
-            const slicedPixels = new Uint8Array(16 * 16 * 4 * 1024);
+            // Allocate a buffer to hold the sliced tiles
+            const slicedPixels = new Uint8Array(16 * 16 * 4 * numSlices);
 
             // Copy each 16x16 tile into its respective slice/layer
-            for (let slice = 0; slice < 1024; slice++) {
-                const tileX = (slice % 32) * 16;
-                const tileY = Math.floor(slice / 32) * 16;
+            for (let slice = 0; slice < numSlices; slice++) {
+                const tileX = (slice % tilesPerRow) * 16;
+                const tileY = Math.floor(slice / tilesPerRow) * 16;
 
                 for (let y = 0; y < 16; y++) {
-                    const srcRowStart = ((tileY + y) * 512 + tileX) * 4;
-                    const destRowStart = (slice * 16 * 16 + y * 16) * 4;
+                    const srcRowStart = ((tileY + y) * w + tileX) * 4;
+                    const destRowStart = (slice * 256 + y * 16) * 4;
 
                     // Copy 16 pixels (64 bytes)
                     for (let i = 0; i < 64; i++) {
@@ -246,12 +251,11 @@ export class Context {
             }
 
             // Upload the sliced pixel data to WebGL
-            gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
             gl.texSubImage3D(
                 gl.TEXTURE_2D_ARRAY,
                 0,
                 0, 0, 0, // xoffset, yoffset, zoffset
-                16, 16, 1024, // width, height, depth
+                16, 16, numSlices, // width, height, depth
                 gl.RGBA,
                 gl.UNSIGNED_BYTE,
                 slicedPixels

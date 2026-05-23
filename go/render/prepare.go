@@ -375,6 +375,9 @@ func (s *StateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 	for _, vs := range st.Variants {
 		for _, v := range vs {
 			model := s.Models[rp.RemoveDefaultPrefix(v.Model)]
+			if model == nil {
+				continue
+			}
 			if model.Textures != nil {
 				for _, tex := range model.Textures {
 					out = append(out, tex)
@@ -402,6 +405,9 @@ func (s *StateConverter) referencedTextures(st *rp.BlockState) ([]string, bool) 
 	for _, m := range st.Multipart {
 		for _, v := range m.Apply {
 			model := s.Models[rp.RemoveDefaultPrefix(v.Model)]
+			if model == nil {
+				continue
+			}
 			if model.Textures != nil {
 				for _, tex := range model.Textures {
 					out = append(out, tex)
@@ -553,8 +559,18 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 
 func (s *StateConverter) resolveInheritance(model *rp.Model) {
 	parentName := model.Parent
+	visited := make(map[string]bool)
 	for parentName != "" {
-		parent := s.Models[rp.RemoveDefaultPrefix(parentName)]
+		cleanParent := rp.RemoveDefaultPrefix(parentName)
+		if visited[cleanParent] {
+			break
+		}
+		visited[cleanParent] = true
+
+		parent := s.Models[cleanParent]
+		if parent == nil || parent == model {
+			break
+		}
 		if model.AmbientOcclusion == nil {
 			model.AmbientOcclusion = parent.AmbientOcclusion
 		}
@@ -860,13 +876,17 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 	texIDs := []map[string]int{}
 
 	for i := 0; i < int(NumRenderLayers); i++ {
-		atlas := image.NewRGBA(image.Rect(0, 0, 512, 512))
+		w, h := 512, 512
+		if LayerNumber(i) == LayerCuboid {
+			w, h = 1024, 512
+		}
+		atlas := image.NewRGBA(image.Rect(0, 0, w, h))
 
 		draw.Draw(atlas, atlas.Bounds(), &image.Uniform{color.RGBA{255, 255, 255, 64}},
 			image.ZP, draw.Src)
-		for p := 0; p < 512*512/(16*16); p++ {
-			x0 := (p * 16) % 512
-			y0 := (p / 32) * 16
+		for p := 0; p < w*h/(16*16); p++ {
+			x0 := (p * 16) % w
+			y0 := (p / (w / 16)) * 16
 			draw.Draw(atlas, image.Rect(x0, y0, x0+8, y0+8), &image.Uniform{color.RGBA{255, 255, 255, 32}},
 				image.ZP, draw.Src)
 			draw.Draw(atlas, image.Rect(x0+8, y0+8, x0+16, y0+16), &image.Uniform{color.RGBA{255, 255, 255, 32}},
@@ -914,7 +934,10 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				place = len(texIDs[layer])
 				texIDs[layer][name] = place
 			}
-			if place > 512 {
+			w := atlases[layer].Bounds().Dx()
+			h := atlases[layer].Bounds().Dy()
+			maxPlace := (w * h) / (16 * 16)
+			if place > maxPlace {
 				fmt.Println("warn: overrun for", ent.Name, place)
 				return
 			}
@@ -925,8 +948,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				}
 				return
 			}
-			x0 := (place * 16) % 512
-			y0 := (place / 32) * 16
+			x0 := (place * 16) % w
+			y0 := (place / (w / 16)) * 16
 			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
@@ -995,7 +1018,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 						model.Template = []uint32{0, meta}
 					}
 				}
-				if len(model.Textures)+len(texIDs[layer]) >= 512 {
+				maxPlace := (atlases[layer].Bounds().Dx() * atlases[layer].Bounds().Dy()) / (16 * 16)
+				if len(model.Textures)+len(texIDs[layer]) >= maxPlace {
 					fmt.Println("warn: overrun for", ent.Name, "on", LayerNames[model.Layer])
 					break
 				}
@@ -1039,8 +1063,8 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					if existingTid, ok := cuboidCache[key]; ok {
 						tid = existingTid
 					} else {
-						if cuboidCount >= 16383 {
-							// metadata atlas is full (16383 max)! Fallback to LayerCubeFallback
+						if cuboidCount >= 65535 {
+							// metadata atlas is full (65535 max)! Fallback to LayerCubeFallback
 							fmt.Println("cuboid metadata atlas full for", ent.DisplayName)
 							layer = LayerCubeFallback
 							model.Layer = LayerCubeFallback

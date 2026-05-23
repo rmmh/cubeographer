@@ -8,20 +8,22 @@
 export function generateTextureArrayMipmaps(
     gl: WebGL2RenderingContext,
     texture: WebGLTexture,
-    basePixels: Uint8Array, // level 0 pixels, size: 16 * 16 * 4 * 1024
+    basePixels: Uint8Array, // level 0 pixels, size: 16 * 16 * 4 * numSlices
     levels: number
 ) {
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+
+    const numSlices = Math.floor(basePixels.length / 1024);
 
     let lastDim = 16;
     let lastPixels = basePixels;
 
     for (let level = 1; level <= levels; level++) {
         const dim = lastDim >> 1;
-        const slicedPixels = new Uint8Array(dim * dim * 4 * 1024);
+        const slicedPixels = new Uint8Array(dim * dim * 4 * numSlices);
         const ls = lastDim * 4; // last row stride in bytes
 
-        for (let slice = 0; slice < 1024; slice++) {
+        for (let slice = 0; slice < numSlices; slice++) {
             const lastSliceStart = slice * lastDim * lastDim * 4;
             const sliceStart = slice * dim * dim * 4;
 
@@ -96,7 +98,7 @@ export function generateTextureArrayMipmaps(
             gl.TEXTURE_2D_ARRAY,
             level,
             0, 0, 0, // xoffset, yoffset, zoffset
-            dim, dim, 1024, // width, height, depth
+            dim, dim, numSlices, // width, height, depth
             gl.RGBA,
             gl.UNSIGNED_BYTE,
             slicedPixels

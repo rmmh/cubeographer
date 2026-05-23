@@ -150,7 +150,7 @@ void main()	{
     // Extract block atlas offset using floor on minimum bounds
     float tx = floor(min(faceUv.x, faceUv.z));
     float ty = floor(min(faceUv.y, faceUv.w));
-    vTexLayer = int(tx + ty * 32.0);
+    vTexLayer = int(tx + ty * 64.0);
 
     // Map custom UV dimensions locally relative to the layer bounds
     vec2 uvStart = faceUv.xy - vec2(tx, ty);

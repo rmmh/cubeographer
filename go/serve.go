@@ -177,6 +177,7 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool) {
 	r.HandleFunc("/{world}/", s.indexHandler)
 	r.HandleFunc("/{world}/map/{path:.*}", s.mapHandler)
 	r.HandleFunc("/{world}/index.js", s.worldRedirHandler)
+	r.HandleFunc("/{world}/index.css", s.worldRedirHandler)
 	r.HandleFunc("/{world}/textures/{texture}", s.worldRedirHandler)
 
 	srv := &http.Server{

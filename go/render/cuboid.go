@@ -94,8 +94,8 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 				if f < len(entry.TexIDs) {
 					texId = entry.TexIDs[f]
 				}
-				tileX := float32(texId % 32)
-				tileY := float32(texId / 32)
+				tileX := float32(texId % 64)
+				tileY := float32(texId / 64)
 
 				uMin := entry.UVs[f][0]/16.0 + tileX
 				vMin := entry.UVs[f][1]/16.0 + tileY
@@ -127,8 +127,8 @@ func initCuboidMetadataDefaults(buf []uint32) {
 		writeMetadataValue(buf, i, 2, uint32(ty)|(uint32(tz)<<16))
 		writeMetadataValue(buf, i, 3, 0)
 
-		tileX := float32(i % 32)
-		tileY := float32(i / 32)
+		tileX := float32(i % 64)
+		tileY := float32(i / 64)
 
 		for f := 0; f < 6; f++ {
 			uMin := tileX

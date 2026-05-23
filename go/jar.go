@@ -46,6 +46,13 @@ func generate(outDir string) {
 		log.Fatal(err)
 	}
 
+	for _, rpPath := range rp.ResourcePacks {
+		fmt.Printf("applying resource pack: %s\n", rpPath)
+		if err := pack.OverlayPack(rpPath); err != nil {
+			log.Fatalf("failed to apply resource pack %s: %v", rpPath, err)
+		}
+	}
+
 	meta, atlases, cuboidMetadata := render.Prepare(pack, *genDebug)
 
 	os.MkdirAll(path.Join(outDir, "textures"), 0755)
