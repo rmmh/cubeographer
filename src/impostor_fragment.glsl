@@ -165,15 +165,37 @@ void main() {
 
             if (t_exit_block > t_current) {
                 t_current = t_exit_block;
+                vec3 p_exit = rayStart + (t_current - t_enter) * rayDir;
+
+                ivec3 ip_exit = clamp(ivec3(
+                    int(floor(p_exit.x * 512.0 + float(stepVec.x) * 1e-5)),
+                    int(floor(p_exit.y * 320.0 + float(stepVec.y) * 1e-5)),
+                    int(floor(p_exit.z * 512.0 + float(stepVec.z) * 1e-5))
+                ), ivec3(0), ivec3(511, 319, 511));
+
                 if (t_boundary.x <= t_boundary.y && t_boundary.x <= t_boundary.z) {
                     hitFace = 2;
+                    ip = ivec3(
+                        stepVec.x >= 0 ? (ip_coarse.x + 1) * S : ip_coarse.x * S - 1,
+                        ip_exit.y,
+                        ip_exit.z
+                    );
                 } else if (t_boundary.y <= t_boundary.x && t_boundary.y <= t_boundary.z) {
                     hitFace = 0;
+                    ip = ivec3(
+                        ip_exit.x,
+                        stepVec.y >= 0 ? (ip_coarse.y + 1) * S : ip_coarse.y * S - 1,
+                        ip_exit.z
+                    );
                 } else {
                     hitFace = 1;
+                    ip = ivec3(
+                        ip_exit.x,
+                        ip_exit.y,
+                        stepVec.z >= 0 ? (ip_coarse.z + 1) * S : ip_coarse.z * S - 1
+                    );
                 }
-                vec3 p_next = rayOrigin + (t_current + 1e-6) * rayDir;
-                ip = clamp(ivec3(floor(p_next * vec3(512.0, 320.0, 512.0))), ivec3(0), ivec3(511, 319, 511));
+                ip = clamp(ip, ivec3(0), ivec3(511, 319, 511));
 
                 vec3 nextVoxelBoundary = vec3(
                     rayDir.x >= 0.0 ? float(ip.x + 1) : float(ip.x),
