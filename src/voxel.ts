@@ -114,7 +114,11 @@ export function createOrbitTargetFinder(
         if (!invPVM) return null;
 
         // Call the on-demand FBO render pass to fill fboDepth
+        const pixelX = Math.floor(x);
+        const pixelY = Math.floor(context.canvas.height - y);
+        context.scissorBox = { x: pixelX, y: pixelY, width: 1, height: 1 };
         renderSceneToFBO();
+        context.scissorBox = null;
 
         // Read the depth value at this pixel from our FBO depth texture
         const depth = readDepthAtPixel(context, ndcX, ndcY);

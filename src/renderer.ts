@@ -146,6 +146,7 @@ export class Context {
         return this.fboInfo ? (this.fboInfo.attachments[1] as WebGLTexture) : null;
     }
     renderToFBO: boolean = false
+    scissorBox: { x: number; y: number; width: number; height: number } | null = null
     boundaryMaterial?: Material
     boundaryGeometry?: Geometry
 
@@ -734,6 +735,17 @@ export function render(
         twgl.bindFramebufferInfo(gl, null);
     }
 
+    const useScissor = context.renderToFBO && context.scissorBox;
+    if (useScissor) {
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(
+            context.scissorBox.x,
+            context.scissorBox.y,
+            context.scissorBox.width,
+            context.scissorBox.height
+        );
+    }
+
     gl.clearColor(context.clearColor[0], context.clearColor[1],
         context.clearColor[2], context.clearColor[3]);
 
@@ -947,6 +959,10 @@ export function render(
     // 6. Draw Boundary Boxes (Wireframes)
     if (sceneGraph.showBoundaries) {
         renderBoundaries(gl, context, camera, sceneGraph, cube, renderedChunks, cullResults, projectionMatrix);
+    }
+
+    if (useScissor) {
+        gl.disable(gl.SCISSOR_TEST);
     }
 
     if (context.renderToFBO) {
