@@ -89,16 +89,10 @@ export class Chunk {
     minY: number
     maxY: number
     layers: { [name: string]: twgl.AttribInfo }
-    occluded: boolean
-    query: WebGLQuery
-    queryInProgress: boolean
     voxelBitset?: any
 
     constructor(public gl: WebGL2RenderingContext) {
         this.position = vec3.create();
-        this.query = null;
-        this.queryInProgress = false;
-        this.occluded = false;
         this.minY = 0
         this.maxY = 255
         this.layers = {};
@@ -737,7 +731,7 @@ export class SceneGraph {
                     // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
                     for (const rlet of region.regionlets) {
                         if (rlet.status !== 'READY' && rlet.status !== 'STREAM') {
-                            if (targetSet.has(rlet) && !rlet.chunk.occluded) {
+                            if (targetSet.has(rlet)) {
                                 missingRegionlets.push(rlet);
                             }
                         }
@@ -888,17 +882,6 @@ export function render(
     // Compute the projection matrix
     var projectionMatrix = camera.getProjection();
 
-    // 1. Process/update occlusion query results from previous frames
-    for (const region of sceneGraph.regions.values()) {
-        for (const rlet of region.regionlets) {
-            const chunk = rlet.chunk;
-            if (chunk.query && chunk.queryInProgress && gl.getQueryParameter(chunk.query, gl.QUERY_RESULT_AVAILABLE)) {
-                chunk.occluded = !gl.getQueryParameter(chunk.query, gl.QUERY_RESULT);
-                chunk.queryInProgress = false;
-            }
-        }
-    }
-
     // 2. Perform frustum and visibility culling on the Scene Graph
     let culledChunks = cullResults.chunks;
 
@@ -919,8 +902,7 @@ export function render(
         if (mat.program != activeProgram) {
             activeProgram = mat.program;
             gl.useProgram(mat.program);
-            if (mat.uniformSetters.projectionMatrix)
-                mat.uniformSetters.projectionMatrix(projectionMatrix);
+            mat.uniformSetters.projectionMatrix(projectionMatrix);
             if (mat.uniformSetters.cameraPosition)
                 mat.uniformSetters.cameraPosition(camera.position);
             if (mat.uniformSetters.uFogScale)
@@ -929,53 +911,6 @@ export function render(
                 mat.attribSetters[key](value);
             }
         }
-    }
-
-    // 3. Occlusion query pass (performed BEFORE rendering standard layers to avoid bind swapping)
-    const queryChunk = (chunk: Chunk, minY: number, maxY: number) => {
-        if (chunk.query === null) {
-            chunk.query = gl.createQuery();
-        }
-        if (!chunk.queryInProgress) {
-            bind(cube.material, cube.geometry);
-            cube.material.uniformSetters.modelViewMatrix(camera.getView());
-            cube.material.uniformSetters.scale(vec3.fromValues(256, 1 + maxY - minY, 256));
-
-            gl.enable(gl.CULL_FACE);
-            gl.colorMask(false, false, false, false);
-            gl.depthMask(false);
-
-            gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, chunk.query);
-            const offset = vec3.fromValues(0, minY, 0);
-            vec3.add(offset, offset, chunk.position);
-            cube.material.uniformSetters.offset(offset);
-            gl.drawArrays(gl.TRIANGLES, 0, 12 * 3);
-            gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
-
-            gl.colorMask(true, true, true, true);
-            gl.depthMask(true);
-            gl.disable(gl.CULL_FACE);
-
-            chunk.queryInProgress = true;
-        }
-    };
-
-    // Trigger occlusion queries for far loaded chunks
-    for (let i = 5; i < renderedChunks.length; i++) {
-        queryChunk(renderedChunks[i], renderedChunks[i].minY, renderedChunks[i].maxY);
-    }
-
-    // Trigger occlusion queries for the closest missing chunks in frustum (culling missing things)
-    const sortedMissing = cullResults.missingRegionlets.slice();
-    sortedMissing.sort((a, b) => {
-        const apos = vec3.fromValues(128, 128, 128);
-        const bpos = vec3.fromValues(128, 128, 128);
-        vec3.add(apos, apos, a.chunk.position);
-        vec3.add(bpos, bpos, b.chunk.position);
-        return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
-    });
-    for (const rlet of sortedMissing.slice(0, sceneGraph.maxHighResChunks)) {
-        queryChunk(rlet.chunk, 0, 255);
     }
 
     // 4. Render main geometry layers
@@ -1011,10 +946,6 @@ export function render(
             chunkNum++;
             const chunkLayer = chunk.layers[layer.name];
             if (!chunkLayer || chunkLayer.size == 0) {
-                continue;
-            }
-
-            if (chunkNum >= 5 && chunk.occluded) {
                 continue;
             }
 

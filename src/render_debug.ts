@@ -121,13 +121,7 @@ export function renderBoundaries(
 
     // A. Regionlet (High-Res Chunk) boundaries
     const chunkColor = vec3.fromValues(0.0, 1.0, 0.8); // Vibrant cyan-green
-    let chunkNum = 0;
     for (const chunk of renderedChunks) {
-        chunkNum++;
-        if (chunkNum >= 5 && chunk.occluded) {
-            continue;
-        }
-
         const minY = chunk.minY;
         const maxY = chunk.maxY;
         const sizeY = 1.0 + maxY - minY;

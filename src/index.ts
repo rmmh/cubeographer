@@ -19,7 +19,7 @@ import { Gunzip, gunzipSync } from 'fflate';
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 import { createOrbitTargetFinder } from './voxel';
-import { fetchRegionLOD, makeLOD1Geometry } from './lod';
+import { fetchRegionLOD, makeLOD1Geometry as makeImpostorGeometry } from './lod';
 import { setupGUI } from './gui';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
@@ -166,7 +166,7 @@ controls.maxDistance = space * 20;
 
 controls.getOrbitTarget = createOrbitTargetFinder(context, camera, sceneGraph, () => {
     context.renderToFBO = true;
-    renderer.render(context, camera, sceneGraph, layers, cube, lod1Geometry, lod1Material, lod1Geometry, lod2Material);
+    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material);
     context.renderToFBO = false;
 });
 
@@ -631,7 +631,7 @@ function renderFrame() {
     mat4.copy(lastView, camera.view);
 
 
-    const hasPendingLOD2Updates = renderer.render(context, camera, sceneGraph, layers, cube, lod1Geometry, lod1Material, lod1Geometry, lod2Material);
+    const hasPendingLOD2Updates = renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material);
 
     // Dynamic loading pass: trigger loads for any missing visible elements
     updateDynamicLoading();
@@ -706,7 +706,7 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     }
 }
 
-const lod1Geometry = makeLOD1Geometry(context.gl);
+const impostorGeometry = makeImpostorGeometry(context.gl);
 const lod1Material = new renderer.Material(context.gl, lod1VertexShader, lod1FragmentShader);
 const lod2Material = new renderer.Material(context.gl, lod2VertexShader, lod2FragmentShader);
 
