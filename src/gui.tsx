@@ -33,12 +33,14 @@ export function setupGUI(
 }
 
 function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
-    const [collapsed, setCollapsed] = useState<boolean>(false);
+    const [collapsed, setCollapsed] = useState<boolean>(true);
     const [maxHighResChunks, setMaxHighResChunks] = useState<number>(sceneGraph.maxHighResChunks);
     const [inspectorMode, setInspectorMode] = useState<boolean>(false);
     const [showBoundaries, setShowBoundaries] = useState<boolean>(sceneGraph.showBoundaries);
     const [activeRegion, setActiveRegion] = useState<{ rx: number; rz: number } | null>(null);
     const [updateTick, setUpdateTick] = useState<number>(0);
+    const [lod2StartDistance, setLod2StartDistance] = useState<number>(sceneGraph.lod2StartDistance);
+    const [lod2UpdateBudget, setLod2UpdateBudget] = useState<number>(sceneGraph.lod2UpdateBudget);
 
     // Subscribe to SceneGraph updates to trigger GUI re-renders on streaming/loading changes
     useEffect(() => {
@@ -126,6 +128,22 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         render();
     };
 
+
+
+    const handleLod2StartDistanceChange = (e: any) => {
+        const val = parseFloat(e.target.value);
+        setLod2StartDistance(val);
+        sceneGraph.lod2StartDistance = val;
+        render();
+    };
+
+    const handleLod2UpdateBudgetChange = (e: any) => {
+        const val = parseInt(e.target.value, 10);
+        setLod2UpdateBudget(val);
+        sceneGraph.lod2UpdateBudget = val;
+        render();
+    };
+
     const handleCloseInspector = () => {
         setActiveRegion(null);
         setInspectorMode(false);
@@ -160,18 +178,49 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                     </button>
                 </div>
                 <div className="debug-menu-content">
+                    {sceneGraph.mapMetadata?.full_regions?.size > 0 && (
+                        <div className="debug-control-group">
+                            <div className="debug-label-row">
+                                <span>Max LOD0</span>
+                                <span className="debug-badge">{maxHighResChunks}</span>
+                            </div>
+                            <input
+                                type="range"
+                                className="premium-slider"
+                                min="0"
+                                max="64"
+                                value={maxHighResChunks}
+                                onInput={handleSliderChange}
+                            />
+                        </div>
+                    )}
                     <div className="debug-control-group">
                         <div className="debug-label-row">
-                            <span>Max High-Res Regionlets</span>
-                            <span className="debug-badge">{maxHighResChunks}</span>
+                            <span>LOD2 Start Distance</span>
+                            <span className="debug-badge">{lod2StartDistance.toFixed(0)}m</span>
+                        </div>
+                        <input
+                            type="range"
+                            className="premium-slider"
+                            min="512"
+                            max="8192"
+                            step="256"
+                            value={lod2StartDistance}
+                            onInput={handleLod2StartDistanceChange}
+                        />
+                    </div>
+                    <div className="debug-control-group">
+                        <div className="debug-label-row">
+                            <span>LOD2 Update Budget</span>
+                            <span className="debug-badge">{lod2UpdateBudget} / frame</span>
                         </div>
                         <input
                             type="range"
                             className="premium-slider"
                             min="0"
-                            max="64"
-                            value={maxHighResChunks}
-                            onInput={handleSliderChange}
+                            max="10"
+                            value={lod2UpdateBudget}
+                            onInput={handleLod2UpdateBudgetChange}
                         />
                     </div>
                     <div className="switch-container">
@@ -313,6 +362,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
     const [error, setError] = useState<boolean>(false);
     const [canvases, setCanvases] = useState<{ [type: number]: HTMLCanvasElement } | null>(null);
     const [zoomedImage, setZoomedImage] = useState<{ canvas: HTMLCanvasElement; title: string; width: number; height: number } | null>(null);
+    const [lod2Canvases, setLod2Canvases] = useState<{ color: HTMLCanvasElement } | null>(null);
 
     // Reset zoom state when region changes
     useEffect(() => {
@@ -324,6 +374,29 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
         if (!activeRegion) return;
 
         const { rx, rz } = activeRegion;
+
+        const G = sceneGraph.lod2GroupSize;
+        const groupX = Math.floor(rx / G);
+        const groupZ = Math.floor(rz / G);
+        const group = sceneGraph.lod2Manager.groups.get(`${groupX},${groupZ}`);
+
+        if (group && group.hasTexture && group.fbo) {
+            try {
+                const gl = sceneGraph.context.gl;
+                const colorCanvas = getWebGLTextureAsCanvas(gl, group.fbo.attachments[0], group.fbo.width, group.fbo.height, false);
+                if (colorCanvas) {
+                    setLod2Canvases({ color: colorCanvas });
+                } else {
+                    setLod2Canvases(null);
+                }
+            } catch (err) {
+                console.error("Failed to read WebGL LOD2 textures", err);
+                setLod2Canvases(null);
+            }
+        } else {
+            setLod2Canvases(null);
+        }
+
         const region = sceneGraph.regions.get(`${rx},${rz}`);
 
         if (!region || region.impostor.status !== 'READY' || !region.impostor.textures) {
@@ -399,6 +472,13 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
     const region = activeRegion ? sceneGraph.regions.get(`${rx},${rz}`) : null;
     const impostorStatus = region ? region.impostor.status : 'NONE';
 
+    const G_current = sceneGraph.lod2GroupSize;
+    const groupX_current = Math.floor(rx / G_current);
+    const groupZ_current = Math.floor(rz / G_current);
+    const lod2Group = sceneGraph.lod2Manager.groups.get(`${groupX_current},${groupZ_current}`);
+    const lod2GroupHasTex = lod2Group ? lod2Group.hasTexture : false;
+    const lod2GroupDev = lod2Group ? lod2Group.angularDeviation : 0;
+
     // Render a region view card (Color and Depth side-by-side)
     const renderViewCard = (name: string, colorCanvas: HTMLCanvasElement | undefined, depthCanvas: HTMLCanvasElement | undefined, isTop: boolean = false) => {
         const height = isTop ? '256px' : '160px';
@@ -425,7 +505,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                             <div className="no-img-text">N/A</div>
                         </div>
                     )}
-                    {depthCanvas ? (
+                    {depthCanvas &&
                         <div className="side-img-box">
                             <div className="img-type-label">Depth</div>
                             <CanvasRenderer
@@ -434,12 +514,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                 style={{ width: '256px', height: height, imageRendering: 'pixelated', filter: 'brightness(1.25)', display: 'block' }}
                             />
                         </div>
-                    ) : (
-                        <div className="side-img-box empty">
-                            <div className="img-type-label">Depth</div>
-                            <div className="no-img-text">N/A</div>
-                        </div>
-                    )}
+                    }
                 </div>
             </div>
         );
@@ -551,6 +626,28 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                 {renderViewCard('West', canvases[7], canvases[8])}
                             </div>
                         )}
+
+                        {activeRegion && (
+                            <>
+                                <div className="inspector-section-title">LOD2 (Parallax Occlusion Mapping)
+                                    <span className={`regionlet-status status-${lod2GroupHasTex ? 'ready' : 'none'}`}>
+                                        {lod2GroupHasTex ? 'READY' : 'WAITING'}
+                                    </span>
+                                </div>
+                                <div className="region-meta-card">
+                                    <div className="meta-coord">Group {groupX_current}, {groupZ_current} ({G_current}x{G_current})</div>
+                                    <div className="meta-world">Deviation: {lod2GroupDev !== undefined ? `${lod2GroupDev.toFixed(1)}°` : 'N/A'}</div>
+                                    <div className="meta-world">Start Distance: {sceneGraph.lod2StartDistance.toFixed(0)}m</div>
+                                </div>
+
+                                {lod2Canvases && (
+                                    <div className="sides-gallery" style={{ marginTop: '8px' }}>
+                                        {renderViewCard('LOD2 Group', lod2Canvases.color, undefined, true)}
+                                    </div>
+                                )}
+                            </>
+                        )}
+
                     </div>
                 )}
             </div>

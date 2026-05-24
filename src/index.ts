@@ -10,14 +10,16 @@ import { mat4, vec3, vec4 } from 'gl-matrix';
 
 const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
-const impostorVertexShader = require('./impostor_vertex.glsl');
-const impostorFragmentShader = require('./impostor_fragment.glsl');
+const lod1VertexShader = require('./lod1_vertex.glsl');
+const lod1FragmentShader = require('./lod1_fragment.glsl');
+const lod2VertexShader = require('./lod2_vertex.glsl');
+const lod2FragmentShader = require('./lod2_fragment.glsl');
 import { Gunzip, gunzipSync } from 'fflate';
 
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 import { createOrbitTargetFinder } from './voxel';
-import { fetchRegionLOD, makeImpostorGeometry } from './lod';
+import { fetchRegionLOD, makeLOD1Geometry } from './lod';
 import { setupGUI } from './gui';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
@@ -26,7 +28,7 @@ const context = new renderer.Context(document.querySelector('#canvas'));
 context.setSize(window.innerWidth, window.innerHeight);
 
 const aspect = window.innerWidth / window.innerHeight;
-const camera = new renderer.PerspectiveCamera(75, aspect, 0.1, 3000);
+const camera = new renderer.PerspectiveCamera(75, aspect, 0.1, 30000);
 
 vec3.set(camera.position, 100, 40, 100);  // face northish
 vec3.set(camera.target, 0, 0, 0);
@@ -149,6 +151,7 @@ function cameraMove() {
         }, 100);
     }
     render();
+    sceneGraph.notify();
 }
 
 var x: boolean;
@@ -159,11 +162,11 @@ let controls = new OrbitControls(camera, context.canvas);
 controls.addEventListener('change', cameraMove); // call this only in static scenes (i.e., if there is no animation loop)
 controls.screenSpacePanning = true;
 controls.minDistance = 1;
-controls.maxDistance = space * 2;
+controls.maxDistance = space * 20;
 
 controls.getOrbitTarget = createOrbitTargetFinder(context, camera, sceneGraph, () => {
     context.renderToFBO = true;
-    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, impostorMaterial);
+    renderer.render(context, camera, sceneGraph, layers, cube, lod1Geometry, lod1Material, lod1Geometry, lod2Material);
     context.renderToFBO = false;
 });
 
@@ -628,10 +631,14 @@ function renderFrame() {
     mat4.copy(lastView, camera.view);
 
 
-    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, impostorMaterial);
+    const hasPendingLOD2Updates = renderer.render(context, camera, sceneGraph, layers, cube, lod1Geometry, lod1Material, lod1Geometry, lod2Material);
 
     // Dynamic loading pass: trigger loads for any missing visible elements
     updateDynamicLoading();
+
+    if (hasPendingLOD2Updates) {
+        render();
+    }
 
     stats.end();
 };
@@ -640,7 +647,7 @@ function updateDynamicLoading() {
     if (!sceneGraph.mapMetadata) {
         return; // wait for metadata to load
     }
-    const cullResults = sceneGraph.cull(camera);
+    const cullResults = sceneGraph.lastCullResults || sceneGraph.cull(camera);
 
     // Trigger regionlet fetches (network queue handles limits)
     for (const rlet of cullResults.missingRegionlets) {
@@ -651,6 +658,9 @@ function updateDynamicLoading() {
     for (const lod of cullResults.missingImpostors) {
         fetchRegionLOD(lod.rx, lod.rz, sceneGraph, camera.position, render);
     }
+
+    // Clear the cached culling results at the end of the frame
+    sceneGraph.lastCullResults = null;
 }
 
 render();
@@ -696,8 +706,9 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
     }
 }
 
-const impostorGeometry = makeImpostorGeometry(context.gl);
-const impostorMaterial = new renderer.Material(context.gl, impostorVertexShader, impostorFragmentShader);
+const lod1Geometry = makeLOD1Geometry(context.gl);
+const lod1Material = new renderer.Material(context.gl, lod1VertexShader, lod1FragmentShader);
+const lod2Material = new renderer.Material(context.gl, lod2VertexShader, lod2FragmentShader);
 
 function fetchRegion(x: number, z: number, off: number) {
     const key = `${x},${z},${off}`;

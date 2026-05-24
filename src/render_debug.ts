@@ -1,5 +1,5 @@
 import { mat4, vec3 } from 'gl-matrix';
-import { Context, PerspectiveCamera, SceneGraph, Mesh, Chunk, Geometry } from './renderer';
+import { Context, PerspectiveCamera, SceneGraph, Mesh, Chunk, Geometry, CullResults } from './renderer';
 
 export function renderBoundaries(
     gl: WebGL2RenderingContext,
@@ -8,7 +8,7 @@ export function renderBoundaries(
     sceneGraph: SceneGraph,
     cube: Mesh,
     renderedChunks: Chunk[],
-    cullResults: { impostors: any[] },
+    cullResults: CullResults,
     projectionMatrix: mat4
 ) {
     if (!context.boundaryGeometry) {
@@ -162,6 +162,27 @@ export function renderBoundaries(
             offset: regionOffset,
             distSq
         });
+    }
+
+    // C. LOD2 boundaries
+    const lod2Color = vec3.fromValues(1.0, 0.8, 0.0); // Vibrant gold/yellow
+    if (cullResults.lod2Groups) {
+        for (const group of cullResults.lod2Groups) {
+            if (!group.hasTexture || !group.fbo) continue;
+
+            const size = group.groupSize;
+            const groupScale = vec3.fromValues(size * 512.0, 320.0, size * 512.0);
+            const groupOffset = vec3.fromValues(group.groupX * size * 512.0, 0.0, group.groupZ * size * 512.0);
+            const center = vec3.fromValues(groupOffset[0] + (size * 512.0) * 0.5, 160.0, groupOffset[2] + (size * 512.0) * 0.5);
+            const distSq = vec3.sqrDist(camera.position, center);
+
+            items.push({
+                color: lod2Color,
+                scale: groupScale,
+                offset: groupOffset,
+                distSq
+            });
+        }
     }
 
     // Sort items back-to-front (farthest first)

@@ -4,6 +4,7 @@ import * as twgl from 'twgl.js';
 import { generateTextureArrayMipmaps } from "./downscale";
 import { safeLookAt } from "./camera";
 import { renderBoundaries } from './render_debug';
+import { LOD2Group, LOD2GroupManager, renderGroupToFBO } from './lod';
 
 export class Material {
     gl: WebGL2RenderingContext;
@@ -540,15 +541,31 @@ export class RequestManager {
     }
 }
 
+export interface CullResults {
+    chunks: Chunk[];
+    impostors: ImpostorNode[];
+    missingRegionlets: RegionletNode[];
+    missingImpostors: ImpostorNode[];
+    lod2Groups: LOD2Group[];
+}
+
 export class SceneGraph {
     regions = new Map<string, RegionNode>();
     requestManager = new RequestManager();
     maxHighResChunks = 8;
     showBoundaries = false;
     mapMetadata: MapMetadata | null = null;
+    lod2GroupSize = 2;
+    lod2DistortionThreshold = 15.0;
+    lod2UpdateBudget = 4;
+    lod2StartDistance = 1536.0;
+    lod2Manager: LOD2GroupManager;
+    lastCullResults: CullResults | null = null;
     private listeners = new Set<() => void>();
 
-    constructor(public context: Context) { }
+    constructor(public context: Context) {
+        this.lod2Manager = new LOD2GroupManager(this);
+    }
 
     subscribe(listener: () => void): () => void {
         this.listeners.add(listener);
@@ -618,23 +635,29 @@ export class SceneGraph {
         if (maxHeight !== undefined) {
             region.impostor.maxHeight = maxHeight;
         }
+        if (status === 'READY') {
+            const G = this.lod2GroupSize;
+            const groupX = Math.floor(rx / G);
+            const groupZ = Math.floor(rz / G);
+            const group = this.lod2Manager.groups.get(`${groupX},${groupZ}`);
+            if (group) {
+                group.stale = true;
+            }
+        }
         this.notify();
     }
 
-    cull(camera: PerspectiveCamera): {
-        chunks: Chunk[];
-        impostors: ImpostorNode[];
-        missingRegionlets: RegionletNode[];
-        missingImpostors: ImpostorNode[];
-    } {
+    cull(camera: PerspectiveCamera): CullResults {
         const frustum = new Frustum(camera);
         const chunksToRender: Chunk[] = [];
         const impostorsToRender: ImpostorNode[] = [];
         const missingRegionlets: RegionletNode[] = [];
         const missingImpostors: ImpostorNode[] = [];
+        const lod2GroupsToRender = new Set<LOD2Group>();
 
         // 1. Gather all visible regionlets across all regions in the frustum (loaded or not)
         const allVisibleRegionlets: { rlet: RegionletNode; distSq: number }[] = [];
+        const visibleRegionletSet = new Set<RegionletNode>();
 
         for (const region of this.regions.values()) {
             if (!frustum.intersectsRegion(region.rx, region.rz)) {
@@ -647,6 +670,7 @@ export class SceneGraph {
                     vec3.add(rletCenter, rletCenter, rlet.chunk.position);
                     const distSq = vec3.sqrDist(camera.position, rletCenter);
                     allVisibleRegionlets.push({ rlet, distSq });
+                    visibleRegionletSet.add(rlet);
                 }
             }
         }
@@ -673,7 +697,7 @@ export class SceneGraph {
 
             // Find all regionlets in this region that intersect the frustum
             const regionVisibleRlets = region.regionlets.filter(rlet =>
-                allVisibleRegionlets.some(x => x.rlet === rlet)
+                visibleRegionletSet.has(rlet)
             );
 
             if (regionVisibleRlets.length === 0) {
@@ -689,40 +713,63 @@ export class SceneGraph {
                     chunksToRender.push(rlet.chunk);
                 }
             } else {
-                // Not fully rendered as chunks (some visible regionlets are missing or sliced out):
-                // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
-                for (const rlet of region.regionlets) {
-                    if (rlet.status !== 'READY' && rlet.status !== 'STREAM') {
-                        if (targetSet.has(rlet) && !rlet.chunk.occluded) {
-                            missingRegionlets.push(rlet);
+                // Check if this region belongs to a distant LOD2 group
+                const G = this.lod2GroupSize;
+                const groupX = Math.floor(region.rx / G);
+                const groupZ = Math.floor(region.rz / G);
+
+                const groupMinX = groupX * G * 512;
+                const groupMaxX = (groupX + 1) * G * 512;
+                const groupMinZ = groupZ * G * 512;
+                const groupMaxZ = (groupZ + 1) * G * 512;
+
+                const groupCenterX = (groupMinX + groupMaxX) * 0.5;
+                const groupCenterZ = (groupMinZ + groupMaxZ) * 0.5;
+
+                const distToGroup = vec3.distance(camera.position, vec3.fromValues(groupCenterX, 160, groupCenterZ));
+
+                if (distToGroup >= this.lod2StartDistance) {
+                    // Render as LOD2!
+                    const group = this.lod2Manager.getOrCreateGroup(groupX, groupZ, G);
+                    lod2GroupsToRender.add(group);
+                } else {
+                    // Not fully rendered as chunks (some visible regionlets are missing or sliced out):
+                    // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
+                    for (const rlet of region.regionlets) {
+                        if (rlet.status !== 'READY' && rlet.status !== 'STREAM') {
+                            if (targetSet.has(rlet) && !rlet.chunk.occluded) {
+                                missingRegionlets.push(rlet);
+                            }
                         }
                     }
-                }
 
-                // B) Render the region's LOD impostor if loaded
-                if (region.impostor.status === 'READY' && region.impostor.textures) {
-                    impostorsToRender.push(region.impostor);
-                } else {
-                    // C) Fetch impostor if missing
-                    if (region.impostor.status === 'NONE') {
-                        missingImpostors.push(region.impostor);
-                    }
-                    // D) Render any loaded regionlets that are in our renderedChunkSet as fallback
-                    for (const rlet of regionVisibleRlets) {
-                        if (renderedChunkSet.has(rlet)) {
-                            chunksToRender.push(rlet.chunk);
+                    // B) Render the region's LOD impostor if loaded
+                    if (region.impostor.status === 'READY' && region.impostor.textures) {
+                        impostorsToRender.push(region.impostor);
+                    } else {
+                        // C) Fetch impostor if missing
+                        if (region.impostor.status === 'NONE') {
+                            missingImpostors.push(region.impostor);
+                        }
+                        // D) Render any loaded regionlets that are in our renderedChunkSet as fallback
+                        for (const rlet of regionVisibleRlets) {
+                            if (renderedChunkSet.has(rlet)) {
+                                chunksToRender.push(rlet.chunk);
+                            }
                         }
                     }
                 }
             }
         }
 
-        return {
+        this.lastCullResults = {
             chunks: chunksToRender,
             impostors: impostorsToRender,
             missingRegionlets,
-            missingImpostors
+            missingImpostors,
+            lod2Groups: Array.from(lod2GroupsToRender)
         };
+        return this.lastCullResults;
     }
 }
 
@@ -733,12 +780,76 @@ export function render(
     layers: InstancedLayer[],
     cube: Mesh,
     impostorGeometry?: Geometry,
-    impostorMaterial?: Material
-) {
+    impostorMaterial?: Material,
+    lod2Geometry?: Geometry,
+    lod2Material?: Material
+): boolean {
     const gl = context.gl;
 
     if (!(gl.canvas instanceof HTMLCanvasElement))
-        return;
+        return false;
+
+    // Perform frustum and visibility culling early
+    const cullResults = sceneGraph.cull(camera);
+
+    // Calculate height-based fog scale to fade out fog at high altitudes
+    const height = camera.position[1];
+    const minFogHeight = 400.0;
+    const maxFogHeight = 4000.0;
+    const fogScale = Math.max(0.0, Math.min(1.0, 1.0 - (height - minFogHeight) / (maxFogHeight - minFogHeight)));
+
+    // Update LOD2 group textures under the per-frame budget
+    if (impostorGeometry && impostorMaterial) {
+        const candidates: { group: LOD2Group; deviation: number }[] = [];
+
+        for (const group of cullResults.lod2Groups) {
+            let deviation = 0;
+            if (!group.hasTexture || group.stale) {
+                deviation = Infinity;
+                group.angularDeviation = 999; // Represent infinite deviation for display
+            } else {
+                const dirInitial = vec3.create();
+                vec3.sub(dirInitial, group.initialCameraPos, group.center);
+                vec3.normalize(dirInitial, dirInitial);
+
+                const dirCurrent = vec3.create();
+                vec3.sub(dirCurrent, camera.position, group.center);
+                vec3.normalize(dirCurrent, dirCurrent);
+
+                const cosTheta = vec3.dot(dirInitial, dirCurrent);
+                const angleDev = Math.acos(Math.max(-1.0, Math.min(1.0, cosTheta))) * 180 / Math.PI;
+
+                group.angularDeviation = angleDev;
+                deviation = angleDev;
+            }
+
+            if (deviation > 0) {
+                candidates.push({ group, deviation });
+            }
+        }
+
+        // Sort descending by deviation (highest deviation first)
+        // If deviations are equal, sort by distance to camera (closest first)
+        candidates.sort((a, b) => {
+            if (b.deviation !== a.deviation) {
+                return b.deviation - a.deviation;
+            }
+            const distSqA = vec3.sqrDist(camera.position, a.group.center);
+            const distSqB = vec3.sqrDist(camera.position, b.group.center);
+            return distSqA - distSqB;
+        });
+
+        const updateSlice = candidates.slice(0, sceneGraph.lod2UpdateBudget);
+        for (const item of updateSlice) {
+            const group = item.group;
+            renderGroupToFBO(gl, group, sceneGraph, camera, impostorGeometry, impostorMaterial);
+
+            vec3.copy(group.initialCameraPos, camera.position);
+            group.hasTexture = true;
+            group.angularDeviation = 0;
+            group.stale = false;
+        }
+    }
 
     if (context.renderToFBO) {
         context.updateFBO(gl.canvas.width, gl.canvas.height);
@@ -746,6 +857,7 @@ export function render(
     } else {
         twgl.bindFramebufferInfo(gl, null);
     }
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
     const useScissor = context.renderToFBO && context.scissorBox;
     if (useScissor) {
@@ -788,7 +900,6 @@ export function render(
     }
 
     // 2. Perform frustum and visibility culling on the Scene Graph
-    const cullResults = sceneGraph.cull(camera);
     let culledChunks = cullResults.chunks;
 
     // Sort renderable chunks by distance to camera
@@ -812,6 +923,8 @@ export function render(
                 mat.uniformSetters.projectionMatrix(projectionMatrix);
             if (mat.uniformSetters.cameraPosition)
                 mat.uniformSetters.cameraPosition(camera.position);
+            if (mat.uniformSetters.uFogScale)
+                mat.uniformSetters.uFogScale(fogScale);
             for (const [key, value] of Object.entries(geo.attributes)) {
                 mat.attribSetters[key](value);
             }
@@ -906,12 +1019,12 @@ export function render(
             }
 
             mat.attribSetters.attr(chunkLayer);
-            if (mat.uniformSetters.offset)
+            if (mat.uniformSetters.offset) {
                 mat.uniformSetters.offset(chunk.position);
+            }
 
             var matrix = mat4.translate(mat4.create(), camera.getView(), chunk.position);
-            if (mat.uniformSetters.modelViewMatrix)
-                mat.uniformSetters.modelViewMatrix(matrix);
+            mat.uniformSetters.modelViewMatrix(matrix);
 
             gl.drawArraysInstanced(
                 gl.TRIANGLES,
@@ -932,23 +1045,15 @@ export function render(
 
             bind(impostorMaterial, impostorGeometry);
 
-            if (impostorMaterial.uniformSetters.uCameraPosition) {
-                impostorMaterial.uniformSetters.uCameraPosition(camera.position);
-            }
+            impostorMaterial.uniformSetters.uCameraPosition(camera.position);
 
             const regionOffset = vec3.fromValues(lod.rx * 512, 0, lod.rz * 512);
-            if (impostorMaterial.uniformSetters.uRegionOffset) {
-                impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
-            }
+            impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
 
-            if (impostorMaterial.uniformSetters.uMaxHeight) {
-                impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
-            }
+            impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
 
             const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
-            if (impostorMaterial.uniformSetters.modelViewMatrix) {
-                impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
-            }
+            impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
 
             // Bind textures
             const texs = lod.textures;
@@ -968,6 +1073,45 @@ export function render(
         }
     }
 
+    // 5.5 Render LOD2 Groups
+    if (lod2Geometry && lod2Material) {
+        gl.disable(gl.BLEND);
+        gl.enable(gl.DEPTH_TEST);
+
+        const vpCurrent = mat4.multiply(mat4.create(), projectionMatrix, camera.getView());
+
+        for (const group of cullResults.lod2Groups) {
+            if (!group.hasTexture || !group.fbo) continue;
+
+            bind(lod2Material, lod2Geometry);
+
+            lod2Material.uniformSetters.uCameraPosition(camera.position);
+            lod2Material.uniformSetters.uVPCurrent(vpCurrent);
+
+            const groupOffset = vec3.fromValues(group.groupX * group.groupSize * 512, 0, group.groupZ * group.groupSize * 512);
+            lod2Material.uniformSetters.uGroupOffset(groupOffset);
+            lod2Material.uniformSetters.uOffset(groupOffset);
+
+            const size = group.groupSize;
+            lod2Material.uniformSetters.uGroupSize(size);
+
+            const scale = vec3.fromValues(size * 512.0, 320.0, size * 512.0);
+            lod2Material.uniformSetters.uScale(scale);
+
+            const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), groupOffset);
+            lod2Material.uniformSetters.modelViewMatrix(modelViewMatrix);
+
+            lod2Material.uniformSetters.uVPInit(group.vpMatrix);
+
+            // Bind color and depth textures
+            lod2Material.uniformSetters.uColorTex(group.fbo.attachments[0]);
+            lod2Material.uniformSetters.uDepthTex(group.fbo.attachments[1]);
+            lod2Material.uniformSetters.uFogScale(fogScale);
+
+            gl.drawArrays(gl.TRIANGLES, 0, lod2Geometry.verts);
+        }
+    }
+
     // 6. Draw Boundary Boxes (Wireframes)
     if (sceneGraph.showBoundaries) {
         renderBoundaries(gl, context, camera, sceneGraph, cube, renderedChunks, cullResults, projectionMatrix);
@@ -980,4 +1124,10 @@ export function render(
     if (context.renderToFBO) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
+
+    let hasPendingLOD2Updates = false;
+    if (impostorGeometry && impostorMaterial && lod2Geometry && lod2Material) {
+        hasPendingLOD2Updates = cullResults.lod2Groups.some(group => !group.hasTexture || group.stale || group.angularDeviation > 0.05);
+    }
+    return hasPendingLOD2Updates;
 }

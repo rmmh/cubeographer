@@ -136,7 +136,7 @@ class OrbitControls extends EventDispatcher {
     // Set to false to disable use of the keys
     enableKeys = true;
     // Mouse buttons
-    mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+    mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE };
     // Touch fingers
     touches = { ONE: TOUCH.PAN, TWO: TOUCH.DOLLY_ROTATE };
 

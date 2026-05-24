@@ -19,6 +19,7 @@ uniform sampler2D texWestColor;
 
 uniform mat4 projectionMatrix;
 uniform mat4 modelViewMatrix;
+uniform float uFogScale;
 
 out vec4 outColor;
 
@@ -279,6 +280,6 @@ void main() {
     outColor = mix(
         vec4(voxelColor * diff, 1.0),
         vec4(0.722, 0.855, 1.0, 1.0),
-        min(1.0, clipHit.w / 3000.0)
+        min(1.0, clipHit.w / 3000.0) * uFogScale
     );
 }
