@@ -555,9 +555,9 @@ export function renderGroupToFBO(
             },
             {
                 attachmentPoint: gl.DEPTH_ATTACHMENT,
-                internalFormat: gl.DEPTH_COMPONENT24,
+                internalFormat: gl.DEPTH_COMPONENT16,
                 format: gl.DEPTH_COMPONENT,
-                type: gl.UNSIGNED_INT,
+                type: gl.UNSIGNED_SHORT,
                 minMag: gl.NEAREST,
                 wrap: gl.CLAMP_TO_EDGE
             }

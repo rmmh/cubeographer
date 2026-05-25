@@ -25,91 +25,59 @@ void main() {
     vec3 tMax = max(t0, t1);
     float t_exit = min(min(tMax.x, tMax.y), tMax.z);
 
-    // Raymarching parallax loop
-    const int NUM_STEPS = 16;
-    float t_step = t_exit / float(NUM_STEPS);
-
     bool hit = false;
     vec3 hitLocalPos = vLocalPos;
     vec4 finalColor = vec4(0.0);
     float hitZ = 0.0;
     float hitW = 0.0;
 
-    for (int i = 0; i <= NUM_STEPS; i++) {
-        float t = float(i) * t_step;
-        vec3 localP = vLocalPos + t * rayDir;
-        vec3 worldP = localP * uScale + uOffset;
+    // Simple Parallax Mapping (One-step offset mapping)
+    // 1. Project the entry position to get the initial uv
+    vec3 worldP = vLocalPos * uScale + uOffset;
+    vec4 clipP = uVPInit * vec4(worldP, 1.0);
 
-        // Project worldP to initial camera's NDC space
-        vec4 clipP = uVPInit * vec4(worldP, 1.0);
-
-        // Guard against points behind the FBO camera plane (w <= 0)
-        if (clipP.w <= 0.0001) {
-            continue;
-        }
-
+    if (clipP.w > 0.0001) {
         vec3 ndcP = clipP.xyz / clipP.w;
         vec2 uv = ndcP.xy * 0.5 + 0.5;
 
-        // If UV is outside the initial camera's frame, skip/break
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-            continue;
-        }
+        if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+            float z_tex = texture(uDepthTex, uv).r;
 
-        float z_ray = ndcP.z * 0.5 + 0.5;
-        float z_tex = texture(uDepthTex, uv).r;
+            if (z_tex > 0.0001) {
+                float z_front = ndcP.z * 0.5 + 0.5;
 
-        // Inverse-Z check: larger Z is closer to the camera.
-        // We hit the geometry when z_ray <= z_tex.
-        if (z_ray <= z_tex && z_tex > 0.0001) {
-            hit = true;
-            hitLocalPos = localP;
-            hitZ = z_ray;
-
-            // Perform basic binary search for precision
-            float t_prev = float(i - 1) * t_step;
-            float t_curr = t;
-            for (int k = 0; k < 4; k++) {
-                float t_mid = (t_prev + t_curr) * 0.5;
-                vec3 midLocalP = vLocalPos + t_mid * rayDir;
-                vec3 midWorldP = midLocalP * uScale + uOffset;
-                vec4 midClip = uVPInit * vec4(midWorldP, 1.0);
-
-                // Guard against points behind the FBO camera plane
-                if (midClip.w <= 0.0001) {
-                    t_prev = t_mid;
-                    continue;
+                // 2. Project the exit position to find the depth at the back
+                vec3 backLocalP = vLocalPos + t_exit * rayDir;
+                vec3 backWorldP = backLocalP * uScale + uOffset;
+                vec4 backClipP = uVPInit * vec4(backWorldP, 1.0);
+                float z_back = 0.0;
+                if (backClipP.w > 0.0001) {
+                    z_back = (backClipP.z / backClipP.w) * 0.5 + 0.5;
                 }
 
-                vec3 midNdc = midClip.xyz / midClip.w;
-                vec2 midUv = midNdc.xy * 0.5 + 0.5;
-                float midZRay = midNdc.z * 0.5 + 0.5;
-                float midZTex = texture(uDepthTex, midUv).r;
-                if (midZRay <= midZTex && midZTex > 0.0001) {
-                    t_curr = t_mid;
-                    hitZ = midZRay;
-                    hitLocalPos = midLocalP;
-                } else {
-                    t_prev = t_mid;
+                // 3. Linearly approximate `t` where the ray's depth equals the geometry depth `z_tex`
+                float t = 0.0;
+                if (abs(z_front - z_back) > 0.0001) {
+                    t = t_exit * clamp((z_tex - z_front) / (z_back - z_front), 0.0, 1.0);
+                }
+
+                // 4. Sample color and compute final depth at the offset position
+                hitLocalPos = vLocalPos + t * rayDir;
+                vec3 finalWorldP = hitLocalPos * uScale + uOffset;
+                vec4 finalClipP = uVPInit * vec4(finalWorldP, 1.0);
+
+                if (finalClipP.w > 0.0001) {
+                    vec2 finalUv = (finalClipP.xy / finalClipP.w) * 0.5 + 0.5;
+                    if (finalUv.x >= 0.0 && finalUv.x <= 1.0 && finalUv.y >= 0.0 && finalUv.y <= 1.0) {
+                        hit = true;
+                        finalColor = texture(uColorTex, finalUv);
+
+                        vec4 currentClipP = uVPCurrent * vec4(finalWorldP, 1.0);
+                        hitZ = (currentClipP.z / currentClipP.w) * 0.5 + 0.5;
+                        hitW = currentClipP.w;
+                    }
                 }
             }
-
-            vec3 finalWorldP = hitLocalPos * uScale + uOffset;
-            vec4 finalClipP = uVPInit * vec4(finalWorldP, 1.0);
-
-            // Guard against points behind the FBO camera plane
-            if (finalClipP.w <= 0.0001) {
-                discard;
-            }
-
-            vec2 finalUv = (finalClipP.xy / finalClipP.w) * 0.5 + 0.5;
-
-            vec4 currentClipP = uVPCurrent * vec4(finalWorldP, 1.0);
-            hitZ = (currentClipP.z / currentClipP.w) * 0.5 + 0.5;
-            hitW = currentClipP.w;
-
-            finalColor = texture(uColorTex, finalUv);
-            break;
         }
     }
 
