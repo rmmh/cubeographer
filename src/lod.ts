@@ -36,7 +36,7 @@ function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement | I
     });
 }
 
-function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLImageElement | ImageBitmap, isMin: boolean): { texture: WebGLTexture; maxHeight: number } {
+function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: ImageBitmap, isMin: boolean): { texture: WebGLTexture; maxHeight: number } {
     const tex = gl.createTexture();
     if (!tex) throw new Error("Failed to create WebGL texture");
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -47,7 +47,7 @@ function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: HTMLIm
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error("Could not create 2d canvas context");
     ctx.drawImage(image, 0, 0);
     const imgData = ctx.getImageData(0, 0, width, height);
