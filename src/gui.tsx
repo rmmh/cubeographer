@@ -3,6 +3,14 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import * as renderer from './renderer';
 import { OrbitControls } from './camera';
 
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + sizes[i];
+}
+
 interface DebugGUIProps {
     sceneGraph: renderer.SceneGraph;
     controls: OrbitControls;
@@ -48,6 +56,64 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
             setUpdateTick(tick => tick + 1);
         });
     }, [sceneGraph]);
+
+    // --- Compute dynamic VRAM stats for LOD0, LOD1, LOD2 ---
+    let renderedL0 = 0;
+    let totalL0 = 0;
+    let renderedL1 = 0;
+    let totalL1 = 0;
+    let renderedL2 = 0;
+    let totalL2 = 0;
+
+    const cullResults = sceneGraph.lastCullResults;
+    if (cullResults) {
+        if (cullResults.chunks) {
+            for (const chunk of cullResults.chunks) {
+                if (chunk.layers) {
+                    for (const layerAttrib of Object.values(chunk.layers)) {
+                        if (layerAttrib && layerAttrib.size > 0) {
+                            renderedL0 += layerAttrib.size * 8;
+                        }
+                    }
+                }
+            }
+        }
+        if (cullResults.impostors) {
+            renderedL1 = cullResults.impostors.length * 1222429;
+        }
+        if (cullResults.lod2Groups) {
+            for (const group of cullResults.lod2Groups) {
+                if (group.fbo) {
+                    renderedL2 += group.fbo.width * group.fbo.height * 8;
+                }
+            }
+        }
+    }
+
+    for (const region of sceneGraph.regions.values()) {
+        // LOD0 total
+        for (const rlet of region.regionlets) {
+            if (rlet.chunk && rlet.chunk.layers) {
+                for (const layerAttrib of Object.values(rlet.chunk.layers)) {
+                    if (layerAttrib && layerAttrib.size > 0) {
+                        totalL0 += layerAttrib.size * 8;
+                    }
+                }
+            }
+        }
+        // LOD1 total
+        if (region.impostor && region.impostor.status === 'READY') {
+            totalL1 += 1222429;
+        }
+    }
+
+    if (sceneGraph.lod2Manager && sceneGraph.lod2Manager.groups) {
+        for (const group of sceneGraph.lod2Manager.groups.values()) {
+            if (group.fbo) {
+                totalL2 += group.fbo.width * group.fbo.height * 8;
+            }
+        }
+    }
 
     // Coordinate picking on canvas via pointer events
     useEffect(() => {
@@ -178,6 +244,35 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                     </button>
                 </div>
                 <div className="debug-menu-content">
+                    {/* VRAM Usage Card */}
+                    <div className="vram-card" style={{
+                        background: 'var(--card-bg)',
+                        border: '1px solid var(--card-border)',
+                        borderRadius: '6px',
+                        padding: '10px',
+                        marginBottom: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: '800', fontSize: '11.5px', color: 'var(--primary-color)', borderBottom: '1px solid var(--border-glass)', paddingBottom: '6px', marginBottom: '2px', letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                            <span>VRAM Usage (Rendered/Total)</span>
+                            <span>{formatBytes(renderedL0 + renderedL1 + renderedL2)} / {formatBytes(totalL0 + totalL1 + totalL2)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
+                            <span>LOD0:</span>
+                            <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL0)} / {formatBytes(totalL0)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
+                            <span>LOD1:</span>
+                            <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL1)} / {formatBytes(totalL1)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
+                            <span>LOD2:</span>
+                            <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL2)} / {formatBytes(totalL2)}</span>
+                        </div>
+                    </div>
+
                     {sceneGraph.mapMetadata?.full_regions?.size > 0 && (
                         <div className="debug-control-group">
                             <div className="debug-label-row">
@@ -479,6 +574,34 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
     const lod2GroupHasTex = lod2Group ? lod2Group.hasTexture : false;
     const lod2GroupDev = lod2Group ? lod2Group.angularDeviation : 0;
 
+    // --- Compute Region VRAM and Total Block/Face stats ---
+    let regionVboVram = 0;
+    let regionTotalBlocks = 0;
+    let regionTotalFaces = 0;
+    if (region) {
+        for (const rlet of region.regionlets) {
+            if (rlet.chunk && rlet.chunk.layers) {
+                for (const [name, layerAttrib] of Object.entries(rlet.chunk.layers)) {
+                    if (layerAttrib && layerAttrib.size > 0) {
+                        regionVboVram += layerAttrib.size * 8; // Both block and face buffers are 8 bytes/entry (uvec2)
+                        const isPlant = name === "CROSS" || name === "CROP";
+                        if (isPlant) {
+                            regionTotalBlocks += layerAttrib.size;
+                            regionTotalFaces += name === "CROSS" ? layerAttrib.size * 4 : layerAttrib.size * 8;
+                        } else {
+                            regionTotalBlocks += (layerAttrib as any).blockCount || 0;
+                            regionTotalFaces += layerAttrib.size;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const impostorLoaded = region && region.impostor && region.impostor.status === 'READY';
+    const impostorVram = impostorLoaded ? 1222429 : 0; // ~1.17 MB (Top Color + Depth, 4 sides Color + Depth)
+    const totalVram = regionVboVram + impostorVram;
+
     // Render a region view card (Color and Depth side-by-side)
     const renderViewCard = (name: string, colorCanvas: HTMLCanvasElement | undefined, depthCanvas: HTMLCanvasElement | undefined, isTop: boolean = false) => {
         const height = isTop ? '256px' : '160px';
@@ -536,6 +659,26 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                             <div className="meta-coord">Region r.{rx}.{rz}</div>
                             <div className="meta-world">World X: [{rx * 512} to {(rx + 1) * 512}]</div>
                             <div className="meta-world">World Z: [{rz * 512} to {(rz + 1) * 512}]</div>
+                            {region && (
+                                <div style={{ marginTop: '10px', borderTop: '1px solid var(--border-glass)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <div className="meta-world" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span>Blocks:</span>
+                                        <span style={{ fontWeight: 700 }}>{regionTotalBlocks.toLocaleString()}</span>
+                                    </div>
+                                    <div className="meta-world" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
+                                        <span>VBO Geometry VRAM:</span>
+                                        <span>{formatBytes(regionVboVram)}</span>
+                                    </div>
+                                    <div className="meta-world" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
+                                        <span>LOD Impostor VRAM:</span>
+                                        <span>{formatBytes(impostorVram)}</span>
+                                    </div>
+                                    <div className="meta-world" style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--accent)', fontWeight: 700, borderTop: '1px dashed var(--border-glass)', paddingTop: '4px', marginTop: '2px' }}>
+                                        <span>Total VRAM:</span>
+                                        <span>{formatBytes(totalVram)}</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Regionlets listing */}
@@ -544,16 +687,24 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                 <div className="inspector-section-title">Regionlets (High-Res)</div>
                                 <div className="regionlets-grid">
                                     {region.regionlets.map((rlet, idx) => {
-                                        let totalCubes = 0;
+                                        let totalBlocks = 0;
+                                        let totalVram = 0;
                                         const layers = rlet.chunk?.layers || {};
                                         const layerItems = Object.entries(layers)
                                             .filter(([_, layerAttrib]) => layerAttrib && layerAttrib.size > 0)
                                             .map(([layerName, layerAttrib]) => {
-                                                totalCubes += layerAttrib.size;
+                                                const blockCount = (layerAttrib as any).blockCount || 0;
+                                                const isPlant = layerName === "CROSS" || layerName === "CROP";
+                                                const blocks = isPlant ? layerAttrib.size : blockCount;
+
+                                                totalBlocks += blocks;
+                                                totalVram += layerAttrib.size * 8;
                                                 return (
                                                     <div className="layer-item" key={layerName}>
                                                         <span className="layer-name">{layerName}</span>
-                                                        <span className="layer-count">{layerAttrib.size.toLocaleString()}</span>
+                                                        <span className="layer-count">
+                                                            {blocks.toLocaleString()}
+                                                        </span>
                                                     </div>
                                                 );
                                             });
@@ -572,8 +723,14 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                                     </div>
                                                     <div className="meta-row">
                                                         <span>Blocks:</span>
-                                                        <span style={{ fontWeight: 700, color: 'var(--accent)' }}>
-                                                            {totalCubes.toLocaleString()}
+                                                        <span style={{ fontWeight: 700 }}>
+                                                            {totalBlocks.toLocaleString()}
+                                                        </span>
+                                                    </div>
+                                                    <div className="meta-row">
+                                                        <span>VBO:</span>
+                                                        <span style={{ color: 'var(--text-sub)', fontWeight: 700 }}>
+                                                            {formatBytes(totalVram)}
                                                         </span>
                                                     </div>
                                                     <div className="layers-list">

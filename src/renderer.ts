@@ -908,7 +908,9 @@ export function render(
             if (mat.uniformSetters.uFogScale)
                 mat.uniformSetters.uFogScale(fogScale);
             for (const [key, value] of Object.entries(geo.attributes)) {
-                mat.attribSetters[key](value);
+                if (mat.attribSetters[key]) {
+                    mat.attribSetters[key](value);
+                }
             }
         }
     }
@@ -935,6 +937,17 @@ export function render(
         } else {
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        }
+
+        // Configure face culling per layer:
+        // Plant/crop sprites (CROSS, CROP) are double-sided and should not cull back-faces.
+        // Other voxel layers (CUBE, VOXEL, CUBOID, CUBE_FALLBACK) have correct CCW front-faces and benefit from back-face culling.
+        const isPlant = layer.name === "CROSS" || layer.name === "CROP";
+        if (isPlant) {
+            gl.disable(gl.CULL_FACE);
+        } else {
+            gl.enable(gl.CULL_FACE);
+            gl.cullFace(gl.BACK);
         }
 
         if (mat.uniformSetters.alphaCutoutThreshold) {
@@ -965,6 +978,9 @@ export function render(
             );
         }
     }
+
+    // Disable face culling for other rendering phases (boundaries, impostors, LOD2)
+    gl.disable(gl.CULL_FACE);
 
     // 5. Render Region Impostors as fallback
     if (impostorGeometry && impostorMaterial) {

@@ -619,7 +619,9 @@ export function renderGroupToFBO(
                 mat.uniformSetters.uFogScale(0.0);
             }
             for (const [key, value] of Object.entries(geo.attributes)) {
-                mat.attribSetters[key](value);
+                if (mat.attribSetters[key]) {
+                    mat.attribSetters[key](value);
+                }
             }
         }
     }

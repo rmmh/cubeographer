@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/bits"
 	"os"
 	"path"
 	"sort"
@@ -189,6 +190,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		}
 
 		var bufs [4][render.NumRenderLayers]bytes.Buffer
+		var faceCounts [4][render.NumRenderLayers]int
 
 		buf := make([]byte, 64)
 		// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
@@ -303,6 +305,7 @@ func scanRegion(conf *scanRegionConfig) error {
 									}
 									binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
 									blen += 8
+									faceCounts[x>>8+2*(z>>8)][layer] += bits.OnesCount32(sideVis & tmpl[i+1])
 								}
 							}
 							if blen > 0 {
@@ -339,12 +342,14 @@ func scanRegion(conf *scanRegionConfig) error {
 			var header (struct {
 				Layers [render.NumRenderLayers]struct {
 					Length int    `json:"length"`
+					Faces  int    `json:"faces"`
 					Name   string `json:"name"`
 				} `json:"layers"`
 			})
 
 			for i, obuf := range bs {
 				header.Layers[i].Length = obuf.Len()
+				header.Layers[i].Faces = faceCounts[bi][i]
 				header.Layers[i].Name = render.LayerNames[i]
 			}
 			headerJSON, err := json.Marshal(header)

@@ -188,7 +188,7 @@ function makeMaterial(defines?: { [name: string]: any }) {
 function makeCubeLayer(name: string, texturePath: string, defines?: { [name: string]: any }) {
     const stride = 28; // vec3 pos, vec3 normal, fp16*2  => 6 * 4 + 2 * 2 => 24B
     const stridef = (stride / 4) | 0;
-    const tris = 6;  // 3 faces * 2 tris each (we flip based on camera)
+    const tris = 2;  // 1 unit quad = 2 tris = 6 vertices
     const cubeBuffer = new ArrayBuffer(stride * tris * 3);
 
     // the following typed arrays share the same buffer
@@ -258,26 +258,15 @@ function makeCubeLayer(name: string, texturePath: string, defines?: { [name: str
     }
 
     const FLD = vec3.create(), FLU = vec3.create(),
-        FRD = vec3.create(), FRU = vec3.create(),
-        BLD = vec3.create(), BLU = vec3.create(),
-        BRD = vec3.create(), BRU = vec3.create();
+        FRD = vec3.create(), FRU = vec3.create();
 
-    // cubes have 8 vertices
-    // OpenGL/Minecraft: +X = East, +Y = Up, +Z = South
-    // Front/Back, Left/Right, Up/Down
-    vec3.set(FLD, 0, 0, 1);
-    vec3.set(FLU, 0, 1, 1);
-    vec3.set(FRD, 1, 0, 1);
-    vec3.set(FRU, 1, 1, 1);
-    vec3.set(BLD, 0, 0, 0);
-    vec3.set(BLU, 0, 1, 0);
-    vec3.set(BRD, 1, 0, 0);
-    vec3.set(BRU, 1, 1, 0);
+    vec3.set(FLD, 0, 0, 0);
+    vec3.set(FLU, 0, 1, 0);
+    vec3.set(FRD, 1, 0, 0);
+    vec3.set(FRU, 1, 1, 0);
 
-    // Note: "front face" is CCW
-    addQuad(FLU, BLU, BLD, FLD, 0);  // L+R
-    addQuad(FRU, FLU, FLD, FRD, 2);  // F+B
-    addQuad(FLU, FRU, BRU, BLU, 4);  // U+D
+    // Flat XY unit quad CCW: (0,1,0), (1,1,0), (1,0,0), (0,0,0)
+    addQuad(FLU, FRU, FRD, FLD, 0);
 
     let geometry = context.Geometry();
 
@@ -658,9 +647,6 @@ function updateDynamicLoading() {
     for (const lod of cullResults.missingImpostors) {
         fetchRegionLOD(lod.rx, lod.rz, sceneGraph, camera.position, render);
     }
-
-    // Clear the cached culling results at the end of the frame
-    sceneGraph.lastCullResults = null;
 }
 
 render();
@@ -778,18 +764,27 @@ function fetchRegion(x: number, z: number, off: number) {
 
                 let layerSpecs: any = {};
                 for (const layer of meta.layers) {
-                    layerSpecs[layer.name] = {
-                        data: new Uint32Array(layer.length / 4), retain: true,
-                        numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
-                    };
+                    if (layer.name === "CROSS" || layer.name === "CROP") {
+                        layerSpecs[layer.name] = {
+                            data: new Uint32Array(layer.length / 4), retain: true,
+                            numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                        };
+                    } else {
+                        // Pre-allocate buffer based on the visible face count computed by the Go backend!
+                        const faces = layer.faces || Math.floor(layer.length / 8);
+                        layerSpecs[layer.name] = {
+                            data: new Uint32Array(faces * 2), retain: true, // 2 uint32s = 8 bytes per face instance
+                            numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                        };
+                    }
                 }
 
                 chunk.setLayers(layerSpecs);
 
-
-
                 let offset = 0;
+                let faceOffset = 0;
                 let layerNumber = 0;
+                let pendingBytes = new Uint8Array(0);
 
                 while (!done) {
                     if (value.length == 0) {
@@ -797,19 +792,85 @@ function fetchRegion(x: number, z: number, off: number) {
                         continue;
                     }
 
-                    let wanted = Math.min(value.length, sectionLengths[layerNumber] - offset);
-                    let tail = value.subarray(wanted);
-                    value = value.subarray(0, wanted);
+                    // Prepend any left-over bytes from the last network packet
+                    let packetBytes = value;
+                    if (pendingBytes.length > 0) {
+                        packetBytes = new Uint8Array(pendingBytes.length + value.length);
+                        packetBytes.set(pendingBytes, 0);
+                        packetBytes.set(value, pendingBytes.length);
+                        pendingBytes = new Uint8Array(0);
+                    }
+
+                    let wanted = Math.min(packetBytes.length, sectionLengths[layerNumber] - offset);
+                    let tail = packetBytes.subarray(wanted);
+                    packetBytes = packetBytes.subarray(0, wanted);
 
                     let layerName = meta.layers[layerNumber].name;
-                    chunk.updateAttribute(layerName, value, offset);
-                    offset += value.length;
-                    chunk.layers[layerName].size = Math.floor(offset / (CUBE_ATTRIB_STRIDE * 4));
+
+                    // Align chunk boundaries to 8-byte blocks
+                    if (packetBytes.length % 8 !== 0 && !done) {
+                        const alignedLen = Math.floor(packetBytes.length / 8) * 8;
+                        pendingBytes = packetBytes.subarray(alignedLen);
+                        packetBytes = packetBytes.subarray(0, alignedLen);
+                    }
+
+                    if (packetBytes.length > 0) {
+                        if (layerName === "CROSS" || layerName === "CROP") {
+                            chunk.updateAttribute(layerName, packetBytes, offset);
+                            offset += packetBytes.length;
+                            const blocks = Math.floor(offset / 8);
+                            chunk.layers[layerName].size = blocks;
+                            (chunk.layers[layerName] as any).blockCount = blocks;
+                        } else {
+                            const alignedBytes = (packetBytes.byteOffset % 4 === 0) ? packetBytes : packetBytes.slice();
+                            const blockU32 = new Uint32Array(alignedBytes.buffer, alignedBytes.byteOffset, alignedBytes.byteLength / 4);
+
+                            // Count visible faces in this network packet
+                            let visFaces = 0;
+                            for (let i = 1; i < blockU32.length; i += 2) {
+                                const vis = blockU32[i] & 0x3F;
+                                visFaces += ((vis & 1) + ((vis >> 1) & 1) + ((vis >> 2) & 1) + 
+                                              ((vis >> 3) & 1) + ((vis >> 4) & 1) + ((vis >> 5) & 1));
+                            }
+
+                            const faceData = new Uint32Array(visFaces * 2);
+                            let destIdx = 0;
+
+                            for (let i = 0; i < blockU32.length; i += 2) {
+                                const attrX = blockU32[i];
+                                const attrY = blockU32[i+1];
+
+                                const vis = attrY & 0x3F;
+                                if (vis === 0) continue;
+
+                                for (let face = 0; face < 6; face++) {
+                                    if ((vis & (1 << face)) !== 0) {
+                                        faceData[destIdx++] = attrX;
+
+                                        const light = (attrY >> (6 + face * 4)) & 15;
+                                        const useColor = (attrY >> 31) & 1;
+                                        const sideSpecial = (attrY >> 30) & 1;
+                                        const highBlockId = attrY & 0xFF000000; // Preserve CUBOID blockId high-byte
+
+                                        const packedMeta = face | (light << 3) | (sideSpecial << 7) | (useColor << 8) | highBlockId;
+                                        faceData[destIdx++] = packedMeta;
+                                    }
+                                }
+                            }
+
+                            chunk.updateAttribute(layerName, new Uint8Array(faceData.buffer), faceOffset * 8);
+                            faceOffset += visFaces;
+                            chunk.layers[layerName].size = faceOffset;
+                            offset += packetBytes.length;
+                            (chunk.layers[layerName] as any).blockCount = Math.floor(offset / 8);
+                        }
+                    }
 
                     value = tail;
 
                     while (offset === sectionLengths[layerNumber]) {
                         offset = 0;
+                        faceOffset = 0;
                         layerNumber++;
                     }
                     render();
