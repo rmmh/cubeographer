@@ -711,6 +711,8 @@ function fetchRegion(x: number, z: number, off: number) {
     }
 
     sceneGraph.updateRegionletStatus(x, z, off, 'FETCH');
+    regionlet.chunk.minY = 0;
+    regionlet.chunk.maxY = 0;
 
     // Calculate priority based on distance to the regionlet center
     const rletCenter = vec3.fromValues(
@@ -817,6 +819,11 @@ function fetchRegion(x: number, z: number, off: number) {
                     if (packetBytes.length > 0) {
                         if (layerName === "CROSS" || layerName === "CROP") {
                             chunk.updateAttribute(layerName, packetBytes, offset);
+                            let localMaxY = chunk.maxY;
+                            for (let i = 0; i < packetBytes.length; i += 8) {
+                                localMaxY = Math.max(localMaxY, packetBytes[i]);
+                            }
+                            chunk.maxY = localMaxY;
                             offset += packetBytes.length;
                             const blocks = Math.floor(offset / 8);
                             chunk.layers[layerName].size = blocks;
@@ -859,6 +866,12 @@ function fetchRegion(x: number, z: number, off: number) {
                             }
 
                             chunk.updateAttribute(layerName, new Uint8Array(faceData.buffer), faceOffset * 8);
+                            let localMaxY = chunk.maxY;
+                            const faceBytes = new Uint8Array(faceData.buffer);
+                            for (let i = 0; i < faceBytes.length; i += 8) {
+                                localMaxY = Math.max(localMaxY, faceBytes[i]);
+                            }
+                            chunk.maxY = localMaxY;
                             faceOffset += visFaces;
                             chunk.layers[layerName].size = faceOffset;
                             offset += packetBytes.length;

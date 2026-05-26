@@ -745,19 +745,20 @@ export class SceneGraph {
                         }
                     }
 
-                    // B) Render the region's LOD impostor if loaded
+                    // B) Render any loaded/streaming regionlets that are in our renderedChunkSet!
+                    for (const rlet of regionVisibleRlets) {
+                        if (renderedChunkSet.has(rlet)) {
+                            chunksToRender.push(rlet.chunk);
+                        }
+                    }
+
+                    // C) Render the region's LOD impostor if loaded (which will dynamically mask out active chunks)
                     if (region.impostor.status === 'READY' && region.impostor.textures) {
                         impostorsToRender.push(region.impostor);
                     } else {
-                        // C) Fetch impostor if missing
+                        // Fetch impostor if missing
                         if (region.impostor.status === 'NONE') {
                             missingImpostors.push(region.impostor);
-                        }
-                        // D) Render any loaded regionlets that are in our renderedChunkSet as fallback
-                        for (const rlet of regionVisibleRlets) {
-                            if (renderedChunkSet.has(rlet)) {
-                                chunksToRender.push(rlet.chunk);
-                            }
                         }
                     }
                 }
@@ -995,6 +996,8 @@ export function render(
         gl.disable(gl.BLEND);
         gl.enable(gl.DEPTH_TEST);
 
+        const renderedChunkSet = new Set<Chunk>(renderedChunks);
+
         for (const lod of cullResults.impostors) {
             if (!lod.loaded || !lod.textures) continue;
 
@@ -1006,6 +1009,22 @@ export function render(
             impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
 
             impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
+
+            const chunkMaxY = new Float32Array([-1.0, -1.0, -1.0, -1.0]);
+            const region = sceneGraph.getOrCreateRegion(lod.rx, lod.rz);
+            for (let off = 0; off < 4; off++) {
+                const rlet = region.regionlets[off];
+                if (renderedChunkSet.has(rlet.chunk)) {
+                    if (rlet.status === 'READY') {
+                        chunkMaxY[off] = 320.0;
+                    } else if (rlet.status === 'STREAM') {
+                        chunkMaxY[off] = rlet.chunk.maxY;
+                    }
+                }
+            }
+            if (impostorMaterial.uniformSetters.uChunkMaxY) {
+                impostorMaterial.uniformSetters.uChunkMaxY(chunkMaxY);
+            }
 
             const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
             impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);

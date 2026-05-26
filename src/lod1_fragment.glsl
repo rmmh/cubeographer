@@ -20,6 +20,7 @@ uniform sampler2D texWestColor;
 uniform mat4 projectionMatrix;
 uniform mat4 modelViewMatrix;
 uniform float uFogScale;
+uniform float uChunkMaxY[4];
 
 out vec4 outColor;
 
@@ -30,6 +31,11 @@ const float DEPTH_BIAS = 1.0 / 255.0;
 bool isSolid(vec3 p) {
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z < 0.0 || p.z > 1.0)
         return false;
+
+    int quadIndex = (p.x >= 0.5 ? 1 : 0) + (p.z >= 0.5 ? 2 : 0);
+    if (p.y * 320.0 <= uChunkMaxY[quadIndex]) {
+        return false;
+    }
 
     ivec3 ip = clamp(ivec3(floor(p * vec3(256.0, 160.0, 256.0))), ivec3(0), ivec3(255, 159, 255));
 
@@ -51,6 +57,11 @@ bool isSolid(vec3 p) {
 bool isSolidCoarse(vec3 p, int level) {
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z < 0.0 || p.z > 1.0)
         return false;
+
+    int quadIndex = (p.x >= 0.5 ? 1 : 0) + (p.z >= 0.5 ? 2 : 0);
+    if (p.y * 320.0 <= uChunkMaxY[quadIndex]) {
+        return false;
+    }
 
     ivec3 dims = ivec3(256 >> level, 160 >> level, 256 >> level);
     ivec3 ip = clamp(ivec3(floor(p * vec3(dims))), ivec3(0), dims - ivec3(1));

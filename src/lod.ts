@@ -643,6 +643,10 @@ export function renderGroupToFBO(
                 impostorMaterial.uniformSetters.uMaxHeight(region.impostor.maxHeight ?? 320.0);
             }
 
+            if (impostorMaterial.uniformSetters.uChunkMaxY) {
+                impostorMaterial.uniformSetters.uChunkMaxY(new Float32Array([-1.0, -1.0, -1.0, -1.0]));
+            }
+
             const mvMatrix = mat4.translate(mat4.create(), viewMatrix, regionOffset);
             if (impostorMaterial.uniformSetters.modelViewMatrix) {
                 impostorMaterial.uniformSetters.modelViewMatrix(mvMatrix);
