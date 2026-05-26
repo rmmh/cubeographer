@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/maruel/natural"
+	"github.com/rmmh/cubeographer/go/region"
 )
 
 // minecraftMap represents a discovered playable Minecraft dimension/map
@@ -50,7 +52,7 @@ func cleanWorldName(s string) string {
 // and returns them with unique terse names assigned.
 func findMaps(inputDir string) ([]minecraftMap, error) {
 	// 1. Check if inputDir itself contains .mca files directly.
-	entries, err := os.ReadDir(inputDir)
+	entries, err := region.ReadDir(inputDir)
 	if err == nil {
 		hasMcaDirectly := false
 		for _, entry := range entries {
@@ -82,6 +84,33 @@ func findMaps(inputDir string) ([]minecraftMap, error) {
 			return err
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(d.Name()), ".zip") {
+			// Walk zip file contents (only one level!)
+			zipReader, err := region.GetZipReader(path)
+			if err != nil {
+				log.Printf("warning: failed to open zip file %s: %v", path, err)
+				return nil
+			}
+			for _, f := range zipReader.File {
+				internalPath := filepath.ToSlash(f.Name)
+				baseName := filepath.Base(internalPath)
+				fullPath := path + "/" + internalPath
+
+				if baseName == "level.dat" {
+					levelDatDirs = append(levelDatDirs, filepath.Dir(fullPath))
+				} else if strings.HasSuffix(baseName, ".mca") {
+					parentDir := filepath.Dir(fullPath)
+					parentBase := strings.ToLower(filepath.Base(parentDir))
+					if parentBase == "poi" || parentBase == "entities" {
+						continue
+					}
+					if !contains(mcaDirs, parentDir) {
+						mcaDirs = append(mcaDirs, parentDir)
+					}
+				}
+			}
 			return nil
 		}
 		if d.Name() == "level.dat" {
@@ -163,10 +192,23 @@ func findMaps(inputDir string) ([]minecraftMap, error) {
 	for _, wd := range uniqueWorldDirs {
 		rel, err := filepath.Rel(inputDir, wd)
 		var baseName string
-		if err != nil || rel == "." || rel == "" {
-			baseName = filepath.Base(wd)
-		} else {
-			baseName = filepath.Base(rel)
+		if strings.Contains(wd, ".zip") {
+			zipPath, internalPath, isZip := region.SplitZipPath(wd)
+			if isZip {
+				zipBase := strings.TrimSuffix(filepath.Base(zipPath), ".zip")
+				if internalPath == "" {
+					baseName = zipBase
+				} else {
+					baseName = zipBase + "_" + filepath.Base(internalPath)
+				}
+			}
+		}
+		if baseName == "" {
+			if err != nil || rel == "." || rel == "" {
+				baseName = filepath.Base(wd)
+			} else {
+				baseName = filepath.Base(rel)
+			}
 		}
 
 		baseName = cleanWorldName(baseName)

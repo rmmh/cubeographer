@@ -53,11 +53,11 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 
 	cdata := make([]ChunkDatum, 1024)
 
-	f, err := os.Open(path)
+	f, closer, err := OpenRegionFile(path)
 	if err != nil {
 		return cdata, err
 	}
-	defer f.Close()
+	defer closer.Close()
 
 	var buf [4096]uint8
 	_, err = f.Read(buf[:])

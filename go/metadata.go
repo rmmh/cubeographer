@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/maruel/natural"
+	"github.com/rmmh/cubeographer/go/region"
 )
 
 type SpaceSeparatedSlice []string
@@ -62,13 +63,13 @@ func WriteMapMetadata(mapDir string, regionDir string, mode string) error {
 	var metadata MapMetadata
 
 	if regionDir != "" {
-		// Live server mode: scan the regionDir for .mca files
-		files, err := os.ReadDir(regionDir)
+		// Live server mode: scan the regionDir for region files
+		files, err := region.ReadDir(regionDir)
 		if err != nil {
 			return err
 		}
 
-		regionRe := regexp.MustCompile(`^r\.(-?\d+)\.(-?\d+)\.mca$`)
+		regionRe := regexp.MustCompile(`^r\.(-?\d+)\.(-?\d+)\.(?:mca|zvcr3)$`)
 
 		for _, file := range files {
 			if file.IsDir() {

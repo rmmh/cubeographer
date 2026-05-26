@@ -95,7 +95,7 @@ func convert(numProcs int, inputDir, outDir string, filters []string, prune bool
 
 		log.Printf("Converting map %q (%s) -> %s", m.Name, m.RegionDir, targetOutDir)
 
-		files, err := os.ReadDir(m.RegionDir)
+		files, err := region.ReadDir(m.RegionDir)
 		if err != nil {
 			log.Printf("error reading region dir %s: %v", m.RegionDir, err)
 			continue

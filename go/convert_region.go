@@ -153,7 +153,7 @@ func scanRegion(conf *scanRegionConfig) error {
 		return err
 	}
 	var regionSize int64
-	if st, err := os.Stat(regionPath); err == nil {
+	if st, err := region.Stat(regionPath); err == nil {
 		regionSize = st.Size()
 	} else if conf.readRegion == nil {
 		return err

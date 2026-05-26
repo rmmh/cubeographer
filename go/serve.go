@@ -162,7 +162,7 @@ func (s *server) mapHandler(w http.ResponseWriter, r *http.Request) {
 
 		stale := true
 		if metaStat, err := os.Stat(metadataPath); err == nil {
-			if regionStat, err := os.Stat(regionDirPath); err == nil {
+			if regionStat, err := region.Stat(regionDirPath); err == nil {
 				if !regionStat.ModTime().After(metaStat.ModTime()) && s.binaryTime.Before(metaStat.ModTime()) {
 					stale = false
 				}
