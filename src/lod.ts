@@ -627,8 +627,7 @@ export function renderGroupToFBO(
     }
 
     for (const region of regionsInGroup) {
-        const allRegionletsReady = region.regionlets.every(rlet => rlet.status === 'READY');
-        if (!allRegionletsReady && region.impostor.status === 'READY' && region.impostor.textures) {
+        if (region.impostor.status === 'READY' && region.impostor.textures) {
             bind(impostorMaterial, impostorGeometry);
 
             if (impostorMaterial.uniformSetters.uCameraPosition) {

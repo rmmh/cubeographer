@@ -333,100 +333,103 @@ export class PerspectiveCamera implements Camera {
     }
 }
 
-function sphereCone(sphereCenter: vec3, sphereRadius: number,
-    coneOrigin: vec3, coneNormal: vec3,
-    sinAngle: number, tanAngleSqPlusOne: number): boolean {
-    const diff = vec3.sub(vec3.create(), sphereCenter, coneOrigin);
+export class Plane {
+    normal = vec3.create();
+    constant = 0;
 
-    // If the cone origin (camera) is inside the sphere, it always intersects the frustum!
-    if (vec3.sqrLen(diff) <= sphereRadius * sphereRadius) {
-        return true;
+    setComponents(x: number, y: number, z: number, w: number) {
+        vec3.set(this.normal, x, y, z);
+        const length = vec3.len(this.normal);
+        if (length > 0) {
+            vec3.scale(this.normal, this.normal, 1.0 / length);
+            this.constant = w / length;
+        } else {
+            this.constant = 0;
+        }
     }
 
-    // this code is somehow broken. unfortunate. this approximation helps slightly.
-    let cos = Math.sqrt(1 - sinAngle * sinAngle);
-    return vec3.dot(coneNormal, vec3.scaleAndAdd(vec3.create(), diff, coneNormal, sphereRadius * sinAngle)) > cos;
-
-    // translated from https://github.com/mosra/magnum/blob/master/src/Magnum/Math/Intersection.h#L539-L565
-
-    /* Point - cone test */
-    // if (Math:: dot(diff - sphereRadius * sinAngle * coneNormal, coneNormal) > T(0)) {
-
-    let dot = vec3.dot(coneNormal, vec3.scaleAndAdd(vec3.create(),
-        diff, coneNormal, -sphereRadius * sinAngle));
-    if (dot > 0) {
-        // const Vector3<T>c = sinAngle * diff + coneNormal * sphereRadius;
-        const c = vec3.scale(vec3.create(), diff, sinAngle);
-        vec3.scaleAndAdd(c, c, coneNormal, sphereRadius);
-
-        // const T lenA = Math:: dot(c, coneNormal);
-        const lenA = vec3.dot(c, coneNormal);
-
-        console.log(`cone test, dot=${dot} lenA=${lenA} c=${c}`);
-
-        // return c.dot() <= lenA * lenA * tanAngleSqPlusOne;
-        return vec3.sqrLen(c) <= lenA * lenA * tanAngleSqPlusOne;
-        // } else return diff.dot() <= sphereRadius * sphereRadius;
-    } else {
-        console.log("near fallback", dot, coneNormal,
-            vec3.scaleAndAdd(vec3.create(),
-                diff, coneNormal, -sphereRadius * sinAngle),
-            diff, vec3.len(diff), sphereRadius);
-        return vec3.sqrLen(diff) <= sphereRadius * sphereRadius;
+    distanceToPoint(point: vec3): number {
+        return vec3.dot(this.normal, point) + this.constant;
     }
 }
 
-export class Frustum {
-    coneOrigin: vec3
-    coneNormal: vec3
-    coneAngle: number // radians
+export function sqrDistPointToAABB(point: vec3, min: vec3, max: vec3): number {
+    let sqDist = 0;
+    for (let i = 0; i < 3; i++) {
+        const v = point[i];
+        if (v < min[i]) {
+            sqDist += (min[i] - v) * (min[i] - v);
+        } else if (v > max[i]) {
+            sqDist += (v - max[i]) * (v - max[i]);
+        }
+    }
+    return sqDist;
+}
 
-    constructor(
-        public camera: PerspectiveCamera,
-    ) {
-        this.coneOrigin = vec3.copy(vec3.create(), camera.position);
-        this.coneNormal = vec3.sub(vec3.create(), camera.target, camera.position);
-        vec3.normalize(this.coneNormal, this.coneNormal);
-        const vFovRad = camera.fov * Math.PI / 180;
-        const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * camera.aspect);
-        this.coneAngle = 2 * Math.atan(Math.sqrt(hFovRad * hFovRad + vFovRad * vFovRad));
+export class Frustum {
+    planes: Plane[];
+
+    constructor(public camera: PerspectiveCamera) {
+        this.planes = [
+            new Plane(), // Left
+            new Plane(), // Right
+            new Plane(), // Bottom
+            new Plane(), // Top
+            new Plane(), // Near
+            new Plane()  // Far
+        ];
+        this.update();
+    }
+
+    update() {
+        const proj = this.camera.getProjection();
+        const view = this.camera.getView();
+        const m = mat4.multiply(mat4.create(), proj, view);
+
+        // Extract the 6 frustum planes
+        // Right plane
+        this.planes[0].setComponents(m[3] - m[0], m[7] - m[4], m[11] - m[8], m[15] - m[12]);
+        // Left plane
+        this.planes[1].setComponents(m[3] + m[0], m[7] + m[4], m[11] + m[8], m[15] + m[12]);
+        // Bottom plane
+        this.planes[2].setComponents(m[3] + m[1], m[7] + m[5], m[11] + m[9], m[15] + m[13]);
+        // Top plane
+        this.planes[3].setComponents(m[3] - m[1], m[7] - m[5], m[11] - m[9], m[15] - m[13]);
+        // Far plane
+        this.planes[4].setComponents(m[3] - m[2], m[7] - m[6], m[11] - m[10], m[15] - m[14]);
+        // Near plane
+        this.planes[5].setComponents(m[3] + m[2], m[7] + m[6], m[11] + m[10], m[15] + m[14]);
+    }
+
+    intersectsAABB(min: vec3, max: vec3): boolean {
+        const p = vec3.create();
+        for (let i = 0; i < 6; i++) {
+            const plane = this.planes[i];
+            const normal = plane.normal;
+
+            // Find the p-vertex (furthest corner in the positive direction of the plane normal)
+            p[0] = normal[0] >= 0 ? max[0] : min[0];
+            p[1] = normal[1] >= 0 ? max[1] : min[1];
+            p[2] = normal[2] >= 0 ? max[2] : min[2];
+
+            // If the p-vertex is on the negative side of the plane, then the entire AABB is outside the frustum.
+            if (plane.distanceToPoint(p) < 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     intersects(c: Chunk): boolean {
-        // TODO: center this more conservatively based on observed y-height?
-        let sphereCenter = vec3.fromValues(128, 128, 128);
-        vec3.add(sphereCenter, sphereCenter, c.position);
-        let sphereRadius = Math.sqrt(3 * 128 * 128);
-
-        const halfAngle = this.coneAngle * .5;
-
-
-        const sinAngle = Math.sin(halfAngle);
-        const tanAngle = Math.tan(halfAngle);
-        const tanAngleSqPlusOne = 1 + tanAngle * tanAngle;
-
-        if (!sphereCone(sphereCenter, sphereRadius, this.coneOrigin, this.coneNormal,
-            sinAngle, tanAngleSqPlusOne)) {
-            return false;
-        }
-        return true;
-
+        const min = vec3.fromValues(c.position[0], c.minY, c.position[2]);
+        const max = vec3.fromValues(c.position[0] + 256, c.maxY, c.position[2] + 256);
+        return this.intersectsAABB(min, max);
     }
 
-    intersectsRegion(rx: number, rz: number): boolean {
-        let sphereCenter = vec3.fromValues(rx * 512 + 256, 160, rz * 512 + 256);
-        let sphereRadius = Math.sqrt(256 * 256 + 160 * 160 + 256 * 256);
-
-        const halfAngle = this.coneAngle * .5;
-        const sinAngle = Math.sin(halfAngle);
-        const tanAngle = Math.tan(halfAngle);
-        const tanAngleSqPlusOne = 1 + tanAngle * tanAngle;
-
-        if (!sphereCone(sphereCenter, sphereRadius, this.coneOrigin, this.coneNormal,
-            sinAngle, tanAngleSqPlusOne)) {
-            return false;
-        }
-        return true;
+    intersectsRegion(rx: number, rz: number, maxHeight: number = 320.0): boolean {
+        const min = vec3.fromValues(rx * 512, 0, rz * 512);
+        const max = vec3.fromValues(rx * 512 + 512, maxHeight, rz * 512 + 512);
+        return this.intersectsAABB(min, max);
     }
 }
 
@@ -654,15 +657,15 @@ export class SceneGraph {
         const visibleRegionletSet = new Set<RegionletNode>();
 
         for (const region of this.regions.values()) {
-            if (!frustum.intersectsRegion(region.rx, region.rz)) {
+            if (!frustum.intersectsRegion(region.rx, region.rz, region.impostor.maxHeight ?? 320.0)) {
                 continue;
             }
 
             for (const rlet of region.regionlets) {
                 if (frustum.intersects(rlet.chunk)) {
-                    const rletCenter = vec3.fromValues(128, 128, 128);
-                    vec3.add(rletCenter, rletCenter, rlet.chunk.position);
-                    const distSq = vec3.sqrDist(camera.position, rletCenter);
+                    const min = vec3.fromValues(rlet.chunk.position[0], rlet.chunk.minY, rlet.chunk.position[2]);
+                    const max = vec3.fromValues(rlet.chunk.position[0] + 256, rlet.chunk.maxY, rlet.chunk.position[2] + 256);
+                    const distSq = sqrDistPointToAABB(camera.position, min, max);
                     allVisibleRegionlets.push({ rlet, distSq });
                     visibleRegionletSet.add(rlet);
                 }
@@ -685,7 +688,7 @@ export class SceneGraph {
 
         // 6. Decide rendering and fetching per region
         for (const region of this.regions.values()) {
-            if (!frustum.intersectsRegion(region.rx, region.rz)) {
+            if (!frustum.intersectsRegion(region.rx, region.rz, region.impostor.maxHeight ?? 320.0)) {
                 continue;
             }
 
@@ -726,6 +729,11 @@ export class SceneGraph {
                     // Render as LOD2!
                     const group = this.lod2Manager.getOrCreateGroup(groupX, groupZ, G);
                     lod2GroupsToRender.add(group);
+
+                    // Fetch impostor if missing
+                    if (region.impostor.status === 'NONE') {
+                        missingImpostors.push(region.impostor);
+                    }
                 } else {
                     // Not fully rendered as chunks (some visible regionlets are missing or sliced out):
                     // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
@@ -887,11 +895,11 @@ export function render(
 
     // Sort renderable chunks by distance to camera
     culledChunks.sort((a, b) => {
-        const apos = vec3.fromValues(128, 128, 128);
-        const bpos = vec3.fromValues(128, 128, 128);
-        vec3.add(apos, apos, a.position);
-        vec3.add(bpos, bpos, b.position);
-        return vec3.sqrDist(camera.position, apos) - vec3.sqrDist(camera.position, bpos);
+        const amin = vec3.fromValues(a.position[0], a.minY, a.position[2]);
+        const amax = vec3.fromValues(a.position[0] + 256, a.maxY, a.position[2] + 256);
+        const bmin = vec3.fromValues(b.position[0], b.minY, b.position[2]);
+        const bmax = vec3.fromValues(b.position[0] + 256, b.maxY, b.position[2] + 256);
+        return sqrDistPointToAABB(camera.position, amin, amax) - sqrDistPointToAABB(camera.position, bmin, bmax);
     });
 
     // Limit to rendering top chunks to match original behavior / performance target
