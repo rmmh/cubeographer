@@ -460,6 +460,14 @@ export interface ImpostorNode {
     textures: any | null;
     loaded: boolean;
     maxHeight?: number;
+    heightmaps?: {
+        top: Uint8Array;
+        north: Uint8Array;
+        south: Uint8Array;
+        east: Uint8Array;
+        west: Uint8Array;
+    } | null;
+    reconstructedGeometry?: Geometry | null;
 }
 
 export interface RegionNode {
@@ -549,9 +557,10 @@ export interface CullResults {
 export class SceneGraph {
     regions = new Map<string, RegionNode>();
     requestManager = new RequestManager();
-    maxHighResChunks = 8;
     showBoundaries = false;
     mapMetadata: MapMetadata | null = null;
+    lod0Max = 0;
+    lod1Reconstruction = true;
     lod2GroupSize = 2;
     lod2DistortionThreshold = 15.0;
     lod2UpdateBudget = 4;
@@ -622,7 +631,7 @@ export class SceneGraph {
         this.notify();
     }
 
-    updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null, maxHeight?: number) {
+    updateImpostorStatus(rx: number, rz: number, status: ImpostorStatus, textures: any = null, maxHeight?: number, heightmaps: any = null) {
         const region = this.getOrCreateRegion(rx, rz);
         region.impostor.status = status;
         region.impostor.loaded = (status === 'READY');
@@ -631,6 +640,9 @@ export class SceneGraph {
         }
         if (maxHeight !== undefined) {
             region.impostor.maxHeight = maxHeight;
+        }
+        if (heightmaps) {
+            region.impostor.heightmaps = heightmaps;
         }
         if (status === 'READY') {
             const G = this.lod2GroupSize;
@@ -676,14 +688,14 @@ export class SceneGraph {
         allVisibleRegionlets.sort((a, b) => a.distSq - b.distSq);
 
         // 3. Define the target fetch set (top closest visible chunks, loaded or not)
-        const targetRegionlets = allVisibleRegionlets.slice(0, this.maxHighResChunks);
+        const targetRegionlets = allVisibleRegionlets.slice(0, this.lod0Max);
         const targetSet = new Set<RegionletNode>(targetRegionlets.map(x => x.rlet));
 
         // 4. Identify all visible chunks that are actually LOADED
         const loadedVisible = allVisibleRegionlets.filter(x => x.rlet.status === 'READY' || x.rlet.status === 'STREAM');
 
         // 5. Determine which chunks will actually be rendered (top closest loaded chunks)
-        const renderedChunks = loadedVisible.slice(0, this.maxHighResChunks);
+        const renderedChunks = loadedVisible.slice(0, this.lod0Max);
         const renderedChunkSet = new Set<RegionletNode>(renderedChunks.map(x => x.rlet));
 
         // 6. Decide rendering and fetching per region
@@ -785,7 +797,8 @@ export function render(
     impostorGeometry?: Geometry,
     impostorMaterial?: Material,
     lod2Geometry?: Geometry,
-    lod2Material?: Material
+    lod2Material?: Material,
+    lod1ReconstructMaterial?: Material
 ): boolean {
     const gl = context.gl;
 
@@ -904,7 +917,7 @@ export function render(
     });
 
     // Limit to rendering top chunks to match original behavior / performance target
-    const renderedChunks = culledChunks.slice(0, sceneGraph.maxHighResChunks);
+    const renderedChunks = culledChunks.slice(0, sceneGraph.lod0Max);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {
@@ -1001,15 +1014,7 @@ export function render(
         for (const lod of cullResults.impostors) {
             if (!lod.loaded || !lod.textures) continue;
 
-            bind(impostorMaterial, impostorGeometry);
-
-            impostorMaterial.uniformSetters.uCameraPosition(camera.position);
-
             const regionOffset = vec3.fromValues(lod.rx * 512, 0, lod.rz * 512);
-            impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
-
-            impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
-
             const chunkMaxY = new Float32Array([-1.0, -1.0, -1.0, -1.0]);
             const region = sceneGraph.getOrCreateRegion(lod.rx, lod.rz);
             for (let off = 0; off < 4; off++) {
@@ -1022,28 +1027,94 @@ export function render(
                     }
                 }
             }
-            if (impostorMaterial.uniformSetters.uChunkMaxY) {
-                impostorMaterial.uniformSetters.uChunkMaxY(chunkMaxY);
+
+            if (sceneGraph.lod1Reconstruction && lod1ReconstructMaterial) {
+                // Lazy reconstructed geometry generation
+                if (!lod.reconstructedGeometry && lod.heightmaps) {
+                    const { reconstructLOD1Geometry } = require('./lod1_reconstruction');
+                    lod.reconstructedGeometry = reconstructLOD1Geometry(gl, lod);
+                }
+
+                if (lod.reconstructedGeometry && lod.reconstructedGeometry.verts > 0) {
+                    bind(lod1ReconstructMaterial, lod.reconstructedGeometry);
+
+                    // Rebind attributes since geometry changes per region
+                    for (const [key, value] of Object.entries(lod.reconstructedGeometry.attributes)) {
+                        if (lod1ReconstructMaterial.attribSetters[key]) {
+                            lod1ReconstructMaterial.attribSetters[key](value);
+                        }
+                    }
+
+                    if (lod1ReconstructMaterial.uniformSetters.uCameraPosition) {
+                        lod1ReconstructMaterial.uniformSetters.uCameraPosition(camera.position);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.uRegionOffset) {
+                        lod1ReconstructMaterial.uniformSetters.uRegionOffset(regionOffset);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.uMaxHeight) {
+                        lod1ReconstructMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
+                    }
+
+                    if (lod1ReconstructMaterial.uniformSetters.uChunkMaxY) {
+                        lod1ReconstructMaterial.uniformSetters.uChunkMaxY(chunkMaxY);
+                    }
+
+                    const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
+                    if (lod1ReconstructMaterial.uniformSetters.modelViewMatrix) {
+                        lod1ReconstructMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
+                    }
+
+                    // Bind color textures only (no depth maps required for shading)
+                    const texs = lod.textures;
+                    if (lod1ReconstructMaterial.uniformSetters.texTopColor) {
+                        lod1ReconstructMaterial.uniformSetters.texTopColor(texs.texTopColor);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.texNorthColor) {
+                        lod1ReconstructMaterial.uniformSetters.texNorthColor(texs.texNorthColor);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.texSouthColor) {
+                        lod1ReconstructMaterial.uniformSetters.texSouthColor(texs.texSouthColor);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.texEastColor) {
+                        lod1ReconstructMaterial.uniformSetters.texEastColor(texs.texEastColor);
+                    }
+                    if (lod1ReconstructMaterial.uniformSetters.texWestColor) {
+                        lod1ReconstructMaterial.uniformSetters.texWestColor(texs.texWestColor);
+                    }
+
+                    gl.drawArrays(gl.TRIANGLES, 0, lod.reconstructedGeometry.verts);
+                }
+            } else {
+                // Original raymarching shader fallback
+                bind(impostorMaterial, impostorGeometry);
+
+                impostorMaterial.uniformSetters.uCameraPosition(camera.position);
+                impostorMaterial.uniformSetters.uRegionOffset(regionOffset);
+                impostorMaterial.uniformSetters.uMaxHeight(lod.maxHeight ?? 320.0);
+
+                if (impostorMaterial.uniformSetters.uChunkMaxY) {
+                    impostorMaterial.uniformSetters.uChunkMaxY(chunkMaxY);
+                }
+
+                const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
+                impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
+
+                // Bind both color and depth textures for DDA raymarching
+                const texs = lod.textures;
+                impostorMaterial.uniformSetters.texTop(texs.texTop);
+                impostorMaterial.uniformSetters.texNorth(texs.texNorth);
+                impostorMaterial.uniformSetters.texSouth(texs.texSouth);
+                impostorMaterial.uniformSetters.texEast(texs.texEast);
+                impostorMaterial.uniformSetters.texWest(texs.texWest);
+
+                impostorMaterial.uniformSetters.texTopColor(texs.texTopColor);
+                impostorMaterial.uniformSetters.texNorthColor(texs.texNorthColor);
+                impostorMaterial.uniformSetters.texSouthColor(texs.texSouthColor);
+                impostorMaterial.uniformSetters.texEastColor(texs.texEastColor);
+                impostorMaterial.uniformSetters.texWestColor(texs.texWestColor);
+
+                gl.drawArrays(gl.TRIANGLES, 0, impostorGeometry.verts);
             }
-
-            const modelViewMatrix = mat4.translate(mat4.create(), camera.getView(), regionOffset);
-            impostorMaterial.uniformSetters.modelViewMatrix(modelViewMatrix);
-
-            // Bind textures
-            const texs = lod.textures;
-            impostorMaterial.uniformSetters.texTop(texs.texTop);
-            impostorMaterial.uniformSetters.texNorth(texs.texNorth);
-            impostorMaterial.uniformSetters.texSouth(texs.texSouth);
-            impostorMaterial.uniformSetters.texEast(texs.texEast);
-            impostorMaterial.uniformSetters.texWest(texs.texWest);
-
-            impostorMaterial.uniformSetters.texTopColor(texs.texTopColor);
-            impostorMaterial.uniformSetters.texNorthColor(texs.texNorthColor);
-            impostorMaterial.uniformSetters.texSouthColor(texs.texSouthColor);
-            impostorMaterial.uniformSetters.texEastColor(texs.texEastColor);
-            impostorMaterial.uniformSetters.texWestColor(texs.texWestColor);
-
-            gl.drawArrays(gl.TRIANGLES, 0, impostorGeometry.verts);
         }
     }
 

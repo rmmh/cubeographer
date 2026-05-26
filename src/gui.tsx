@@ -42,13 +42,14 @@ export function setupGUI(
 
 function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
     const [collapsed, setCollapsed] = useState<boolean>(true);
-    const [maxHighResChunks, setMaxHighResChunks] = useState<number>(sceneGraph.maxHighResChunks);
+    const [maxHighResChunks, setMaxHighResChunks] = useState<number>(sceneGraph.lod0Max);
     const [inspectorMode, setInspectorMode] = useState<boolean>(false);
     const [showBoundaries, setShowBoundaries] = useState<boolean>(sceneGraph.showBoundaries);
     const [activeRegion, setActiveRegion] = useState<{ rx: number; rz: number } | null>(null);
     const [updateTick, setUpdateTick] = useState<number>(0);
     const [lod2StartDistance, setLod2StartDistance] = useState<number>(sceneGraph.lod2StartDistance);
     const [lod2UpdateBudget, setLod2UpdateBudget] = useState<number>(sceneGraph.lod2UpdateBudget);
+    const [lod1Reconstruction, setLod1Reconstruction] = useState<boolean>(sceneGraph.lod1Reconstruction);
 
     // Subscribe to SceneGraph updates to trigger GUI re-renders on streaming/loading changes
     useEffect(() => {
@@ -175,7 +176,7 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
     const handleSliderChange = (e: any) => {
         const val = parseInt(e.target.value, 10);
         setMaxHighResChunks(val);
-        sceneGraph.maxHighResChunks = val;
+        sceneGraph.lod0Max = val;
         render();
     };
 
@@ -191,6 +192,13 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         const checked = e.target.checked;
         setShowBoundaries(checked);
         sceneGraph.showBoundaries = checked;
+        render();
+    };
+
+    const handleLod1ReconstructionToggleChange = (e: any) => {
+        const checked = e.target.checked;
+        setLod1Reconstruction(checked);
+        sceneGraph.lod1Reconstruction = checked;
         render();
     };
 
@@ -289,6 +297,17 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                             />
                         </div>
                     )}
+                    <div className="switch-container">
+                        <span className="switch-label">LOD1 Reconstruction</span>
+                        <label className="premium-switch">
+                            <input
+                                type="checkbox"
+                                checked={lod1Reconstruction}
+                                onChange={handleLod1ReconstructionToggleChange}
+                            />
+                            <span className="switch-slider"></span>
+                        </label>
+                    </div>
                     <div className="debug-control-group">
                         <div className="debug-label-row">
                             <span>LOD2 Start Distance</span>

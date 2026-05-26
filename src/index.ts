@@ -12,6 +12,8 @@ const vertexShader = require('./cube_vertex.glsl');
 const fragmentShader = require('./cube_fragment.glsl');
 const lod1VertexShader = require('./lod1_vertex.glsl');
 const lod1FragmentShader = require('./lod1_fragment.glsl');
+const lod1ReconstructVertexShader = require('./lod1_reconstruct_vertex.glsl');
+const lod1ReconstructFragmentShader = require('./lod1_reconstruct_fragment.glsl');
 const lod2VertexShader = require('./lod2_vertex.glsl');
 const lod2FragmentShader = require('./lod2_fragment.glsl');
 import { Gunzip, gunzipSync } from 'fflate';
@@ -166,7 +168,7 @@ controls.maxDistance = space * 20;
 
 controls.getOrbitTarget = createOrbitTargetFinder(context, camera, sceneGraph, () => {
     context.renderToFBO = true;
-    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material);
+    renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material, lod1ReconstructMaterial);
     context.renderToFBO = false;
 });
 
@@ -620,7 +622,7 @@ function renderFrame() {
     mat4.copy(lastView, camera.view);
 
 
-    const hasPendingLOD2Updates = renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material);
+    const hasPendingLOD2Updates = renderer.render(context, camera, sceneGraph, layers, cube, impostorGeometry, lod1Material, impostorGeometry, lod2Material, lod1ReconstructMaterial);
 
     // Dynamic loading pass: trigger loads for any missing visible elements
     updateDynamicLoading();
@@ -694,6 +696,7 @@ async function* asyncIterableFromStream(stream: ReadableStream<Uint8Array>): Asy
 
 const impostorGeometry = makeImpostorGeometry(context.gl);
 const lod1Material = new renderer.Material(context.gl, lod1VertexShader, lod1FragmentShader);
+const lod1ReconstructMaterial = new renderer.Material(context.gl, lod1ReconstructVertexShader, lod1ReconstructFragmentShader);
 const lod2Material = new renderer.Material(context.gl, lod2VertexShader, lod2FragmentShader);
 
 function fetchRegion(x: number, z: number, off: number) {

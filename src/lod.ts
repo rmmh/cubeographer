@@ -36,7 +36,7 @@ function create2DTexture(gl: WebGL2RenderingContext, image: HTMLImageElement | I
     });
 }
 
-function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: ImageBitmap, isMin: boolean): { texture: WebGLTexture; maxHeight: number } {
+function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: ImageBitmap, isMin: boolean): { texture: WebGLTexture; maxHeight: number; pixels: Uint8Array } {
     const tex = gl.createTexture();
     if (!tex) throw new Error("Failed to create WebGL texture");
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -64,6 +64,8 @@ function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: ImageB
             maxVal = val;
         }
     }
+
+    const basePixels = lastPixels;
 
     const maxHeight = Math.min(320.0, Math.ceil(((maxVal + 2) / 255.0) * 320.0));
 
@@ -121,7 +123,7 @@ function createDepthTextureWithMipmaps(gl: WebGL2RenderingContext, image: ImageB
         mag: gl.NEAREST
     });
 
-    return { texture: tex, maxHeight };
+    return { texture: tex, maxHeight, pixels: basePixels };
 }
 
 export function fetchRegionLOD(
@@ -230,14 +232,16 @@ export function fetchRegionLOD(
 
                 const context = sceneGraph.context;
 
-                const getTex = (type: number, isDepth: boolean, isMin?: boolean): { texture: WebGLTexture; maxHeight?: number } => {
+                const getTex = (type: number, isDepth: boolean, isMin?: boolean): { texture: WebGLTexture; maxHeight?: number; pixels?: Uint8Array } => {
                     const idx = typeToImgIndex[type];
                     if (idx === undefined) {
+                        const size = type === 0 ? 256 * 256 : 256 * 160;
                         return {
                             texture: twgl.createTexture(context.gl, {
                                 src: [255, 255, 255, 255]
                             }),
-                            maxHeight: 0
+                            maxHeight: 0,
+                            pixels: new Uint8Array(size).fill(255)
                         };
                     }
                     const img = sideImgs[idx];
@@ -250,17 +254,30 @@ export function fetchRegionLOD(
                 };
 
                 const texTopResult = getTex(0, true, false);
+                const texNorthResult = getTex(2, true, false);
+                const texSouthResult = getTex(4, true, true);
+                const texEastResult = getTex(6, true, false);
+                const texWestResult = getTex(8, true, true);
+
                 const textures = {
                     texTopColor: create2DTexture(context.gl, topColorImg.value, false),
                     texTop: texTopResult.texture,
                     texNorthColor: getTex(1, false).texture,
-                    texNorth: getTex(2, true, false).texture,
+                    texNorth: texNorthResult.texture,
                     texSouthColor: getTex(3, false).texture,
-                    texSouth: getTex(4, true, true).texture,
+                    texSouth: texSouthResult.texture,
                     texEastColor: getTex(5, false).texture,
-                    texEast: getTex(6, true, false).texture,
+                    texEast: texEastResult.texture,
                     texWestColor: getTex(7, false).texture,
-                    texWest: getTex(8, true, true).texture
+                    texWest: texWestResult.texture
+                };
+
+                const heightmaps = {
+                    top: texTopResult.pixels!,
+                    north: texNorthResult.pixels!,
+                    south: texSouthResult.pixels!,
+                    east: texEastResult.pixels!,
+                    west: texWestResult.pixels!
                 };
 
                 const maxHeight = texTopResult.maxHeight ?? 320.0;
@@ -275,7 +292,7 @@ export function fetchRegionLOD(
                     topColorImg.value.close();
                 }
 
-                sceneGraph.updateImpostorStatus(rx, rz, 'READY', textures, maxHeight);
+                sceneGraph.updateImpostorStatus(rx, rz, 'READY', textures, maxHeight, heightmaps);
                 render();
             } catch (e) {
                 sceneGraph.updateImpostorStatus(rx, rz, 'ERROR');
