@@ -829,8 +829,8 @@ function fetchRegion(x: number, z: number, off: number) {
                             let visFaces = 0;
                             for (let i = 1; i < blockU32.length; i += 2) {
                                 const vis = blockU32[i] & 0x3F;
-                                visFaces += ((vis & 1) + ((vis >> 1) & 1) + ((vis >> 2) & 1) + 
-                                              ((vis >> 3) & 1) + ((vis >> 4) & 1) + ((vis >> 5) & 1));
+                                visFaces += ((vis & 1) + ((vis >> 1) & 1) + ((vis >> 2) & 1) +
+                                    ((vis >> 3) & 1) + ((vis >> 4) & 1) + ((vis >> 5) & 1));
                             }
 
                             const faceData = new Uint32Array(visFaces * 2);
@@ -838,7 +838,7 @@ function fetchRegion(x: number, z: number, off: number) {
 
                             for (let i = 0; i < blockU32.length; i += 2) {
                                 const attrX = blockU32[i];
-                                const attrY = blockU32[i+1];
+                                const attrY = blockU32[i + 1];
 
                                 const vis = attrY & 0x3F;
                                 if (vis === 0) continue;
@@ -912,22 +912,88 @@ function fetchRegion(x: number, z: number, off: number) {
 
 // fetchRegion(1,1,0,-1.2,-1.2);
 
-function fetchRange(xs: number, xe: number, zs: number, ze: number, angle: number, xo: number, zo: number, pad: number = 4) {
-    for (let o = 0; o < 4; o++) {
-        for (let x = xs; x <= xe; x++) {
-            for (let z = zs; z <= ze; z++) {
-                fetchRegion(x, z, o);
+function initializeCameraDynamically(allRegionsSet: Set<string>) {
+    let rxStart = 0;
+    let rzStart = 0;
+    let dir_x = 0;
+    let dir_z = -1;
+
+    if (allRegionsSet.size > 0) {
+        // Parse all regions
+        const parsedRegions: { rx: number; rz: number; distSq: number }[] = [];
+        for (const key of allRegionsSet) {
+            const [rxStr, rzStr] = key.split('.');
+            const rx = parseInt(rxStr, 10);
+            const rz = parseInt(rzStr, 10);
+            if (!isNaN(rx) && !isNaN(rz)) {
+                parsedRegions.push({ rx, rz, distSq: rx * rx + rz * rz });
+            }
+        }
+
+        if (parsedRegions.length > 0) {
+            // Find region closest to 0,0 with at least 2 regions padding on each side (if possible)
+            let bestRegion = parsedRegions[0];
+            let bestPadding = -1;
+            let bestDistSq = Infinity;
+
+            for (const r of parsedRegions) {
+                let paddingCount = 0;
+                for (let dx = -2; dx <= 2; dx++) {
+                    for (let dz = -2; dz <= 2; dz++) {
+                        if (allRegionsSet.has(`${r.rx + dx}.${r.rz + dz}`)) {
+                            paddingCount++;
+                        }
+                    }
+                }
+
+                // We want to maximize padding (up to 25)
+                // Primary key: higher paddingCount
+                // Secondary key: lower distSq (closer to 0,0)
+                if (paddingCount > bestPadding) {
+                    bestPadding = paddingCount;
+                    bestRegion = r;
+                    bestDistSq = r.distSq;
+                } else if (paddingCount === bestPadding) {
+                    if (r.distSq < bestDistSq) {
+                        bestRegion = r;
+                        bestDistSq = r.distSq;
+                    }
+                }
+            }
+
+            rxStart = bestRegion.rx;
+            rzStart = bestRegion.rz;
+
+            // Angle towards the majority of other regions
+            let sum_dx = 0;
+            let sum_dz = 0;
+            for (const r of parsedRegions) {
+                if (r.rx === rxStart && r.rz === rzStart) continue;
+                const dx = r.rx - rxStart;
+                const dz = r.rz - rzStart;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist > 0) {
+                    sum_dx += dx / dist;
+                    sum_dz += dz / dist;
+                }
+            }
+
+            const len = Math.sqrt(sum_dx * sum_dx + sum_dz * sum_dz);
+            if (len > 0) {
+                dir_x = sum_dx / len;
+                dir_z = sum_dz / len;
             }
         }
     }
-    // Fetch region LODs for a grid centered on the high-res area
-    for (let x = xs - pad; x <= xe + pad; x++) {
-        for (let z = zs - pad; z <= ze + pad; z++) {
-            fetchRegionLOD(x, z, sceneGraph, camera.position, render);
-        }
-    }
-    vec3.set(camera.position, xo * 512, 120, zo * 512);
-    vec3.add(controls.target, camera.position, vec3.rotateY(vec3.create(), vec3.fromValues(256, -40, 0), vec3.create(), angle * Math.PI / 180));
+
+    // Set camera position at the center of the selected starting region
+    const startX = rxStart * 512 + 256;
+    const startZ = rzStart * 512 + 256;
+    vec3.set(camera.position, startX, 120, startZ);
+
+    // Look towards the majority of other regions
+    const lookDir = vec3.fromValues(dir_x * 256, -40, dir_z * 256);
+    vec3.add(controls.target, camera.position, lookDir);
     controls.update();
 }
 
@@ -976,16 +1042,30 @@ fetch("textures/cuboid_metadata.bin.gz")
     });
 
 metadataLoadingPromise.then(() => {
-    const choice: string = 'greenfield';
-    switch (choice) {
-        case '2b2t': fetchRange(-129, -129, -11, -11, 0, -129, -11, 5); break;
-        case 'novitest': fetchRange(1, 1, 1, 1, 130, 1.3, 1.4); break;
-        case 'novigrad': fetchRange(0, 3, 0, 3, 130, 2.3, 3.4); break;
-        case 'greenfield': fetchRange(2, 2, 2, 2, 0, 0, 0, 15); break;
-        case 'hermit': fetchRange(-1, -1, -1, -1, 0, 0, 0); break;
-        case 'test': fetchRange(0, 0, 0, 0, 0, 0, 0); break;
-        default: case 'center': fetchRange(-1, 1, -1, 1, 90, 0, 0); break;
+    const meta = sceneGraph.mapMetadata;
+    const full = meta ? meta.full_regions : new Set<string>();
+    const lod = meta ? meta.lod_regions : new Set<string>();
+    const tile = meta ? meta.tile_regions : new Set<string>();
+
+    // Parse all regions into a single set of keys
+    const allRegions = new Set<string>([
+        ...full,
+        ...lod,
+        ...tile
+    ]);
+
+    // Pre-populate all region nodes in sceneGraph
+    for (const key of allRegions) {
+        const [rxStr, rzStr] = key.split('.');
+        const rx = parseInt(rxStr, 10);
+        const rz = parseInt(rzStr, 10);
+        if (!isNaN(rx) && !isNaN(rz)) {
+            sceneGraph.getOrCreateRegion(rx, rz);
+        }
     }
+
+    // Dynamically initialize camera position & direction
+    initializeCameraDynamically(allRegions);
 
     maybeSetCameraFromLocstring();
     updateDynamicLoading();
