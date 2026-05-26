@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,8 @@ import (
 type ReadRegionFunc func(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error)
 
 var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
+
+var KeepPartial = flag.Bool("keep-partial", false, "keep partial (proto) chunks instead of skipping them")
 
 func ParseRegionPath(path string) (int, int, error) {
 	m := regionMatchRE.FindStringSubmatch(path)
@@ -113,6 +116,7 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 	var zr io.ReadCloser
 	var zrr zlib.Resetter
 
+	skippedPartialCount := 0
 	for _, chunkNum := range seqChunks {
 		f.Seek(int64(offsets[chunkNum]>>8)*4096, os.SEEK_SET)
 		paddedLen := 4096 * int(offsets[chunkNum]&0xff)
@@ -226,7 +230,10 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 			continue
 		}
 		if chunkStatus != "" && (chunkStatus != "minecraft:full" && chunkStatus != "full") {
-			continue // skip proto-chunks
+			if !*KeepPartial {
+				skippedPartialCount++
+				continue // skip proto-chunks
+			}
 		}
 		if len(ys) == 25 && len(palettes[24]) > 1 && false {
 			// for pasting into https://www.brandonfowler.me/nbtreader/
@@ -332,6 +339,10 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 		if err != nil {
 			return cdata, err
 		}
+	}
+
+	if len(seqChunks) > 0 && skippedPartialCount == len(seqChunks) {
+		log.Printf("warning: all %d chunks in %s were skipped because they are partial/proto-chunks; run with -keep-partial to include them\n", skippedPartialCount, path)
 	}
 
 	return cdata, nil
