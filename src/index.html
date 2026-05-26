@@ -3,14 +3,239 @@
 
 <head>
     <meta charset="utf-8" />
-    <title>Cubeographer</title>
-    <link rel="stylesheet" href="index.css" />
+    <title>Cubeographer World Explorer</title>
+    <style>
+        :root {
+            --bg-color: #0b0c10;
+            --card-bg: #16171b;
+            --card-border: #24262d;
+            --text-main: #f5f5f7;
+            --text-sub: #a1a1a6;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            background: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 40px 20px;
+            box-sizing: border-box;
+        }
+
+        .container {
+            max-width: 1000px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+        }
+
+        header {
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin: 0 0 10px 0;
+            color: var(--text-main);
+            letter-spacing: -0.5px;
+        }
+
+        p.subtitle {
+            font-size: 16px;
+            color: var(--text-sub);
+            margin: 0;
+            font-weight: 400;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 180px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            text-decoration: none;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: #4b5563;
+            background: #1d1e24;
+        }
+
+        .card-content {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .world-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin: 0;
+            word-break: break-all;
+        }
+
+        .region-count {
+            font-size: 13px;
+            color: var(--text-sub);
+            font-weight: 500;
+        }
+
+        .badge {
+            align-self: flex-start;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 20px;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-overworld {
+            background: rgba(34, 197, 94, 0.1);
+            color: #4ade80;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+
+        .badge-nether {
+            background: rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .badge-end {
+            background: rgba(168, 85, 247, 0.1);
+            color: #d8b4fe;
+            border: 1px solid rgba(168, 85, 247, 0.2);
+        }
+
+        .badge-custom {
+            background: rgba(6, 182, 212, 0.1);
+            color: #67e8f9;
+            border: 1px solid rgba(6, 182, 212, 0.2);
+        }
+
+
+        footer {
+            margin-top: auto;
+            text-align: center;
+            padding-top: 40px;
+            font-size: 12px;
+            color: var(--text-sub);
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            width: 100%;
+        }
+    </style>
 </head>
 
 <body>
-    <canvas id="canvas"></canvas>
-    <div id="gui-root"></div>
-    <script src="index.js"></script>
+    <div class="container">
+        <header>
+            <h1>Cubeographer World Explorer</h1>
+            <p class="subtitle">Select a world dimension below to launch the interactive 3D map viewer.</p>
+        </header>
+        <div class="grid" id="grid">
+            <div style="color: var(--text-sub); grid-column: 1/-1; text-align: center; font-style: italic;">Loading
+                worlds...</div>
+        </div>
+    </div>
+    <script>
+        fetch('worlds.json')
+            .then(response => response.json())
+            .then(worlds => {
+                const grid = document.getElementById('grid');
+                grid.innerHTML = '';
+
+                if (worlds.length === 0) {
+                    grid.innerHTML = '<div style="color: var(--text-sub); grid-column: 1/-1; text-align: center; font-style: italic;">No worlds found.</div>';
+                    return;
+                }
+                worlds.forEach(world => {
+                    let displayName = world.name;
+                    let dimensionLabel = 'Overworld';
+                    let badgeClass = 'badge-overworld';
+
+                    if (world.dimension === 'nether') {
+                        dimensionLabel = 'Nether';
+                        badgeClass = 'badge-nether';
+                        displayName = world.name.endsWith('_nether') ? world.name.slice(0, -7) : world.name;
+                    } else if (world.dimension === 'end') {
+                        dimensionLabel = 'The End';
+                        badgeClass = 'badge-end';
+                        displayName = world.name.endsWith('_end') ? world.name.slice(0, -4) : world.name;
+                    } else if (world.dimension !== 'overworld') {
+                        dimensionLabel = world.dimension.charAt(0).toUpperCase() + world.dimension.slice(1);
+                        badgeClass = 'badge-custom';
+                        const suffix = '_' + world.dimension;
+                        displayName = world.name.endsWith(suffix) ? world.name.slice(0, -suffix.length) : world.name;
+                    }
+
+                    const card = document.createElement('a');
+                    card.className = 'card';
+                    card.href = `${world.name}/`;
+
+                    const cardContent = document.createElement('div');
+                    cardContent.className = 'card-content';
+
+                    const badge = document.createElement('div');
+                    badge.className = `badge ${badgeClass}`;
+                    badge.textContent = dimensionLabel;
+
+                    const title = document.createElement('h2');
+                    title.className = 'world-name';
+                    title.textContent = displayName;
+
+                    cardContent.appendChild(badge);
+                    cardContent.appendChild(title);
+
+                    const regionText = document.createElement('div');
+                    regionText.className = 'region-count';
+                    const parts = [];
+                    if (world.fullRegionsCount != world.totalRegionsCount) parts.push(`${world.fullRegionsCount} full`);
+                    if (world.lodRegionsCount > 0) parts.push(`${world.lodRegionsCount} LOD`);
+                    if (world.tileRegionsCount > 0) parts.push(`${world.tileRegionsCount} tile`);
+
+                    if (parts.length > 0) {
+                        regionText.textContent = `${world.totalRegionsCount || 0} regions (${parts.join(', ')})`;
+                    } else {
+                        regionText.textContent = `${world.totalRegionsCount || 0} regions`;
+                    }
+                    cardContent.appendChild(regionText);
+
+                    card.appendChild(cardContent);
+
+                    grid.appendChild(card);
+                });
+            })
+            .catch(err => {
+                console.error('Error fetching worlds:', err);
+                const grid = document.getElementById('grid');
+                grid.innerHTML = '<div style="color: #ff4757; grid-column: 1/-1; text-align: center; font-style: italic;">Error loading worlds.</div>';
+            });
+    </script>
 </body>
 
 </html>

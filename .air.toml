@@ -3,7 +3,7 @@ testdata_dir = "testdata"
 tmp_dir = "tmp"
 
 [build]
-  args_bin = ["-gendebug", "force", "maps/hermitcraft10/region/", "dist/"]
+  args_bin = ["-gendebug", "force", "maps/", "dist/"]
   bin = "./tmp/cubeographer"
   cmd = "go build -o ./tmp/cubeographer ./go/"
   delay = 1000

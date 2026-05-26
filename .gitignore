@@ -6,3 +6,6 @@ overviewer
 maps
 *.jar
 cubeographer
+scripts/generate_base_worlds/*/
+go/dist
+

@@ -8,121 +8,147 @@ import (
 	"path"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
+
+	"github.com/maruel/natural"
 )
 
+type SpaceSeparatedSlice []string
+
+func (s SpaceSeparatedSlice) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strings.Join(s, " "))
+}
+
+func (s *SpaceSeparatedSlice) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	if str == "" {
+		*s = nil
+		return nil
+	}
+	*s = strings.Fields(str)
+	return nil
+}
+
+func (s SpaceSeparatedSlice) Sort() {
+	sort.Slice(s, func(i, j int) bool {
+		return natural.Less(s[i], s[j])
+	})
+}
+
 type MapMetadata struct {
-	FullRegions string `json:"full_regions"`
-	LodRegions  string `json:"lod_regions"`
-	TileRegions string `json:"tile_regions"`
+	FullRegions SpaceSeparatedSlice `json:"full_regions"`
+	LodRegions  SpaceSeparatedSlice `json:"lod_regions"`
+	TileRegions SpaceSeparatedSlice `json:"tile_regions"`
 }
 
-type regionCoord struct {
-	rx, rz int
+func ReadMapMetadata(metadataPath string) (MapMetadata, error) {
+	var meta MapMetadata
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return meta, err
+	}
+	err = json.Unmarshal(data, &meta)
+	return meta, err
 }
 
-func WriteMapMetadata(mapDir string, mode string) error {
-	tilesDir := path.Join(mapDir, "tiles")
-	lodsDir := path.Join(mapDir, "lods")
-
+func WriteMapMetadata(mapDir string, regionDir string, mode string) error {
 	if mode == "" {
 		mode = "full"
 	}
 
-	// TODO: make this do the right thing for live server by
-	// scanning for region files and reporting them all as full.
+	var metadata MapMetadata
 
-	// Read tiles directory to find all region files
-	files, err := os.ReadDir(tilesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// If tiles directory doesn't exist, write empty metadata
-			metadata := MapMetadata{
-				FullRegions: "",
-				LodRegions:  "",
-				TileRegions: "",
+	if regionDir != "" {
+		// Live server mode: scan the regionDir for .mca files
+		files, err := os.ReadDir(regionDir)
+		if err != nil {
+			return err
+		}
+
+		regionRe := regexp.MustCompile(`^r\.(-?\d+)\.(-?\d+)\.mca$`)
+
+		for _, file := range files {
+			if file.IsDir() {
+				continue
 			}
-			return writeMetadataFile(mapDir, metadata)
-		}
-		return err
-	}
+			m := regionRe.FindStringSubmatch(file.Name())
+			if len(m) != 3 {
+				continue
+			}
 
-	regionRe := regexp.MustCompile(`^r\.(-?\d+)\.(-?\d+)\.png$`)
-
-	var fullList []regionCoord
-	var lodList []regionCoord
-	var tileList []regionCoord
-
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		m := regionRe.FindStringSubmatch(file.Name())
-		if len(m) != 3 {
-			continue
-		}
-		rx, err1 := strconv.Atoi(m[1])
-		rz, err2 := strconv.Atoi(m[2])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-
-		coord := regionCoord{rx: rx, rz: rz}
-
-		if mode == "tile" {
-			// In tile mode, everything is a tile region
-			tileList = append(tileList, coord)
-		} else {
-			hasBin := fileExists(path.Join(lodsDir, fmt.Sprintf("r.%d.%d.bin", rx, rz)))
-
-			if mode == "lod" {
-				// In lod mode, never classify as full
-				if hasBin {
-					lodList = append(lodList, coord)
-				} else {
-					tileList = append(tileList, coord)
-				}
+			coordStr := m[1] + "." + m[2]
+			if mode == "tile" {
+				metadata.TileRegions = append(metadata.TileRegions, coordStr)
+			} else if mode == "lod" {
+				metadata.LodRegions = append(metadata.LodRegions, coordStr)
 			} else {
-				// full mode: check for cmt too
-				hasCmt := fileExists(path.Join(mapDir, fmt.Sprintf("r.%d.%d.0.cmt", rx, rz)))
-				if hasCmt && hasBin {
-					fullList = append(fullList, coord)
-				} else if hasBin {
-					lodList = append(lodList, coord)
+				metadata.FullRegions = append(metadata.FullRegions, coordStr)
+			}
+		}
+	} else {
+		tilesDir := path.Join(mapDir, "tiles")
+		lodsDir := path.Join(mapDir, "lods")
+
+		// Read tiles directory to find all region files
+		files, err := os.ReadDir(tilesDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// If tiles directory doesn't exist, write empty metadata
+				return writeMetadataFile(mapDir, metadata)
+			}
+			return err
+		}
+
+		regionRe := regexp.MustCompile(`^r\.(-?\d+)\.(-?\d+)\.png$`)
+
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			m := regionRe.FindStringSubmatch(file.Name())
+			if len(m) != 3 {
+				continue
+			}
+
+			coordStr := m[1] + "." + m[2]
+
+			if mode == "tile" {
+				// In tile mode, everything is a tile region
+				metadata.TileRegions = append(metadata.TileRegions, coordStr)
+			} else {
+				hasBin := fileExists(path.Join(lodsDir, fmt.Sprintf("r.%s.%s.bin", m[1], m[2])))
+
+				if mode == "lod" {
+					// In lod mode, never classify as full
+					if hasBin {
+						metadata.LodRegions = append(metadata.LodRegions, coordStr)
+					} else {
+						metadata.TileRegions = append(metadata.TileRegions, coordStr)
+					}
 				} else {
-					tileList = append(tileList, coord)
+					// full mode: check for cmt too
+					hasCmt := fileExists(path.Join(mapDir, fmt.Sprintf("r.%s.%s.0.cmt", m[1], m[2])))
+					if hasCmt && hasBin {
+						metadata.FullRegions = append(metadata.FullRegions, coordStr)
+					} else if hasBin {
+						metadata.LodRegions = append(metadata.LodRegions, coordStr)
+					} else {
+						metadata.TileRegions = append(metadata.TileRegions, coordStr)
+					}
 				}
 			}
 		}
 	}
 
-	// Sort helper to ensure deterministic output
-	sortCoords := func(coords []regionCoord) string {
-		sort.Slice(coords, func(i, j int) bool {
-			if coords[i].rx != coords[j].rx {
-				return coords[i].rx < coords[j].rx
-			}
-			return coords[i].rz < coords[j].rz
-		})
-		var sb strings.Builder
-		for i, coord := range coords {
-			if i > 0 {
-				sb.WriteByte(' ')
-			}
-			sb.WriteString(fmt.Sprintf("%d.%d", coord.rx, coord.rz))
-		}
-		return sb.String()
-	}
-
-	metadata := MapMetadata{
-		FullRegions: sortCoords(fullList),
-		LodRegions:  sortCoords(lodList),
-		TileRegions: sortCoords(tileList),
-	}
+	metadata.FullRegions.Sort()
+	metadata.LodRegions.Sort()
+	metadata.TileRegions.Sort()
 
 	log.Printf("Generated map metadata for %s (mode=%s): full=%d, lod=%d, tile=%d",
-		mapDir, mode, len(fullList), len(lodList), len(tileList))
+		mapDir, mode, len(metadata.FullRegions), len(metadata.LodRegions), len(metadata.TileRegions))
 
 	return writeMetadataFile(mapDir, metadata)
 }

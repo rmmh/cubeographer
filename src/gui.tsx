@@ -284,7 +284,7 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                         <div className="debug-control-group">
                             <div className="debug-label-row">
                                 <span>Max LOD0</span>
-                                <span className="debug-badge">{maxHighResChunks}</span>
+                                <span className="debug-badge">{maxHighResChunks} = {maxHighResChunks * 256} chunks</span>
                             </div>
                             <input
                                 type="range"

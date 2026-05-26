@@ -23,6 +23,10 @@ var genDebug = flag.String("gendebug", "", "debug specific block name, \"all\", 
 
 func generate(outDir string) {
 	fmt.Println("generating textures")
+	err := os.MkdirAll(outDir, 0755)
+	if err != nil {
+		log.Fatal("unable to make directory: " + err.Error())
+	}
 	jarPath := path.Join(outDir, "client.jar")
 	if *clientJarPath != "" {
 		if _, err := os.Stat(*clientJarPath); err == nil {
@@ -33,7 +37,7 @@ func generate(outDir string) {
 		fmt.Println("downloading minecraft client jar")
 		err := rp.DownloadMinecraftJar(jarPath, *clientJarVersion)
 		if err != nil {
-			fmt.Println("unable to downlaod minecraft jar:", err)
+			fmt.Println("unable to download minecraft jar:", err)
 		}
 	}
 	jar, err := zip.OpenReader(jarPath)

@@ -26,6 +26,21 @@ import { setupGUI } from './gui';
 
 DEBUG && new EventSource('/esbuild').addEventListener('change', () => location.reload());
 
+let assetPrefix = "";
+if ((window as any).ASSET_PREFIX !== undefined) {
+    assetPrefix = (window as any).ASSET_PREFIX;
+} else {
+    const scripts = document.getElementsByTagName("script");
+    for (let i = 0; i < scripts.length; i++) {
+        const src = scripts[i].getAttribute("src");
+        if (src && src.includes("index.js")) {
+            const idx = src.indexOf("index.js");
+            assetPrefix = src.substring(0, idx);
+            break;
+        }
+    }
+}
+
 const context = new renderer.Context(document.querySelector('#canvas'));
 context.setSize(window.innerWidth, window.innerHeight);
 
@@ -584,12 +599,12 @@ let cube = makeCube();
 
 const layerNames = ["CUBE", "VOXEL", "CROSS", "CROP", "CUBOID", "CUBE_FALLBACK"]
 let layers = [
-    makeCubeLayer("CUBE", "textures/atlas0.png"),
-    makeCubeLayer("VOXEL", "textures/atlas1.png", { VOXEL: 1 }),
-    makeCrossLayer("CROSS", "textures/atlas2.png", { CROSS: 1 }),
-    makeCropLayer("CROP", "textures/atlas3.png", { CROSS: 1 }),
-    makeCubeLayer("CUBOID", "textures/atlas4.png", { CUBOID: 1 }),
-    makeCubeLayer("CUBE_FALLBACK", "textures/atlas5.png", { WATER_ID: 1, FALLBACK: 1 })
+    makeCubeLayer("CUBE", assetPrefix + "textures/atlas0.png"),
+    makeCubeLayer("VOXEL", assetPrefix + "textures/atlas1.png", { VOXEL: 1 }),
+    makeCrossLayer("CROSS", assetPrefix + "textures/atlas2.png", { CROSS: 1 }),
+    makeCropLayer("CROP", assetPrefix + "textures/atlas3.png", { CROSS: 1 }),
+    makeCubeLayer("CUBOID", assetPrefix + "textures/atlas4.png", { CUBOID: 1 }),
+    makeCubeLayer("CUBE_FALLBACK", assetPrefix + "textures/atlas5.png", { WATER_ID: 1, FALLBACK: 1 })
 ];
 
 let willRender = false;
@@ -1031,7 +1046,7 @@ const cuboidDataTexture = twgl.createTexture(gl, {
 context.cuboidDataTex = cuboidDataTexture;
 context.cuboidTextureData = cuboidTextureData;
 
-fetch("textures/cuboid_metadata.bin.gz")
+fetch(assetPrefix + "textures/cuboid_metadata.bin.gz")
     .then(r => r.arrayBuffer())
     .then(arrayBuffer => {
         const decompressed = gunzipSync(new Uint8Array(arrayBuffer));

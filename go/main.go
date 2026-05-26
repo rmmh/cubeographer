@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/rmmh/cubeographer/go/region"
@@ -27,14 +28,53 @@ func makeBlockMapper(outDir string) (*region.BlockMapper, error) {
 	return region.LoadBlockMapper(blockmeta)
 }
 
-func convert(numProcs int, regionDir, outDir string, filters []string, prune bool, mode string) {
-	files, err := os.ReadDir(regionDir)
+func writeAssetIfMissing(outDir, filename string) {
+	targetPath := path.Join(outDir, filename)
+	if _, err := os.Stat(targetPath); err == nil {
+		// File already exists, don't overwrite
+		return
+	}
+
+	data, err := distFS.ReadFile(path.Join("dist", filename))
+	if err != nil {
+		log.Printf("warning: failed to read embedded asset %s: %v", filename, err)
+		return
+	}
+
+	if err := os.MkdirAll(path.Dir(targetPath), 0755); err != nil {
+		log.Printf("error creating directory for %s: %v", filename, err)
+		return
+	}
+
+	if err := os.WriteFile(targetPath, data, 0644); err != nil {
+		log.Printf("error writing asset %s: %v", filename, err)
+	} else {
+		log.Printf("extracted embedded asset %s -> %s", filename, targetPath)
+	}
+}
+
+func convert(numProcs int, inputDir, outDir string, filters []string, prune bool, mode string) {
+	maps, err := findMaps(inputDir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+	if len(maps) == 0 {
+		log.Fatalf("No maps found in %s", inputDir)
+	}
 
-	dataDir := path.Join(outDir, "..")
+	// Extract standard assets if missing
+	writeAssetIfMissing(outDir, "index.js")
+	writeAssetIfMissing(outDir, "index.css")
+	writeAssetIfMissing(outDir, "index.html")
+
+	dataDir := outDir
+	if _, err := os.Stat(path.Join(outDir, "blockmeta.json")); err != nil {
+		parentDir := path.Join(outDir, "..")
+		if _, errParent := os.Stat(path.Join(parentDir, "blockmeta.json")); errParent == nil {
+			dataDir = parentDir
+		}
+	}
+
 	bm, err := makeBlockMapper(dataDir)
 	if err != nil || *genDebug == "force" {
 		log.Println("regenerating block mapping")
@@ -45,60 +85,120 @@ func convert(numProcs int, regionDir, outDir string, filters []string, prune boo
 		}
 	}
 
-	work := make(chan fs.FileInfo)
-	var wg sync.WaitGroup
-	for i := 0; i < numProcs; i++ {
-		go func() {
-			for file := range work {
-				err = scanRegion(&scanRegionConfig{
-					dir:    regionDir,
-					outdir: outDir,
-					file:   file.Name(),
-					bm:     bm,
-					prune:  prune,
-					debug:  *debugFlag,
-					mode:   mode,
-				})
-				if err != nil {
-					log.Fatal("error converting ", file.Name(), ": ", err)
-				}
-				wg.Done()
-			}
-		}()
-	}
-
-	filtersRe := lo.Map(filters, func(f string, idx int) *regexp.Regexp {
-		return regexp.MustCompile(f)
-	})
-
-	for _, file := range files {
-		if len(filters) > 0 {
-			good := 0
-			for _, filter := range filtersRe {
-				if filter.MatchString(file.Name()) {
-					good++
-				}
-			}
-			if good != len(filters) {
-				continue
-			}
+	for _, m := range maps {
+		var targetOutDir string
+		if m.Name == "" {
+			targetOutDir = outDir
+		} else {
+			targetOutDir = path.Join(outDir, m.Name, "map")
 		}
-		info, err := file.Info()
+
+		log.Printf("Converting map %q (%s) -> %s", m.Name, m.RegionDir, targetOutDir)
+
+		files, err := os.ReadDir(m.RegionDir)
 		if err != nil {
-			log.Println("error getting file info: ", file.Name(), err)
-		}
-		if info.Size() == 0 || info.IsDir() {
+			log.Printf("error reading region dir %s: %v", m.RegionDir, err)
 			continue
 		}
-		wg.Add(1)
-		work <- info
+		sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+
+		work := make(chan fs.FileInfo)
+		var wg sync.WaitGroup
+		for i := 0; i < numProcs; i++ {
+			go func() {
+				for file := range work {
+					err = scanRegion(&scanRegionConfig{
+						dir:    m.RegionDir,
+						outdir: targetOutDir,
+						file:   file.Name(),
+						bm:     bm,
+						prune:  prune,
+						debug:  *debugFlag,
+						mode:   mode,
+					})
+					if err != nil {
+						log.Fatal("error converting ", file.Name(), ": ", err)
+					}
+					wg.Done()
+				}
+			}()
+		}
+
+		filtersRe := lo.Map(filters, func(f string, idx int) *regexp.Regexp {
+			return regexp.MustCompile(f)
+		})
+
+		for _, file := range files {
+			if len(filters) > 0 {
+				good := 0
+				for _, filter := range filtersRe {
+					if filter.MatchString(file.Name()) {
+						good++
+					}
+				}
+				if good != len(filters) {
+					continue
+				}
+			}
+			info, err := file.Info()
+			if err != nil {
+				log.Println("error getting file info: ", file.Name(), err)
+			}
+			if info.Size() == 0 || info.IsDir() {
+				continue
+			}
+			wg.Add(1)
+			work <- info
+		}
+		close(work)
+		wg.Wait()
+
+		log.Printf("generating map metadata for %q...", m.Name)
+		if err := WriteMapMetadata(targetOutDir, "", mode); err != nil {
+			log.Println("error writing map metadata:", err)
+		}
+
+		// Copy map.html into each map's folder as index.html
+		mapHtmlPath := path.Join(dataDir, "map.html")
+		var targetIndexHtml string
+		if m.Name == "" {
+			targetIndexHtml = path.Join(outDir, "index.html")
+		} else {
+			targetIndexHtml = path.Join(outDir, m.Name, "index.html")
+		}
+
+		var mapHtmlData []byte
+		if data, err := os.ReadFile(mapHtmlPath); err == nil {
+			mapHtmlData = data
+		} else {
+			// Fallback to embedded map.html
+			if data, err := distFS.ReadFile("dist/map.html"); err == nil {
+				mapHtmlData = data
+			} else {
+				log.Printf("warning: map.html not found on disk at %s or embedded: %v", mapHtmlPath, err)
+			}
+		}
+
+		if len(mapHtmlData) > 0 {
+			os.MkdirAll(path.Dir(targetIndexHtml), 0755)
+			content := string(mapHtmlData)
+			if m.Name != "" {
+				content = strings.Replace(content, `href="index.css"`, `href="../index.css"`, 1)
+				content = strings.Replace(content, `src="index.js"`, `src="../index.js"`, 1)
+				content = strings.Replace(content, `<head>`, "<head>\n    <script>window.ASSET_PREFIX = \"../\";</script>", 1)
+			}
+			if err := os.WriteFile(targetIndexHtml, []byte(content), 0644); err != nil {
+				log.Println("error writing index.html for map:", err)
+			}
+		}
 	}
-	wg.Wait()
-	log.Println("generating map metadata...")
-	if err := WriteMapMetadata(outDir, mode); err != nil {
-		log.Println("error writing map metadata:", err)
+
+	log.Printf("writing worlds.json...")
+	if err := writeWorldsJSON(outDir, maps); err != nil {
+		log.Println("error writing worlds.json:", err)
 	}
 }
+
 
 func usage() {
 	fmt.Println("usage: prog <regiondir> <outputdir> [filterstrings]")

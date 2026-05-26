@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -33,6 +34,7 @@ type server struct {
 	dataDir    string
 	pruneCaves bool
 	mode       string
+	maps       []minecraftMap
 
 	binaryTime time.Time
 	bm         *region.BlockMapper
@@ -43,13 +45,46 @@ type server struct {
 	workLock sync.Mutex
 }
 
+func (s *server) serveFile(w http.ResponseWriter, r *http.Request, filename string) {
+	// 1. Try to serve from the local disk directory
+	diskPath := path.Join(s.dataDir, filename)
+	if _, err := os.Stat(diskPath); err == nil {
+		http.ServeFile(w, r, diskPath)
+		return
+	}
+
+	// 2. Fall back to serving from the embedded filesystem
+	subFS, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	fileServer := http.FileServer(http.FS(subFS))
+	// Adjust the URL path to match the root of subFS
+	r.URL.Path = "/" + filename
+	fileServer.ServeHTTP(w, r)
+}
+
 func (s *server) indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Cache-Control", "no-cache")
-	http.ServeFile(w, r, path.Join(s.dataDir, "index.html"))
+	vars := mux.Vars(r)
+	world := vars["world"]
+
+	if world != "" {
+		s.serveFile(w, r, "map.html")
+	} else {
+		if _, hasRoot := s.regionDir[""]; hasRoot {
+			s.serveFile(w, r, "map.html")
+		} else {
+			s.serveFile(w, r, "index.html")
+		}
+	}
 }
 
 func (s *server) staticHandler(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, path.Join(s.dataDir, r.URL.Path))
+	filename := strings.TrimPrefix(r.URL.Path, "/")
+	s.serveFile(w, r, filename)
 }
 
 func (s *server) isStale(r string) bool {
@@ -116,6 +151,36 @@ func (s *server) awaitUpdate(filename string) {
 }
 
 func (s *server) mapHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	world := vars["world"]
+	filePath := vars["path"]
+
+	if filePath == "metadata.json" {
+		mDir := path.Join(s.dataDir, world, "map")
+		metadataPath := path.Join(mDir, "metadata.json")
+		regionDirPath := s.regionDir[world]
+
+		stale := true
+		if metaStat, err := os.Stat(metadataPath); err == nil {
+			if regionStat, err := os.Stat(regionDirPath); err == nil {
+				if !regionStat.ModTime().After(metaStat.ModTime()) && s.binaryTime.Before(metaStat.ModTime()) {
+					stale = false
+				}
+			}
+		}
+
+		if stale {
+			log.Printf("generating map metadata on demand for world %q...", world)
+			if err := WriteMapMetadata(mDir, regionDirPath, s.mode); err != nil {
+				log.Printf("error writing map metadata for world %q: %v", world, err)
+			}
+			// Update worlds.json with new region counts
+			if err := writeWorldsJSON(s.dataDir, s.maps); err != nil {
+				log.Printf("error writing worlds.json on demand: %v", err)
+			}
+		}
+	}
+
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && strings.HasSuffix(r.URL.Path, ".cmt") {
 		w.Header().Add("Content-Encoding", "gzip")
 	}
@@ -152,15 +217,28 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode
 		log.Fatal(err)
 	}
 
+	maps, err := findMaps(regionDir)
+	if err != nil {
+		log.Fatalf("error finding maps: %v", err)
+	}
+
+	log.Printf("Discovered %d maps in %s:", len(maps), regionDir)
+	regDirs := make(map[string]string)
+	for _, m := range maps {
+		log.Printf("  - %q -> %s (dim=%s)", m.Name, m.RegionDir, m.Dimension)
+		regDirs[m.Name] = m.RegionDir
+	}
+
 	r := mux.NewRouter()
 	s := &server{
-		regionDir: map[string]string{"": regionDir},
+		regionDir: regDirs,
 		readRegion: map[string]region.ReadRegionFunc{
 			"test": region.FakeReadRegion,
 		},
 		dataDir:    dataDir,
 		pruneCaves: pruneCaves,
 		mode:       mode,
+		maps:       maps,
 		bm:         bm,
 		binaryTime: binaryStat.ModTime(),
 		workQueue:  make(chan *workItem),
@@ -168,13 +246,15 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode
 	}
 
 	for w := range s.regionDir {
-		mDir := path.Join(dataDir, w, "map")
-		if _, err := os.Stat(mDir); err == nil {
-			log.Printf("generating map metadata for world %q...", w)
-			if err := WriteMapMetadata(mDir, s.mode); err != nil {
-				log.Printf("error writing map metadata for world %q: %v", w, err)
-			}
+		log.Printf("generating map metadata for world %q...", w)
+		if err := WriteMapMetadata(path.Join(dataDir, w, "map"), s.regionDir[w], s.mode); err != nil {
+			log.Printf("error writing map metadata for world %q: %v", w, err)
 		}
+	}
+
+	log.Printf("writing worlds.json...")
+	if err := writeWorldsJSON(dataDir, s.maps); err != nil {
+		log.Println("error writing worlds.json:", err)
 	}
 
 	for i := 0; i < numProcs; i++ {
@@ -182,6 +262,7 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode
 	}
 
 	r.HandleFunc("/", s.indexHandler)
+	r.HandleFunc("/worlds.json", s.staticHandler)
 	r.HandleFunc("/index.css", s.staticHandler)
 	r.HandleFunc("/index.js", s.staticHandler)
 	r.HandleFunc("/textures/{texture}", s.staticHandler)
