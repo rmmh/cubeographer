@@ -68,50 +68,49 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
 
     const cullResults = sceneGraph.lastCullResults;
     if (cullResults) {
-        if (cullResults.chunks) {
-            for (const chunk of cullResults.chunks) {
-                if (chunk.layers) {
-                    for (const layerAttrib of Object.values(chunk.layers)) {
+        const renderedChunks = new Set(cullResults.chunks);
+        const renderedLod1 = new Set(cullResults.impostors);
+        const renderedLod2 = new Set(cullResults.lod2Groups);
+
+        for (const region of sceneGraph.regions.values()) {
+            // LOD0 total
+            for (const rlet of region.regionlets) {
+                if (rlet.chunk && rlet.chunk.layers) {
+                    let size = 0;
+                    for (const layerAttrib of Object.values(rlet.chunk.layers)) {
                         if (layerAttrib && layerAttrib.size > 0) {
-                            renderedL0 += layerAttrib.size * 8;
+                            size += layerAttrib.size * 8;
                         }
                     }
-                }
-            }
-        }
-        if (cullResults.impostors) {
-            renderedL1 = cullResults.impostors.length * 1222429;
-        }
-        if (cullResults.lod2Groups) {
-            for (const group of cullResults.lod2Groups) {
-                if (group.fbo) {
-                    renderedL2 += group.fbo.width * group.fbo.height * 8;
-                }
-            }
-        }
-    }
-
-    for (const region of sceneGraph.regions.values()) {
-        // LOD0 total
-        for (const rlet of region.regionlets) {
-            if (rlet.chunk && rlet.chunk.layers) {
-                for (const layerAttrib of Object.values(rlet.chunk.layers)) {
-                    if (layerAttrib && layerAttrib.size > 0) {
-                        totalL0 += layerAttrib.size * 8;
+                    totalL0 += size;
+                    if (renderedChunks.has(rlet.chunk)) {
+                        renderedL0 += size;
                     }
                 }
             }
+            // LOD1 total
+            if (region.impostor && region.impostor.status === 'READY') {
+                let size = 0;
+                for (const h of Object.values(region.impostor.heightmaps)) {
+                    size += h.length;
+                }
+                totalL1 += size;
+                if (renderedLod1.has(region.impostor)) {
+                    renderedL1 += size;
+                }
+            }
         }
-        // LOD1 total
-        if (region.impostor && region.impostor.status === 'READY') {
-            totalL1 += 1222429;
-        }
-    }
 
-    if (sceneGraph.lod2Manager && sceneGraph.lod2Manager.groups) {
-        for (const group of sceneGraph.lod2Manager.groups.values()) {
-            if (group.fbo) {
-                totalL2 += group.fbo.width * group.fbo.height * 8;
+        if (sceneGraph.lod2Manager && sceneGraph.lod2Manager.groups) {
+            for (const group of sceneGraph.lod2Manager.groups.values()) {
+                let size = 0;
+                if (group.fbo) {
+                    size = group.fbo.width * group.fbo.height * 10;
+                }
+                totalL2 += size;
+                if (renderedLod2.has(group)) {
+                    renderedL2 += size;
+                }
             }
         }
     }
@@ -298,7 +297,7 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                         </div>
                     )}
                     <div className="switch-container">
-                        <span className="switch-label">LOD1 Reconstruction</span>
+                        <span className="switch-label">LOD1 Mesh Reconstruction</span>
                         <label className="premium-switch">
                             <input
                                 type="checkbox"

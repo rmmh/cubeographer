@@ -19,7 +19,7 @@ void main() {
     // Convert from voxel local [0..256, 0..160, 0..256] to region world [0..512, 0..320, 0..512]
     vec3 scaledPos;
     scaledPos.x = position.x * 2.0;
-    scaledPos.y = position.y * (uMaxHeight / 160.0);
+    scaledPos.y = position.y * 2.0;
     scaledPos.z = position.z * 2.0;
 
     vLocalPos = scaledPos / vec3(512.0, 320.0, 512.0);

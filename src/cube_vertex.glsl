@@ -104,7 +104,7 @@ void main()	{
     vColor = vec4(unpackColor(blockId, useColor) * vec3(light), 1.0);
     vNormal = normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position + unpackedPos, 1.0 );
-    vTexCoord = vec2(uv.x, uv.y);
+    vTexCoord = vec2(uv.x, 1.0 - uv.y);
     vTexLayer = blockId;
 #else
 #ifdef CUBOID

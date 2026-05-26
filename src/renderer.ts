@@ -559,8 +559,8 @@ export class SceneGraph {
     requestManager = new RequestManager();
     showBoundaries = false;
     mapMetadata: MapMetadata | null = null;
-    lod0Max = 0;
-    lod1Reconstruction = true;
+    lod0Max = 4;
+    lod1Reconstruction = false;
     lod2GroupSize = 2;
     lod2DistortionThreshold = 15.0;
     lod2UpdateBudget = 4;
