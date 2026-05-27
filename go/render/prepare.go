@@ -561,43 +561,43 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 		for i := range m.Elements {
 			e := m.Elements[i]
 
-			swapFaces(e.Faces, []string{"north", "up", "south", "down"}, map[string]func([]float64) []float64{
-				"down":  rotateUV180,
-				"north": rotateUV180,
+			swapFaces(e.Faces, []string{"north", "down", "south", "up"}, map[string]func([]float64) []float64{
+				"up":    rotateUV180,
+				"south": rotateUV180,
 			})
 
 			if f, ok := e.Faces["west"]; ok {
-				f.UV = rotateUV90CW(f.UV)
-				f.Rotation = addRotation(f.Rotation, 90)
+				f.UV = rotateUV90CCW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["west"] = f
 			}
 			if f, ok := e.Faces["east"]; ok {
-				f.UV = rotateUV90CCW(f.UV)
-				f.Rotation = addRotation(f.Rotation, 270)
+				f.UV = rotateUV90CW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["east"] = f
 			}
 
 			// Rotate coordinates around X:
-			// y_new = 16 - z
-			// z_new = y
+			// y_new = z
+			// z_new = 16 - y
 			yFrom, yTo := e.From[1], e.To[1]
 			zFrom, zTo := e.From[2], e.To[2]
-			e.From[1] = 16.0 - zTo
-			e.To[1] = 16.0 - zFrom
-			e.From[2] = yFrom
-			e.To[2] = yTo
+			e.From[1] = zFrom
+			e.To[1] = zTo
+			e.From[2] = 16.0 - yTo
+			e.To[2] = 16.0 - yFrom
 
 			if e.Rotation.Angle != 0 {
 				if len(e.Rotation.Origin) == 3 {
 					oy, oz := e.Rotation.Origin[1], e.Rotation.Origin[2]
-					e.Rotation.Origin[1] = 16.0 - oz
-					e.Rotation.Origin[2] = oy
+					e.Rotation.Origin[1] = oz
+					e.Rotation.Origin[2] = 16.0 - oy
 				}
 				if e.Rotation.Axis == "y" {
 					e.Rotation.Axis = "z"
+					e.Rotation.Angle = -e.Rotation.Angle
 				} else if e.Rotation.Axis == "z" {
 					e.Rotation.Axis = "y"
-					e.Rotation.Angle = -e.Rotation.Angle
 				}
 			}
 
