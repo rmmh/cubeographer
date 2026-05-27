@@ -770,6 +770,51 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 		}}
 	}
 
+	hasTint := false
+	if model.Parent == "minecraft:block/tinted_cross" || model.Parent == "minecraft:block/tinted_crop" {
+		hasTint = true
+	} else {
+		for _, el := range model.Elements {
+			for _, face := range el.Faces {
+				if face.TintIndex != nil {
+					hasTint = true
+					break
+				}
+			}
+			if hasTint {
+				break
+			}
+		}
+	}
+
+	if model.Parent == "minecraft:block/cross" || model.Parent == "minecraft:block/tinted_cross" {
+		tex := model.Textures["cross"]
+		if s.Debug == "all" || s.Debug == name {
+			fmt.Println("CROSS", name, tex)
+		}
+		meta := uint32(0b1111111)
+		if hasTint {
+			meta = 0b111111 | 1<<31
+		}
+		return []ModelEntry{{
+			Layer:    LayerCross,
+			Textures: []string{tex},
+			Template: []uint32{0, meta}}}
+	} else if model.Parent == "minecraft:block/crop" || model.Parent == "minecraft:block/tinted_crop" {
+		tex := model.Textures["crop"]
+		if s.Debug == "all" || s.Debug == name {
+			fmt.Println("CROP", name, tex)
+		}
+		meta := uint32(0b1111111)
+		if hasTint {
+			meta = 0b111111 | 1<<31
+		}
+		return []ModelEntry{{
+			Layer:    LayerCrop,
+			Textures: []string{tex},
+			Template: []uint32{0, meta}}}
+	}
+
 	var out []ModelEntry
 	for _, el := range model.Elements {
 		subModel := *model
@@ -799,35 +844,6 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 
 	if len(out) > 0 {
 		return out
-	}
-
-	if model.Parent == "minecraft:block/cross" {
-		tex := model.Textures["cross"]
-		if s.Debug == "all" || s.Debug == name {
-			fmt.Println("CROSS", name, tex)
-		}
-		return []ModelEntry{{
-			Layer:    LayerCross,
-			Textures: []string{tex},
-			Template: []uint32{0, 0b1111111}}}
-	} else if model.Parent == "minecraft:block/tinted_cross" {
-		tex := model.Textures["cross"]
-		if s.Debug == "all" || s.Debug == name {
-			fmt.Println("TINTED_CROSS", name, tex)
-		}
-		return []ModelEntry{{
-			Layer:    LayerCross,
-			Textures: []string{tex},
-			Template: []uint32{0, 0b111111 | 1<<31}}}
-	} else if model.Parent == "minecraft:block/crop" {
-		tex := model.Textures["crop"]
-		if s.Debug == "all" || s.Debug == name {
-			fmt.Println("CROP", name, tex)
-		}
-		return []ModelEntry{{
-			Layer:    LayerCrop,
-			Textures: []string{tex},
-			Template: []uint32{0, 0b1111111}}}
 	}
 
 	if s.Debug == "all" || s.Debug == name {
@@ -1039,6 +1055,10 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		}
 		return a < b
 	})
+
+	for i := range *blockEntries {
+		(*blockEntries)[i].updateColors(pack.Textures)
+	}
 
 	for i := range *blockEntries {
 		ent := &(*blockEntries)[i]
@@ -1276,7 +1296,6 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 
 	for i := range *blockEntries {
 		ent := &(*blockEntries)[i]
-		ent.updateColors(pack.Textures)
 		ent.Solid = len(ent.Templates) > 0
 
 		debugBlock := genDebug == ent.Name || genDebug == rp.RemoveDefaultPrefix(ent.Name)

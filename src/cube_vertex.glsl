@@ -111,6 +111,7 @@ void main()	{
     int blockId = int((attr.x >> 24u) | (((attr.y >> 24u) & 255u) << 8u));
 #else
     int blockId = int(attr.x >> 24u);
+    bool useColor = (attr.y & (1u << 8u)) != 0u;
 #endif
 
     int face = int(attr.y & 7u);
@@ -121,13 +122,12 @@ void main()	{
 #else
     bool sideSpecial = (attr.y & (1u << 7u)) != 0u;
 #endif
-    bool useColor = (attr.y & (1u << 8u)) != 0u;
 
 #ifdef CUBOID
     sideSpecial = false;
     uvec4 p0 = fetchCuboidPixel(blockId, 0);
     uint packedRot = p0.a;
-    if ((packedRot & 1u) == 0u) useColor = false;
+    bool useColor = (packedRot & 1u) != 0u;
     vec2 fxy = unpackHalf2x16(p0.r);
     vec2 fz_tx = unpackHalf2x16(p0.g);
     vec2 tytz = unpackHalf2x16(p0.b);

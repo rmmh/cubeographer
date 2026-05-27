@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image"
 	"math"
+
+	rp "github.com/rmmh/cubeographer/go/resourcepack"
 )
 
 func GetAverageColor(img image.Image) (r, g, b, a uint8) {
@@ -52,6 +54,7 @@ func accumulateColor(texName string, textures map[string]image.Image, tint bool,
 	if texName == "" {
 		return totr, totg, totb, pixelCount
 	}
+	texName = rp.RemoveDefaultPrefix(texName)
 	tex, ok := textures[texName]
 	if !ok {
 		return totr, totg, totb, pixelCount
