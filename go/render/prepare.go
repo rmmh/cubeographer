@@ -521,8 +521,7 @@ func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransfor
 	for i, dst := range order {
 		src := order[(i-1+n)%n]
 		if face, ok := orig[src]; ok {
-			if transform, ok := uvsToTransform[src]; ok {
-				face.UV = transform(face.UV)
+			if _, ok := uvsToTransform[src]; ok {
 				face.Rotation = addRotation(face.Rotation, 180)
 			}
 			faces[dst] = face
@@ -562,17 +561,15 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 			e := m.Elements[i]
 
 			swapFaces(e.Faces, []string{"north", "down", "south", "up"}, map[string]func([]float64) []float64{
-				"up":    rotateUV180,
-				"south": rotateUV180,
+				"up":    nil,
+				"south": nil,
 			})
 
 			if f, ok := e.Faces["west"]; ok {
-				f.UV = rotateUV90CCW(f.UV)
 				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["west"] = f
 			}
 			if f, ok := e.Faces["east"]; ok {
-				f.UV = rotateUV90CW(f.UV)
 				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["east"] = f
 			}
@@ -617,12 +614,10 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 			swapFaces(e.Faces, []string{"north", "east", "south", "west"}, nil)
 
 			if f, ok := e.Faces["up"]; ok {
-				f.UV = rotateUV90CW(f.UV)
 				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["up"] = f
 			}
 			if f, ok := e.Faces["down"]; ok {
-				f.UV = rotateUV90CCW(f.UV)
 				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["down"] = f
 			}
