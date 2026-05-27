@@ -126,7 +126,8 @@ void main()	{
 #ifdef CUBOID
     sideSpecial = false;
     uvec4 p0 = fetchCuboidPixel(blockId, 0);
-    if ((p0.a & 1u) == 0u) useColor = false;
+    uint packedRot = p0.a;
+    if ((packedRot & 1u) == 0u) useColor = false;
     vec2 fxy = unpackHalf2x16(p0.r);
     vec2 fz_tx = unpackHalf2x16(p0.g);
     vec2 tytz = unpackHalf2x16(p0.b);
@@ -135,12 +136,87 @@ void main()	{
     vec3 scale = (to - from) / 16.0;
     vec3 localOffset = from / 16.0;
     vec3 localPos = getLocalPos(face, position) * scale + localOffset;
+
+    vec3 n = getNormal(face);
+    uint rotAxis = (packedRot >> 1u) & 3u;
+    if (rotAxis != 0u) {
+        bool rotRescale = (packedRot & (1u << 3u)) != 0u;
+        uint rotAngleIdx = (packedRot >> 4u) & 7u;
+        float rotAngle = 0.0;
+        if (rotAngleIdx == 1u) rotAngle = -22.5;
+        else if (rotAngleIdx == 2u) rotAngle = 22.5;
+        else if (rotAngleIdx == 3u) rotAngle = -45.0;
+        else if (rotAngleIdx == 4u) rotAngle = 45.0;
+
+        float rad = rotAngle * 3.14159265359 / 180.0;
+        vec3 originLocal = vec3(
+            float((packedRot >> 7u) & 255u) / 8.0 - 8.0,
+            float((packedRot >> 15u) & 255u) / 8.0 - 8.0,
+            float((packedRot >> 23u) & 255u) / 8.0 - 8.0
+        ) / 16.0;
+
+        vec3 p = localPos - originLocal;
+        if (rotAxis == 1u) {
+            float c = cos(rad);
+            float s = sin(rad);
+            float yNew = p.y * c - p.z * s;
+            float zNew = p.y * s + p.z * c;
+            p.y = yNew;
+            p.z = zNew;
+            if (rotRescale) {
+                float factor = 1.0 / abs(c);
+                p.y *= factor;
+                p.z *= factor;
+            }
+
+            float nyNew = n.y * c - n.z * s;
+            float nzNew = n.y * s + n.z * c;
+            n.y = nyNew;
+            n.z = nzNew;
+        } else if (rotAxis == 2u) {
+            float c = cos(rad);
+            float s = sin(rad);
+            float xNew = p.x * c + p.z * s;
+            float zNew = -p.x * s + p.z * c;
+            p.x = xNew;
+            p.z = zNew;
+            if (rotRescale) {
+                float factor = 1.0 / abs(c);
+                p.x *= factor;
+                p.z *= factor;
+            }
+
+            float nxNew = n.x * c + n.z * s;
+            float nzNew = -n.x * s + n.z * c;
+            n.x = nxNew;
+            n.z = nzNew;
+        } else if (rotAxis == 3u) {
+            float c = cos(rad);
+            float s = sin(rad);
+            float xNew = p.x * c - p.y * s;
+            float yNew = p.x * s + p.y * c;
+            p.x = xNew;
+            p.y = yNew;
+            if (rotRescale) {
+                float factor = 1.0 / abs(c);
+                p.x *= factor;
+                p.y *= factor;
+            }
+
+            float nxNew = n.x * c - n.y * s;
+            float nyNew = n.x * s + n.y * c;
+            n.x = nxNew;
+            n.y = nyNew;
+        }
+        localPos = p + originLocal;
+    }
 #else
     vec3 localPos = getLocalPos(face, position);
+    vec3 n = getNormal(face);
 #endif
     gl_Position = projectionMatrix * modelViewMatrix * vec4(localPos + unpackedPos, 1.0 );
     vColor = vec4(unpackColor(blockId, useColor) * vec3(sideLight), 1.0);
-    vNormal = getNormal(face);
+    vNormal = normalize(n);
 
     vec2 mappedLocalUV = vec2(uv.x, 1.0 - uv.y);
     if (face >= 2) {

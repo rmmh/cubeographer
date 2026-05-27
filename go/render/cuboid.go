@@ -10,11 +10,15 @@ import (
 )
 
 type UBOModelEntry struct {
-	From   []float32   `json:"from"`
-	To     []float32   `json:"to"`
-	UVs    [][]float32 `json:"uvs,omitempty"`
-	TexIDs []int       `json:"tex_ids,omitempty"`
-	Tint   bool        `json:"tint,omitempty"`
+	From       []float32   `json:"from"`
+	To         []float32   `json:"to"`
+	UVs        [][]float32 `json:"uvs,omitempty"`
+	TexIDs     []int       `json:"tex_ids,omitempty"`
+	Tint       bool        `json:"tint,omitempty"`
+	RotAxis    string      `json:"rot_axis,omitempty"`
+	RotAngle   float32     `json:"rot_angle,omitempty"`
+	RotOrigin  []float32   `json:"rot_origin,omitempty"`
+	RotRescale bool        `json:"rot_rescale,omitempty"`
 }
 
 func getModelBounds(model *rp.Model) ([]float32, []float32) {
@@ -77,15 +81,57 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 	ty := float32ToFloat16(entry.To[1])
 	tz := float32ToFloat16(entry.To[2])
 
-	tintVal := uint32(0)
+	packedRot := uint32(0)
 	if entry.Tint {
-		tintVal = 1
+		packedRot = 1
+	}
+
+	// Pack Axis in Bits 1-2
+	// 0: none, 1: x, 2: y, 3: z
+	axisVal := uint32(0)
+	switch entry.RotAxis {
+	case "x":
+		axisVal = 1
+	case "y":
+		axisVal = 2
+	case "z":
+		axisVal = 3
+	}
+	packedRot |= axisVal << 1
+
+	// Pack Rescale in Bit 3
+	if entry.RotRescale {
+		packedRot |= 1 << 3
+	}
+
+	// Pack Angle in Bits 4-6
+	// 0: 0, 1: -22.5, 2: 22.5, 3: -45, 4: 45
+	angleVal := uint32(0)
+	switch entry.RotAngle {
+	case -22.5:
+		angleVal = 1
+	case 22.5:
+		angleVal = 2
+	case -45:
+		angleVal = 3
+	case 45:
+		angleVal = 4
+	}
+	packedRot |= angleVal << 4
+
+	// Pack Origin in Bits 7-30
+	if len(entry.RotOrigin) == 3 {
+		for i := 0; i < 3; i++ {
+			c := entry.RotOrigin[i]
+			byteVal := uint32(math.Max(0, math.Min(255, math.Round(float64((c+8.0)*8.0)))))
+			packedRot |= byteVal << (7 + i*8)
+		}
 	}
 
 	writeMetadataValue(buf, tid, 0, uint32(fx)|(uint32(fy)<<16))
 	writeMetadataValue(buf, tid, 1, uint32(fz)|(uint32(tx)<<16))
 	writeMetadataValue(buf, tid, 2, uint32(ty)|(uint32(tz)<<16))
-	writeMetadataValue(buf, tid, 3, tintVal)
+	writeMetadataValue(buf, tid, 3, packedRot)
 
 	if entry.UVs != nil {
 		for f := 0; f < 6; f++ {

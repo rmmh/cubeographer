@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/karrick/godirwalk"
 	"github.com/maruel/natural"
 	"github.com/rmmh/cubeographer/go/region"
 )
@@ -83,53 +83,62 @@ func findMaps(inputDirs []string) ([]minecraftMap, error) {
 	var mcaDirs []string
 
 	for _, inputDir := range inputDirs {
-		err := filepath.WalkDir(inputDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			if strings.HasSuffix(strings.ToLower(d.Name()), ".zip") {
-				// Walk zip file contents (only one level!)
-				zipReader, err := region.GetZipReader(path)
-				if err != nil {
-					log.Printf("warning: failed to open zip file %s: %v", path, err)
+		visitedDirs := make(map[string]bool)
+		err := godirwalk.Walk(inputDir, &godirwalk.Options{
+			Callback: func(path string, d *godirwalk.Dirent) error {
+				if d.IsDir() {
+					realPath, err := filepath.EvalSymlinks(path)
+					if err != nil {
+						return err
+					}
+					if visitedDirs[realPath] {
+						return filepath.SkipDir
+					}
+					visitedDirs[realPath] = true
 					return nil
 				}
-				for _, f := range zipReader.File {
-					internalPath := filepath.ToSlash(f.Name)
-					baseName := filepath.Base(internalPath)
-					fullPath := path + "/" + internalPath
+				if strings.HasSuffix(strings.ToLower(d.Name()), ".zip") {
+					// Walk zip file contents (only one level!)
+					zipReader, err := region.GetZipReader(path)
+					if err != nil {
+						log.Printf("warning: failed to open zip file %s: %v", path, err)
+						return nil
+					}
+					for _, f := range zipReader.File {
+						internalPath := filepath.ToSlash(f.Name)
+						baseName := filepath.Base(internalPath)
+						fullPath := path + "/" + internalPath
 
-					if baseName == "level.dat" {
-						levelDatDirs = append(levelDatDirs, filepath.Dir(fullPath))
-					} else if strings.HasSuffix(baseName, ".mca") {
-						parentDir := filepath.Dir(fullPath)
-						parentBase := strings.ToLower(filepath.Base(parentDir))
-						if parentBase == "poi" || parentBase == "entities" {
-							continue
+						if baseName == "level.dat" {
+							levelDatDirs = append(levelDatDirs, filepath.Dir(fullPath))
+						} else if strings.HasSuffix(baseName, ".mca") {
+							parentDir := filepath.Dir(fullPath)
+							parentBase := strings.ToLower(filepath.Base(parentDir))
+							if parentBase == "poi" || parentBase == "entities" {
+								continue
+							}
+							if !contains(mcaDirs, parentDir) {
+								mcaDirs = append(mcaDirs, parentDir)
+							}
 						}
-						if !contains(mcaDirs, parentDir) {
-							mcaDirs = append(mcaDirs, parentDir)
-						}
+					}
+					return nil
+				}
+				if d.Name() == "level.dat" {
+					levelDatDirs = append(levelDatDirs, filepath.Dir(path))
+				} else if strings.HasSuffix(d.Name(), ".mca") {
+					parentDir := filepath.Dir(path)
+					base := strings.ToLower(filepath.Base(parentDir))
+					if base == "poi" || base == "entities" {
+						return nil
+					}
+					if !contains(mcaDirs, parentDir) {
+						mcaDirs = append(mcaDirs, parentDir)
 					}
 				}
 				return nil
-			}
-			if d.Name() == "level.dat" {
-				levelDatDirs = append(levelDatDirs, filepath.Dir(path))
-			} else if strings.HasSuffix(d.Name(), ".mca") {
-				parentDir := filepath.Dir(path)
-				base := strings.ToLower(filepath.Base(parentDir))
-				if base == "poi" || base == "entities" {
-					return nil
-				}
-				if !contains(mcaDirs, parentDir) {
-					mcaDirs = append(mcaDirs, parentDir)
-				}
-			}
-			return nil
+			},
+			FollowSymbolicLinks: true,
 		})
 		if err != nil {
 			return nil, err

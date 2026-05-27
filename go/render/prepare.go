@@ -101,11 +101,15 @@ const (
 )
 
 type ModelEntry struct {
-	Layer    LayerNumber `json:"layer"`
-	Textures []string    `json:"textures,omitempty"`
-	Template []uint32    `json:"tmpl,omitempty"`
-	Bounds   []float32   `json:"-"`
-	UVs      [][]float32 `json:"-"`
+	Layer      LayerNumber `json:"layer"`
+	Textures   []string    `json:"textures,omitempty"`
+	Template   []uint32    `json:"tmpl,omitempty"`
+	Bounds     []float32   `json:"-"`
+	UVs        [][]float32 `json:"-"`
+	RotAxis    string      `json:"-"`
+	RotAngle   float32     `json:"-"`
+	RotOrigin  []float32   `json:"-"`
+	RotRescale bool        `json:"-"`
 }
 
 type BlockEntry struct {
@@ -157,9 +161,9 @@ func (s *StateConverter) renderCube(m *rp.Model) *ModelEntry {
 	if !reflect.DeepEqual(el.From, []float64{0, 0, 0}) || !reflect.DeepEqual(el.To, []float64{16, 16, 16}) {
 		return nil
 	}
-	if el.Shade != nil || el.Rotation.Angle != 0 {
+	if el.Rotation.Angle != 0 {
 		if s.Debug == m.Parent {
-			fmt.Println("bailing due to", name, el.Shade, el.Rotation.Angle)
+			fmt.Println("bailing due to", name, el.Rotation.Angle)
 		}
 		return nil
 	}
@@ -253,8 +257,28 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 		return nil
 	}
 	el := m.Elements[0]
-	if el.Shade != nil || el.Rotation.Angle != 0 {
-		return nil
+
+	rotAngle := float32(0.0)
+	rotAxis := ""
+	var rotOrigin []float32
+	rotRescale := false
+
+	if el.Rotation.Angle != 0 {
+		rotAngle = float32(el.Rotation.Angle)
+		rotAxis = el.Rotation.Axis
+		if rotAxis != "x" && rotAxis != "y" && rotAxis != "z" {
+			return nil
+		}
+		if rotAngle != -45 && rotAngle != -22.5 && rotAngle != 22.5 && rotAngle != 45 {
+			return nil
+		}
+		if len(el.Rotation.Origin) != 3 {
+			return nil
+		}
+		rotOrigin = []float32{float32(el.Rotation.Origin[0]), float32(el.Rotation.Origin[1]), float32(el.Rotation.Origin[2])}
+		if el.Rotation.Rescale != nil {
+			rotRescale = *el.Rotation.Rescale
+		}
 	}
 
 	// Order: west, east, south, north, up, down
@@ -273,6 +297,11 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 
 		// Face is present, set visibility bit
 		meta |= 1 << i
+
+		if face.CullFace != "" {
+			// Set cullable bit in bits 18-23
+			meta |= 1 << (i + 18)
+		}
 
 		if face.TintIndex != nil {
 			if *face.TintIndex != 0 {
@@ -331,11 +360,15 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 	}
 
 	return &ModelEntry{
-		Layer:    LayerCuboid,
-		Textures: texs,
-		Template: []uint32{0, meta},
-		Bounds:   []float32{float32(el.From[0]), float32(el.From[1]), float32(el.From[2]), float32(el.To[0]), float32(el.To[1]), float32(el.To[2])},
-		UVs:      uvs,
+		Layer:      LayerCuboid,
+		Textures:   texs,
+		Template:   []uint32{0, meta},
+		Bounds:     []float32{float32(el.From[0]), float32(el.From[1]), float32(el.From[2]), float32(el.To[0]), float32(el.To[1]), float32(el.To[2])},
+		UVs:        uvs,
+		RotAxis:    rotAxis,
+		RotAngle:   rotAngle,
+		RotOrigin:  rotOrigin,
+		RotRescale: rotRescale,
 	}
 }
 
@@ -515,6 +548,20 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 			e.From[2] = yFrom
 			e.To[2] = yTo
 
+			if e.Rotation.Angle != 0 {
+				if len(e.Rotation.Origin) == 3 {
+					oy, oz := e.Rotation.Origin[1], e.Rotation.Origin[2]
+					e.Rotation.Origin[1] = 16.0 - oz
+					e.Rotation.Origin[2] = oy
+				}
+				if e.Rotation.Axis == "y" {
+					e.Rotation.Axis = "z"
+				} else if e.Rotation.Axis == "z" {
+					e.Rotation.Axis = "y"
+					e.Rotation.Angle = -e.Rotation.Angle
+				}
+			}
+
 			m.Elements[i] = e
 		}
 		if rotX > 0 {
@@ -548,6 +595,20 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 			e.To[0] = 16.0 - zFrom
 			e.From[2] = xFrom
 			e.To[2] = xTo
+
+			if e.Rotation.Angle != 0 {
+				if len(e.Rotation.Origin) == 3 {
+					ox, oz := e.Rotation.Origin[0], e.Rotation.Origin[2]
+					e.Rotation.Origin[0] = 16.0 - oz
+					e.Rotation.Origin[2] = ox
+				}
+				if e.Rotation.Axis == "x" {
+					e.Rotation.Axis = "z"
+				} else if e.Rotation.Axis == "z" {
+					e.Rotation.Axis = "x"
+					e.Rotation.Angle = -e.Rotation.Angle
+				}
+			}
 
 			m.Elements[i] = e
 		}
@@ -813,10 +874,14 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 }
 
 type cuboidKey struct {
-	Bounds   [6]float32
-	UVs      [6][4]float32
-	Textures [6]string
-	Tint     bool
+	Bounds     [6]float32
+	UVs        [6][4]float32
+	Textures   [6]string
+	Tint       bool
+	RotAxis    string
+	RotAngle   float32
+	RotOrigin  [3]float32
+	RotRescale bool
 }
 
 func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*image.RGBA, []byte) {
@@ -1069,6 +1134,15 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					}
 					key.Tint = (model.Template[1] & (1 << 31)) != 0
 
+					if model.RotAxis != "" {
+						key.RotAxis = model.RotAxis
+						key.RotAngle = model.RotAngle
+						if len(model.RotOrigin) == 3 {
+							copy(key.RotOrigin[:], model.RotOrigin)
+						}
+						key.RotRescale = model.RotRescale
+					}
+
 					if existingTid, ok := cuboidCache[key]; ok {
 						tid = existingTid
 					} else {
@@ -1093,11 +1167,15 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								}
 							}
 							cuboidEntries[tid] = UBOModelEntry{
-								From:   model.Bounds[:3],
-								To:     model.Bounds[3:],
-								UVs:    model.UVs,
-								TexIDs: texIds,
-								Tint:   key.Tint,
+								From:       model.Bounds[:3],
+								To:         model.Bounds[3:],
+								UVs:        model.UVs,
+								TexIDs:     texIds,
+								Tint:       key.Tint,
+								RotAxis:    key.RotAxis,
+								RotAngle:   key.RotAngle,
+								RotOrigin:  key.RotOrigin[:],
+								RotRescale: key.RotRescale,
 							}
 						}
 					}
