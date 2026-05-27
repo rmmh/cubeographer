@@ -20,7 +20,7 @@ uvec4 fetchCuboidPixel(int blockId, int pixelOffset) {
 }
 
 vec2 unpackUV(uint p) {
-    return vec2(float(p & 0xFFFFu) / 256.0, float(p >> 16u) / 256.0);
+    return vec2(float(p & 0x3FFFu) / 256.0, float((p >> 16u) & 0x3FFFu) / 256.0);
 }
 #endif
 
@@ -235,8 +235,31 @@ void main()	{
     float ty = floor(min(faceUv.y, faceUv.w));
     vTexLayer = int(tx + ty * 64.0);
 
+    // Rotate standard UV first, then apply face reflection
+    uint rotIdx = (packedUVStart >> 14u) & 3u;
+    if (face >= 2) {
+        if (rotIdx == 1u) {
+            rotIdx = 3u;
+        } else if (rotIdx == 3u) {
+            rotIdx = 1u;
+        }
+    }
+    vec2 standardUV = vec2(uv.x, 1.0 - uv.y);
+    vec2 rotatedUV = standardUV;
+    if (rotIdx == 1u) {
+        rotatedUV = vec2(1.0 - standardUV.y, standardUV.x);
+    } else if (rotIdx == 2u) {
+        rotatedUV = vec2(1.0 - standardUV.x, 1.0 - standardUV.y);
+    } else if (rotIdx == 3u) {
+        rotatedUV = vec2(standardUV.y, 1.0 - standardUV.x);
+    }
+
+    if (face >= 2) {
+        rotatedUV.x = 1.0 - rotatedUV.x;
+    }
+
     // Map custom UV dimensions locally relative to the layer bounds
-    vTexCoord = mix(faceUv.xy, faceUv.zw, mappedLocalUV) - vec2(tx, ty);
+    vTexCoord = mix(faceUv.xy, faceUv.zw, rotatedUV) - vec2(tx, ty);
 #else
     int block = (blockId + (sideSpecial ? 256 : 0));
     vTexLayer = block;

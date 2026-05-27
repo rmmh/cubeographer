@@ -13,6 +13,7 @@ type UBOModelEntry struct {
 	From       []float32   `json:"from"`
 	To         []float32   `json:"to"`
 	UVs        [][]float32 `json:"uvs,omitempty"`
+	Rotations  []int       `json:"rotations,omitempty"`
 	TexIDs     []int       `json:"tex_ids,omitempty"`
 	Tint       bool        `json:"tint,omitempty"`
 	RotAxis    string      `json:"rot_axis,omitempty"`
@@ -149,6 +150,10 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 				vMax := entry.UVs[f][3]/16.0 + tileY
 
 				packedMin := uint32(math.Round(float64(uMin * 256.0))) | (uint32(math.Round(float64(vMin * 256.0))) << 16)
+				if f < len(entry.Rotations) {
+					rotVal := uint32(entry.Rotations[f]/90) % 4
+					packedMin |= rotVal << 14
+				}
 				packedMax := uint32(math.Round(float64(uMax * 256.0))) | (uint32(math.Round(float64(vMax * 256.0))) << 16)
 
 				writeMetadataValue(buf, tid, 4+2*f, packedMin)

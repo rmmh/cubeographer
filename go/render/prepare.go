@@ -106,6 +106,7 @@ type ModelEntry struct {
 	Template   []uint32    `json:"tmpl,omitempty"`
 	Bounds     []float32   `json:"-"`
 	UVs        [][]float32 `json:"-"`
+	Rotations  []int       `json:"-"`
 	RotAxis    string      `json:"-"`
 	RotAngle   float32     `json:"-"`
 	RotOrigin  []float32   `json:"-"`
@@ -131,7 +132,7 @@ func getCubeFaces(m *rp.Model, faces [6]rp.BlockModelFace) ([]string, bool) {
 	ret := []string{}
 	tintCount := 0
 	for _, face := range faces {
-		if face.Texture == "" || face.CullFace == "" || /* face.Rotation != 0 || */ (face.UV != nil && !reflect.DeepEqual(face.UV, []float64{0, 0, 16, 16})) {
+		if face.Texture == "" || face.CullFace == "" || (face.Rotation != nil && *face.Rotation != 0) || (face.UV != nil && !reflect.DeepEqual(face.UV, []float64{0, 0, 16, 16})) {
 			return nil, false
 		}
 		if face.TintIndex != nil {
@@ -327,6 +328,7 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 	// Calculate custom or default UVs
 	var uvs [][]float32
 	uvs = make([][]float32, 6)
+	rotations := make([]int, 6)
 	for i, fName := range texsOrder {
 		face, ok := el.Faces[fName]
 		if ok && face.UV != nil && len(face.UV) == 4 {
@@ -339,13 +341,7 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 				for rot < 0 {
 					rot += 360
 				}
-				if rot == 90 {
-					u0, v0, u1, v1 = 16.0-v1, u0, 16.0-v0, u1
-				} else if rot == 180 {
-					u0, v0, u1, v1 = 16.0-u1, 16.0-v1, 16.0-u0, 16.0-v0
-				} else if rot == 270 {
-					u0, v0, u1, v1 = v0, 16.0-u1, v1, 16.0-u0
-				}
+				rotations[i] = rot
 			}
 			uvs[i] = []float32{float32(u0), float32(v0), float32(u1), float32(v1)}
 		} else {
@@ -365,6 +361,7 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 		Template:   []uint32{0, meta},
 		Bounds:     []float32{float32(el.From[0]), float32(el.From[1]), float32(el.From[2]), float32(el.To[0]), float32(el.To[1]), float32(el.To[2])},
 		UVs:        uvs,
+		Rotations:  rotations,
 		RotAxis:    rotAxis,
 		RotAngle:   rotAngle,
 		RotOrigin:  rotOrigin,
@@ -484,6 +481,35 @@ func rotateUV180(uv []float64) []float64 {
 	return []float64{uv[2], uv[3], uv[0], uv[1]}
 }
 
+func addRotation(r *int, deg int) *int {
+	current := 0
+	if r != nil {
+		current = *r
+	}
+	newRot := (current + deg) % 360
+	return &newRot
+}
+
+func getDefaultUV64(faceName string, el *rp.ModelElement) []float64 {
+	x0, y0, z0 := el.From[0], el.From[1], el.From[2]
+	x1, y1, z1 := el.To[0], el.To[1], el.To[2]
+	switch faceName {
+	case "west":
+		return []float64{z0, 16.0 - y1, z1, 16.0 - y0}
+	case "east":
+		return []float64{16.0 - z1, 16.0 - y1, 16.0 - z0, 16.0 - y0}
+	case "north":
+		return []float64{16.0 - x1, 16.0 - y1, 16.0 - x0, 16.0 - y0}
+	case "south":
+		return []float64{x0, 16.0 - y1, x1, 16.0 - y0}
+	case "up":
+		return []float64{x0, z0, x1, z1}
+	case "down":
+		return []float64{x0, 16.0 - z1, x1, 16.0 - z0}
+	}
+	return []float64{0, 0, 16, 16}
+}
+
 func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransform map[string]func([]float64) []float64) {
 	orig := make(map[string]rp.BlockModelFace, len(order))
 	for _, name := range order {
@@ -497,6 +523,7 @@ func swapFaces(faces map[string]rp.BlockModelFace, order []string, uvsToTransfor
 		if face, ok := orig[src]; ok {
 			if transform, ok := uvsToTransform[src]; ok {
 				face.UV = transform(face.UV)
+				face.Rotation = addRotation(face.Rotation, 180)
 			}
 			faces[dst] = face
 		} else {
@@ -510,6 +537,16 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 	var m rp.Model
 	buf, _ := json.Marshal(model)
 	json.Unmarshal(buf, &m)
+
+	for i := range m.Elements {
+		e := m.Elements[i]
+		for fName, face := range e.Faces {
+			if face.UV == nil {
+				face.UV = getDefaultUV64(fName, e)
+				e.Faces[fName] = face
+			}
+		}
+	}
 
 	rotX := 0
 	if ms.X != nil {
@@ -531,10 +568,12 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 
 			if f, ok := e.Faces["west"]; ok {
 				f.UV = rotateUV90CW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["west"] = f
 			}
 			if f, ok := e.Faces["east"]; ok {
 				f.UV = rotateUV90CCW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["east"] = f
 			}
 
@@ -579,10 +618,12 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 
 			if f, ok := e.Faces["up"]; ok {
 				f.UV = rotateUV90CW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["up"] = f
 			}
 			if f, ok := e.Faces["down"]; ok {
 				f.UV = rotateUV90CCW(f.UV)
+				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["down"] = f
 			}
 
@@ -876,6 +917,7 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 type cuboidKey struct {
 	Bounds     [6]float32
 	UVs        [6][4]float32
+	Rotations  [6]int
 	Textures   [6]string
 	Tint       bool
 	RotAxis    string
@@ -1058,6 +1100,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 							{0, 0, 16, 16}, // up
 							{0, 0, 16, 16}, // down
 						}
+						model.Rotations = make([]int, 6)
 
 						// Reconstruct the 6 face textures
 						newTexs := make([]string, 6)
@@ -1127,6 +1170,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 							copy(key.UVs[i][:], model.UVs[i])
 						}
 					}
+					for i := range model.Rotations {
+						if i < 6 {
+							key.Rotations[i] = model.Rotations[i]
+						}
+					}
 					for i := range model.Textures {
 						if i < 6 {
 							key.Textures[i] = model.Textures[i]
@@ -1170,6 +1218,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								From:       model.Bounds[:3],
 								To:         model.Bounds[3:],
 								UVs:        model.UVs,
+								Rotations:  model.Rotations,
 								TexIDs:     texIds,
 								Tint:       key.Tint,
 								RotAxis:    key.RotAxis,
