@@ -53,13 +53,13 @@ func writeAssetIfMissing(outDir, filename string) {
 	}
 }
 
-func convert(numProcs int, inputDir, outDir string, filters []string, prune bool, mode string) {
-	maps, err := findMaps(inputDir)
+func convert(numProcs int, inputDirs []string, outDir string, filters []string, prune bool, mode string) {
+	maps, err := findMaps(inputDirs)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if len(maps) == 0 {
-		log.Fatalf("No maps found in %s", inputDir)
+		log.Fatalf("No maps found in %v", inputDirs)
 	}
 
 	// Extract standard assets if missing
@@ -199,9 +199,19 @@ func convert(numProcs int, inputDir, outDir string, filters []string, prune bool
 	}
 }
 
+type stringSlice []string
+
+func (s *stringSlice) String() string {
+	return strings.Join(*s, ", ")
+}
+
+func (s *stringSlice) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
 
 func usage() {
-	fmt.Println("usage: prog <regiondir> <outputdir> [filterstrings]")
+	fmt.Printf("usage: %s [-in <path1> [-in <path2>...]] [-out <path>] [filterstrings]\n", os.Args[0])
 	flag.Usage()
 }
 
@@ -212,6 +222,11 @@ func main() {
 	noPrune := flag.Bool("noprune", false, "don't attempt to hide invisible portions")
 	doConvert := flag.Bool("convert", false, "convert region files for web display")
 	mode := flag.String("mode", "full", "output mode: full (cmt+bin+png), lod (bin+png), or tile (png)")
+
+	var inputFlags stringSlice
+	flag.Var(&inputFlags, "in", "input paths (can be specified multiple times)")
+	outFlag := flag.String("out", "out", "output directory")
+
 	flag.Parse()
 
 	if *mode != "full" && *mode != "lod" && *mode != "tile" {
@@ -237,22 +252,22 @@ func main() {
 		return
 	}
 
-	var filters []string
-	if len(args) > 2 {
-		filters = args[2:]
+	inputs := []string(inputFlags)
+	if len(inputs) == 0 {
+		inputs = GetDefaultInputPaths()
 	}
-	if *doConvert {
-		if len(args) > 1 {
-			convert(*numProcs, args[0], args[1], filters, !*noPrune, *mode)
-			return
-		} else {
-			usage()
-			return
-		}
-	}
-	if len(args) > 1 {
-		serve(*numProcs, args[0], args[1], !*noPrune, *mode)
-	} else {
+
+	if len(inputs) == 0 || *outFlag == "" {
 		usage()
+		os.Exit(1)
+	}
+
+	output := *outFlag
+	filters := args
+
+	if *doConvert {
+		convert(*numProcs, inputs, output, filters, !*noPrune, *mode)
+	} else {
+		serve(*numProcs, inputs, output, !*noPrune, *mode)
 	}
 }

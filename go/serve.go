@@ -201,7 +201,7 @@ func (s *server) worldRedirHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, r.URL.Path[strings.IndexByte(r.URL.Path[1:], '/')+1:], http.StatusFound)
 }
 
-func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode string) {
+func serve(numProcs int, regionDirs []string, dataDir string, pruneCaves bool, mode string) {
 	binaryStat, err := os.Stat(os.Args[0])
 	if err != nil {
 		log.Fatal(err)
@@ -217,12 +217,12 @@ func serve(numProcs int, regionDir string, dataDir string, pruneCaves bool, mode
 		log.Fatal(err)
 	}
 
-	maps, err := findMaps(regionDir)
+	maps, err := findMaps(regionDirs)
 	if err != nil {
 		log.Fatalf("error finding maps: %v", err)
 	}
 
-	log.Printf("Discovered %d maps in %s:", len(maps), regionDir)
+	log.Printf("Discovered %d maps in %v:", len(maps), regionDirs)
 	regDirs := make(map[string]string)
 	for _, m := range maps {
 		log.Printf("  - %q -> %s (dim=%s)", m.Name, m.RegionDir, m.Dimension)

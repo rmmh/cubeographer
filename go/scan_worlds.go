@@ -48,30 +48,33 @@ func cleanWorldName(s string) string {
 	return s
 }
 
-// findMaps scans the input folder, discovers worlds and dimensions,
+// findMaps scans the input folders, discovers worlds and dimensions,
 // and returns them with unique terse names assigned.
-func findMaps(inputDir string) ([]minecraftMap, error) {
-	// 1. Check if inputDir itself contains .mca files directly.
-	entries, err := region.ReadDir(inputDir)
-	if err == nil {
-		hasMcaDirectly := false
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".mca") {
-				hasMcaDirectly = true
-				break
+func findMaps(inputDirs []string) ([]minecraftMap, error) {
+	if len(inputDirs) == 1 {
+		inputDir := inputDirs[0]
+		// 1. Check if inputDir itself contains .mca files directly.
+		entries, err := region.ReadDir(inputDir)
+		if err == nil {
+			hasMcaDirectly := false
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".mca") {
+					hasMcaDirectly = true
+					break
+				}
 			}
-		}
-		if hasMcaDirectly {
-			// Case 1: a region directory that contains .mca files.
-			// Serve it at the root.
-			return []minecraftMap{
-				{
-					Name:      "",
-					RegionDir: inputDir,
-					WorldDir:  inputDir,
-					Dimension: "overworld",
-				},
-			}, nil
+			if hasMcaDirectly {
+				// Case 1: a region directory that contains .mca files.
+				// Serve it at the root.
+				return []minecraftMap{
+					{
+						Name:      "",
+						RegionDir: inputDir,
+						WorldDir:  inputDir,
+						Dimension: "overworld",
+					},
+				}, nil
+			}
 		}
 	}
 
@@ -79,56 +82,58 @@ func findMaps(inputDir string) ([]minecraftMap, error) {
 	var levelDatDirs []string
 	var mcaDirs []string
 
-	err = filepath.WalkDir(inputDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(strings.ToLower(d.Name()), ".zip") {
-			// Walk zip file contents (only one level!)
-			zipReader, err := region.GetZipReader(path)
+	for _, inputDir := range inputDirs {
+		err := filepath.WalkDir(inputDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				log.Printf("warning: failed to open zip file %s: %v", path, err)
+				return err
+			}
+			if d.IsDir() {
 				return nil
 			}
-			for _, f := range zipReader.File {
-				internalPath := filepath.ToSlash(f.Name)
-				baseName := filepath.Base(internalPath)
-				fullPath := path + "/" + internalPath
+			if strings.HasSuffix(strings.ToLower(d.Name()), ".zip") {
+				// Walk zip file contents (only one level!)
+				zipReader, err := region.GetZipReader(path)
+				if err != nil {
+					log.Printf("warning: failed to open zip file %s: %v", path, err)
+					return nil
+				}
+				for _, f := range zipReader.File {
+					internalPath := filepath.ToSlash(f.Name)
+					baseName := filepath.Base(internalPath)
+					fullPath := path + "/" + internalPath
 
-				if baseName == "level.dat" {
-					levelDatDirs = append(levelDatDirs, filepath.Dir(fullPath))
-				} else if strings.HasSuffix(baseName, ".mca") {
-					parentDir := filepath.Dir(fullPath)
-					parentBase := strings.ToLower(filepath.Base(parentDir))
-					if parentBase == "poi" || parentBase == "entities" {
-						continue
+					if baseName == "level.dat" {
+						levelDatDirs = append(levelDatDirs, filepath.Dir(fullPath))
+					} else if strings.HasSuffix(baseName, ".mca") {
+						parentDir := filepath.Dir(fullPath)
+						parentBase := strings.ToLower(filepath.Base(parentDir))
+						if parentBase == "poi" || parentBase == "entities" {
+							continue
+						}
+						if !contains(mcaDirs, parentDir) {
+							mcaDirs = append(mcaDirs, parentDir)
+						}
 					}
-					if !contains(mcaDirs, parentDir) {
-						mcaDirs = append(mcaDirs, parentDir)
-					}
+				}
+				return nil
+			}
+			if d.Name() == "level.dat" {
+				levelDatDirs = append(levelDatDirs, filepath.Dir(path))
+			} else if strings.HasSuffix(d.Name(), ".mca") {
+				parentDir := filepath.Dir(path)
+				base := strings.ToLower(filepath.Base(parentDir))
+				if base == "poi" || base == "entities" {
+					return nil
+				}
+				if !contains(mcaDirs, parentDir) {
+					mcaDirs = append(mcaDirs, parentDir)
 				}
 			}
 			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		if d.Name() == "level.dat" {
-			levelDatDirs = append(levelDatDirs, filepath.Dir(path))
-		} else if strings.HasSuffix(d.Name(), ".mca") {
-			parentDir := filepath.Dir(path)
-			base := strings.ToLower(filepath.Base(parentDir))
-			if base == "poi" || base == "entities" {
-				return nil
-			}
-			if !contains(mcaDirs, parentDir) {
-				mcaDirs = append(mcaDirs, parentDir)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 
 	// 3. For each region directory, find its world directory.
@@ -190,7 +195,19 @@ func findMaps(inputDir string) ([]minecraftMap, error) {
 	assignedNames := make(map[string]bool)
 
 	for _, wd := range uniqueWorldDirs {
-		rel, err := filepath.Rel(inputDir, wd)
+		// Find the inputDir that is an ancestor of wd
+		var parentInputDir string
+		for _, id := range inputDirs {
+			if wd == id || strings.HasPrefix(wd, id+string(filepath.Separator)) {
+				parentInputDir = id
+				break
+			}
+		}
+		if parentInputDir == "" {
+			parentInputDir = inputDirs[0]
+		}
+
+		rel, err := filepath.Rel(parentInputDir, wd)
 		var baseName string
 		if strings.Contains(wd, ".zip") {
 			zipPath, internalPath, isZip := region.SplitZipPath(wd)
