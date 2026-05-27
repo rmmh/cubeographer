@@ -874,7 +874,7 @@ function fetchRegion(x: number, z: number, off: number) {
 
                                         const light = (attrY >> (6 + face * 4)) & 15;
                                         const useColor = (attrY >> 31) & 1;
-                                        const sideSpecial = (attrY >> 30) & 1;
+                                        const sideSpecial = ((attrY >> 30) & 1) && (face >= 4) ? 1 : 0;
                                         const highBlockId = attrY & 0xFF000000; // Preserve CUBOID blockId high-byte
 
                                         const packedMeta = face | (light << 3) | (sideSpecial << 7) | (useColor << 8) | highBlockId;

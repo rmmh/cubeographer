@@ -62,7 +62,9 @@ func WriteMapMetadata(mapDir string, regionDir string, mode string) error {
 
 	var metadata MapMetadata
 
-	if regionDir != "" {
+	if regionDir == "test" {
+		metadata.FullRegions = append(metadata.FullRegions, "0.0")
+	} else if regionDir != "" {
 		// Live server mode: scan the regionDir for region files
 		files, err := region.ReadDir(regionDir)
 		if err != nil {

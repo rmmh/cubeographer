@@ -148,7 +148,7 @@ func getCubeFaces(m *rp.Model, faces [6]rp.BlockModelFace) ([]string, bool) {
 	return ret, tintCount == 6
 }
 
-func renderCube(m *rp.Model) *ModelEntry {
+func (s *StateConverter) renderCube(m *rp.Model) *ModelEntry {
 	if len(m.Elements) != 1 {
 		return nil
 	}
@@ -158,12 +158,16 @@ func renderCube(m *rp.Model) *ModelEntry {
 		return nil
 	}
 	if el.Shade != nil || el.Rotation.Angle != 0 {
-		fmt.Println("bailing due to", name, el.Shade, el.Rotation.Angle)
+		if s.Debug == m.Parent {
+			fmt.Println("bailing due to", name, el.Shade, el.Rotation.Angle)
+		}
 		return nil
 	}
 	texs, tint := getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["up"], el.Faces["north"], el.Faces["east"], el.Faces["south"], el.Faces["west"], el.Faces["down"]})
 	if texs == nil {
-		fmt.Println("bailing due to texs", name, m, el.Faces)
+		if s.Debug == m.Parent {
+			fmt.Println("bailing due to texs", name, m, el.Faces)
+		}
 		return nil
 	}
 
@@ -198,7 +202,7 @@ func renderCube(m *rp.Model) *ModelEntry {
 	if texs[0] != texs[1] || texs[0] != texs[5] {
 		return &ModelEntry{
 			Layer:    LayerCube,
-			Textures: []string{texs[1], texs[0], texs[5]},
+			Textures: []string{texs[1], texs[4], texs[5]},
 			Template: []uint32{0, meta | 1<<30},
 		}
 	}
@@ -601,6 +605,11 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 	}
 	s.resolveInheritance(model)
 
+	if s.Debug == name {
+		b, _ := json.MarshalIndent(model.Elements, "", "  ")
+		fmt.Printf("DEBUG_MODEL %s ModelElement=%s\n", name, b)
+	}
+
 	rotated := false
 
 	if (ms.X != nil && *ms.X != 0) || (ms.Y != nil && *ms.Y != 0) {
@@ -637,7 +646,7 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 	}
 
 	cleanName := rp.RemoveDefaultPrefix(name)
-	if cleanName == "grass_block" || cleanName == "grass" {
+	if (cleanName == "grass_block" || cleanName == "grass") && model.Textures["overlay"] != "" {
 		// render grass blocks as two cubes:
 		// * the dirt sides and bottom (no top)
 		// * the tinted grass top and side overlay (no bottom)
@@ -664,7 +673,7 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 		subModel := *model
 		subModel.Elements = []*rp.ModelElement{el}
 
-		cubeSpec := renderCube(&subModel)
+		cubeSpec := s.renderCube(&subModel)
 		if cubeSpec != nil {
 			if rotated && len(cubeSpec.Template) == len(cubeSpec.Textures)*2 && cubeSpec.Template[1]&(1<<31) == 0 {
 				cubeSpec.Layer = LayerVoxel
