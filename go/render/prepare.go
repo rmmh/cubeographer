@@ -1041,6 +1041,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		textureClasses[name] = ty
 	}
 
+	slotTextures := [NumRenderLayers]map[int]string{}
+	for i := range slotTextures {
+		slotTextures[i] = map[int]string{}
+	}
+
 	// Process block states to determine model drawing templates
 	meta := BlockEntryMetadata{
 		Blocks: []BlockEntry{
@@ -1164,6 +1169,11 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 			}
 			x0 := (place * 16) % w
 			y0 := (place / (w / 16)) * 16
+			if prev, ok := slotTextures[layer][place]; ok && prev != name {
+				fmt.Printf("warn: atlas[%s] slot %d: overwriting %q with %q (block %s)\n",
+					LayerNames[layer], place, prev, name, ent.Name)
+			}
+			slotTextures[layer][place] = name
 			draw.Draw(atlases[layer], image.Rect(x0, y0, x0+16, y0+16), tex, image.Point{}, draw.Src)
 		}
 
@@ -1226,7 +1236,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								}
 							}
 						}
-						meta := maskUnion
+						meta := maskUnion | (maskUnion << 18)
 						if tint {
 							meta |= 1 << 31
 						}
@@ -1246,7 +1256,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 							splatTexture(layer, model.Textures[2], 0)
 							splatTexture(layer, model.Textures[3], texIDs[layer][model.Textures[2]]+256)
 						} else if len(model.Textures) == 3 {
-							splatTexture(layer, model.Textures[2], texIDs[layer][model.Textures[0]]+512)
+							splatTexture(layer, model.Textures[2], texIDs[layer][model.Textures[0]]+256)
 						} else {
 							splatTexture(layer, model.Textures[1], texIDs[layer][model.Textures[0]]+512)
 						}
