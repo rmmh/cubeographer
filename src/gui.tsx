@@ -76,6 +76,7 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
     const [updateTick, setUpdateTick] = useState<number>(0);
     const [lod2UpdateBudget, setLod2UpdateBudget] = useState<number>(sceneGraph.lod2UpdateBudget);
     const [lod1Reconstruction, setLod1Reconstruction] = useState<boolean>(sceneGraph.lod1Reconstruction);
+    const [showStreamingLOD0, setShowStreamingLOD0] = useState<boolean>(sceneGraph.showStreamingLOD0);
 
     // Subscribe to SceneGraph updates to trigger GUI re-renders on streaming/loading changes
     useEffect(() => {
@@ -249,6 +250,13 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         render();
     };
 
+    const handleShowStreamingLOD0ToggleChange = (e: any) => {
+        const checked = e.target.checked;
+        setShowStreamingLOD0(checked);
+        sceneGraph.showStreamingLOD0 = checked;
+        render();
+    };
+
     const handleLod2UpdateBudgetChange = (e: any) => {
         const val = parseInt(e.target.value, 10);
         setLod2UpdateBudget(val);
@@ -371,6 +379,17 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                                 type="checkbox"
                                 checked={lod1Reconstruction}
                                 onChange={handleLod1ReconstructionToggleChange}
+                            />
+                            <span className="switch-slider"></span>
+                        </label>
+                    </div>
+                    <div className="switch-container">
+                        <span className="switch-label">Show Streaming LOD0s</span>
+                        <label className="premium-switch">
+                            <input
+                                type="checkbox"
+                                checked={showStreamingLOD0}
+                                onChange={handleShowStreamingLOD0ToggleChange}
                             />
                             <span className="switch-slider"></span>
                         </label>

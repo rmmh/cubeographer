@@ -563,6 +563,7 @@ export class SceneGraph {
     lod1Dist = 1920.0;
     lod2Dist = 15360.0;
     lod1Reconstruction = false;
+    showStreamingLOD0 = false;
     lod2GroupSize = 2;
     lod2DistortionThreshold = 15.0;
     lod2UpdateBudget = 4;
@@ -727,7 +728,11 @@ export class SceneGraph {
                     if (frustum.intersectsAABB(minRlet, maxRlet)) {
                         const distToRegionlet = getDistance(camera.position, minRlet, maxRlet, 0);
                         if (this.lod0Dist > 0 && distToRegionlet <= this.lod0Dist) {
-                            if (rlet.status === 'READY' || rlet.status === 'STREAM') {
+                            const isStreaming = rlet.status === 'STREAM';
+                            const hasLOD1 = region.impostor.status === 'READY' && region.impostor.textures;
+                            const showLOD0 = rlet.status === 'READY' || (isStreaming && (this.showStreamingLOD0 || !hasLOD1));
+
+                            if (showLOD0) {
                                 for (const chunk of rlet.chunks) {
                                     chunksToRender.push(chunk);
                                 }
