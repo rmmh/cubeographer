@@ -559,12 +559,13 @@ export class SceneGraph {
     requestManager = new RequestManager();
     showBoundaries = false;
     mapMetadata: MapMetadata | null = null;
-    lod0Max = 4;
+    lod0Dist = 128.0;
+    lod1Dist = 1920.0;
+    lod2Dist = 15360.0;
     lod1Reconstruction = false;
     lod2GroupSize = 2;
     lod2DistortionThreshold = 15.0;
     lod2UpdateBudget = 4;
-    lod2StartDistance = 1536.0;
     lod2Manager: LOD2GroupManager;
     lastCullResults: CullResults | null = null;
     private listeners = new Set<() => void>();
@@ -653,123 +654,103 @@ export class SceneGraph {
         const missingImpostors: ImpostorNode[] = [];
         const lod2GroupsToRender = new Set<LOD2Group>();
 
-        // 1. Gather all visible regionlets across all regions in the frustum (loaded or not)
-        const allVisibleRegionlets: { rlet: RegionletNode; distSq: number }[] = [];
-        const visibleRegionletSet = new Set<RegionletNode>();
-
-        for (const region of this.regions.values()) {
-            if (!frustum.intersectsRegion(region.rx, region.rz, region.impostor.maxHeight ?? 320.0)) {
-                continue;
-            }
-
-            for (const rlet of region.regionlets) {
-                const xBase = region.rx * 512 + (rlet.off & 1) * 256;
-                const zBase = region.rz * 512 + (rlet.off & 2) * 128;
-                let minY: number, maxY: number;
-                if (rlet.chunks.length > 0) {
-                    minY = Math.min(...rlet.chunks.map(c => c.minY));
-                    maxY = Math.max(...rlet.chunks.map(c => c.maxY));
-                } else {
-                    minY = -64; maxY = 320;
-                }
-                const min = vec3.fromValues(xBase, minY, zBase);
-                const max = vec3.fromValues(xBase + 256, maxY, zBase + 256);
-                if (frustum.intersectsAABB(min, max)) {
-                    const distSq = sqrDistPointToAABB(camera.position, min, max);
-                    allVisibleRegionlets.push({ rlet, distSq });
-                    visibleRegionletSet.add(rlet);
-                }
-            }
-        }
-
-        // 2. Sort all visible regionlets by distance to camera (closest first)
-        allVisibleRegionlets.sort((a, b) => a.distSq - b.distSq);
-
-        // 3. Define the target fetch set (top closest visible chunks, loaded or not)
-        const targetRegionlets = allVisibleRegionlets.slice(0, this.lod0Max);
-        const targetSet = new Set<RegionletNode>(targetRegionlets.map(x => x.rlet));
-
-        // 4. Identify all visible chunks that are actually LOADED
-        const loadedVisible = allVisibleRegionlets.filter(x => x.rlet.status === 'READY' || x.rlet.status === 'STREAM');
-
-        // 5. Determine which chunks will actually be rendered (top closest loaded chunks)
-        const renderedChunks = loadedVisible.slice(0, this.lod0Max);
-        const renderedChunkSet = new Set<RegionletNode>(renderedChunks.map(x => x.rlet));
-
-        // 6. Decide rendering and fetching per region
-        for (const region of this.regions.values()) {
-            if (!frustum.intersectsRegion(region.rx, region.rz, region.impostor.maxHeight ?? 320.0)) {
-                continue;
-            }
-
-            // Find all regionlets in this region that intersect the frustum
-            const regionVisibleRlets = region.regionlets.filter(rlet =>
-                visibleRegionletSet.has(rlet)
-            );
-
-            if (regionVisibleRlets.length === 0) {
-                continue;
-            }
-
-            // A region is fully rendered as chunks if all of its visible regionlets are actually being rendered as chunks
-            const allVisibleAreRendered = regionVisibleRlets.every(rlet => renderedChunkSet.has(rlet));
-
-            if (allVisibleAreRendered) {
-                // Render them as chunks!
-                for (const rlet of regionVisibleRlets) {
-                    for (const chunk of rlet.chunks) chunksToRender.push(chunk);
-                }
+        const getDistance = (cameraPos: vec3, min: vec3, max: vec3, minDistanceSpecified: number): number => {
+            if (minDistanceSpecified <= 256) {
+                return Math.sqrt(sqrDistPointToAABB(cameraPos, min, max));
             } else {
-                // Check if this region belongs to a distant LOD2 group
-                const G = this.lod2GroupSize;
-                const groupX = Math.floor(region.rx / G);
-                const groupZ = Math.floor(region.rz / G);
+                const center = vec3.fromValues(
+                    (min[0] + max[0]) * 0.5,
+                    (min[1] + max[1]) * 0.5,
+                    (min[2] + max[2]) * 0.5
+                );
+                const diagonal = vec3.fromValues(
+                    max[0] - min[0],
+                    max[1] - min[1],
+                    max[2] - min[2]
+                );
+                const radius = vec3.length(diagonal) * 0.5;
+                return Math.max(0.0, vec3.distance(cameraPos, center) - radius);
+            }
+        };
 
-                const groupMinX = groupX * G * 512;
-                const groupMaxX = (groupX + 1) * G * 512;
-                const groupMinZ = groupZ * G * 512;
-                const groupMaxZ = (groupZ + 1) * G * 512;
+        const G = this.lod2GroupSize;
 
-                const groupCenterX = (groupMinX + groupMaxX) * 0.5;
-                const groupCenterZ = (groupMinZ + groupMaxZ) * 0.5;
+        for (const region of this.regions.values()) {
+            if (!frustum.intersectsRegion(region.rx, region.rz, region.impostor.maxHeight ?? 320.0)) {
+                continue;
+            }
 
-                const distToGroup = vec3.distance(camera.position, vec3.fromValues(groupCenterX, 160, groupCenterZ));
+            // 1. Evaluate LOD2 Group distance
+            const groupX = Math.floor(region.rx / G);
+            const groupZ = Math.floor(region.rz / G);
+            const groupMinX = groupX * G * 512;
+            const groupMaxX = (groupX + 1) * G * 512;
+            const groupMinZ = groupZ * G * 512;
+            const groupMaxZ = (groupZ + 1) * G * 512;
 
-                if (distToGroup >= this.lod2StartDistance) {
-                    // Render as LOD2!
-                    const group = this.lod2Manager.getOrCreateGroup(groupX, groupZ, G);
-                    lod2GroupsToRender.add(group);
+            const groupMin = vec3.fromValues(groupMinX, -64, groupMinZ);
+            const groupMax = vec3.fromValues(groupMaxX, 320.0, groupMaxZ);
+            // Implicit minimum distance for LOD2 is Math.max(lod1Dist, lod0Dist)
+            const lod2MinDist = Math.max(this.lod1Dist, this.lod0Dist);
+            const distToGroup = getDistance(camera.position, groupMin, groupMax, lod2MinDist);
 
-                    // Fetch impostor if missing
-                    if (region.impostor.status === 'NONE') {
-                        missingImpostors.push(region.impostor);
+            if (distToGroup > lod2MinDist && distToGroup <= this.lod2Dist) {
+                // Render as LOD2 Group
+                const group = this.lod2Manager.getOrCreateGroup(groupX, groupZ, G);
+                lod2GroupsToRender.add(group);
+
+                // Fetch region impostor if missing since LOD2 FBO rendering needs it
+                if (region.impostor.status === 'NONE') {
+                    missingImpostors.push(region.impostor);
+                }
+            } else if (distToGroup <= lod2MinDist) {
+                const regionMin = vec3.fromValues(region.rx * 512, -64, region.rz * 512);
+                const regionMax = vec3.fromValues(region.rx * 512 + 512, region.impostor.maxHeight ?? 320.0, region.rz * 512 + 512);
+                const distToRegion = getDistance(camera.position, regionMin, regionMax, this.lod0Dist);
+
+                let hasLOD1Regionlet = false;
+
+                // Evaluate each regionlet for LOD0
+                for (const rlet of region.regionlets) {
+                    const xBase = region.rx * 512 + (rlet.off & 1) * 256;
+                    const zBase = region.rz * 512 + (rlet.off & 2) * 128;
+                    let minY: number, maxY: number;
+                    if (rlet.chunks.length > 0) {
+                        minY = Math.min(...rlet.chunks.map(c => c.minY));
+                        maxY = Math.max(...rlet.chunks.map(c => c.maxY));
+                    } else {
+                        minY = -64; maxY = 320;
                     }
-                } else {
-                    // Not fully rendered as chunks (some visible regionlets are missing or sliced out):
-                    // A) Fetch missing regionlets ONLY if they are in the top 8 closest visible target set
-                    for (const rlet of region.regionlets) {
-                        if (rlet.status !== 'READY' && rlet.status !== 'STREAM') {
-                            if (targetSet.has(rlet)) {
-                                missingRegionlets.push(rlet);
+                    const minRlet = vec3.fromValues(xBase, minY, zBase);
+                    const maxRlet = vec3.fromValues(xBase + 256, maxY, zBase + 256);
+
+                    if (frustum.intersectsAABB(minRlet, maxRlet)) {
+                        const distToRegionlet = getDistance(camera.position, minRlet, maxRlet, 0);
+                        if (this.lod0Dist > 0 && distToRegionlet <= this.lod0Dist) {
+                            if (rlet.status === 'READY' || rlet.status === 'STREAM') {
+                                for (const chunk of rlet.chunks) {
+                                    chunksToRender.push(chunk);
+                                }
+                            } else {
+                                if (rlet.status === 'NONE') {
+                                    missingRegionlets.push(rlet);
+                                }
+                                hasLOD1Regionlet = true;
                             }
+                        } else {
+                            hasLOD1Regionlet = true;
                         }
                     }
+                }
 
-                    // B) Render any loaded/streaming regionlets that are in our renderedChunkSet!
-                    for (const rlet of regionVisibleRlets) {
-                        if (renderedChunkSet.has(rlet)) {
-                            for (const chunk of rlet.chunks) chunksToRender.push(chunk);
-                        }
-                    }
-
-                    // C) Render the region's LOD impostor if loaded (which will dynamically mask out active chunks)
+                // Render LOD1 region impostor if in range and any visible portion needs LOD1 fallback (LOD1 fills the gap when group is not rendered as LOD2)
+                const maxLodDist = Math.max(this.lod1Dist, this.lod2Dist);
+                const inLod1Range = (maxLodDist >= this.lod0Dist) && (distToRegion <= maxLodDist);
+                if (inLod1Range && hasLOD1Regionlet) {
                     if (region.impostor.status === 'READY' && region.impostor.textures) {
                         impostorsToRender.push(region.impostor);
-                    } else {
-                        // Fetch impostor if missing
-                        if (region.impostor.status === 'NONE') {
-                            missingImpostors.push(region.impostor);
-                        }
+                    } else if (region.impostor.status === 'NONE') {
+                        missingImpostors.push(region.impostor);
                     }
                 }
             }

@@ -40,14 +40,40 @@ export function setupGUI(
     }
 }
 
+const stops: number[] = [0];
+let val = 64;
+while (val <= 32768) {
+    stops.push(val);
+    const power = Math.pow(2, Math.floor(Math.log2(val)));
+    const step = power / 4;
+    val += step;
+}
+if (!stops.includes(1920)) {
+    stops.push(1920);
+}
+if (!stops.includes(15360)) {
+    stops.push(15360);
+}
+stops.sort((a, b) => a - b);
+stops.push(Infinity);
+
+function formatDistance(dist: number, isLOD0: boolean = false): string {
+    if (dist === Infinity) return "Inf";
+    if (dist === 0) return isLOD0 ? "OFF (0m)" : "0m";
+    if (dist >= 10000) return `${(dist / 1000).toFixed(0)}km`;
+    if (dist >= 2048) return `${(dist / 1000).toFixed(1)}km`;
+    return `${dist}m`;
+}
+
 function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
     const [collapsed, setCollapsed] = useState<boolean>(true);
-    const [maxHighResChunks, setMaxHighResChunks] = useState<number>(sceneGraph.lod0Max);
+    const [lod0Dist, setLod0Dist] = useState<number>(sceneGraph.lod0Dist);
+    const [lod1Dist, setLod1Dist] = useState<number>(sceneGraph.lod1Dist);
+    const [lod2Dist, setLod2Dist] = useState<number>(sceneGraph.lod2Dist);
     const [inspectorMode, setInspectorMode] = useState<boolean>(false);
     const [showBoundaries, setShowBoundaries] = useState<boolean>(sceneGraph.showBoundaries);
     const [activeRegion, setActiveRegion] = useState<{ rx: number; rz: number } | null>(null);
     const [updateTick, setUpdateTick] = useState<number>(0);
-    const [lod2StartDistance, setLod2StartDistance] = useState<number>(sceneGraph.lod2StartDistance);
     const [lod2UpdateBudget, setLod2UpdateBudget] = useState<number>(sceneGraph.lod2UpdateBudget);
     const [lod1Reconstruction, setLod1Reconstruction] = useState<boolean>(sceneGraph.lod1Reconstruction);
 
@@ -66,11 +92,25 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
     let renderedL2 = 0;
     let totalL2 = 0;
 
+    let countL0 = 0;
+    let countL1 = 0;
+    let countL2 = 0;
+
     const cullResults = sceneGraph.lastCullResults;
     if (cullResults) {
         const renderedChunks = new Set(cullResults.chunks);
         const renderedLod1 = new Set(cullResults.impostors);
         const renderedLod2 = new Set(cullResults.lod2Groups);
+
+        const lod0Regions = new Set<string>();
+        for (const chunk of cullResults.chunks) {
+            const rx = Math.floor(chunk.position[0] / 512);
+            const rz = Math.floor(chunk.position[2] / 512);
+            lod0Regions.add(`${rx},${rz}`);
+        }
+        countL0 = lod0Regions.size;
+        countL1 = renderedLod1.size;
+        countL2 = renderedLod2.size * (sceneGraph.lod2GroupSize * sceneGraph.lod2GroupSize);
 
         for (const region of sceneGraph.regions.values()) {
             // LOD0 total
@@ -172,12 +212,20 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         }
     };
 
-    const handleSliderChange = (e: any) => {
-        const val = parseInt(e.target.value, 10);
-        setMaxHighResChunks(val);
-        sceneGraph.lod0Max = val;
+    const makeLodChangeHandler = (
+        setDist: (dist: number) => void,
+        key: 'lod0Dist' | 'lod1Dist' | 'lod2Dist'
+    ) => (e: any) => {
+        const idx = parseInt(e.target.value, 10);
+        const dist = stops[idx];
+        setDist(dist);
+        sceneGraph[key] = dist;
         render();
     };
+
+    const handleLod0Change = makeLodChangeHandler(setLod0Dist, 'lod0Dist');
+    const handleLod1Change = makeLodChangeHandler(setLod1Dist, 'lod1Dist');
+    const handleLod2Change = makeLodChangeHandler(setLod2Dist, 'lod2Dist');
 
     const handleInspectorToggleChange = (e: any) => {
         const checked = e.target.checked;
@@ -198,15 +246,6 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         const checked = e.target.checked;
         setLod1Reconstruction(checked);
         sceneGraph.lod1Reconstruction = checked;
-        render();
-    };
-
-
-
-    const handleLod2StartDistanceChange = (e: any) => {
-        const val = parseFloat(e.target.value);
-        setLod2StartDistance(val);
-        sceneGraph.lod2StartDistance = val;
         render();
     };
 
@@ -267,35 +306,64 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                             <span>{formatBytes(renderedL0 + renderedL1 + renderedL2)} / {formatBytes(totalL0 + totalL1 + totalL2)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
-                            <span>LOD0:</span>
+                            <span>LOD0 ({countL0}):</span>
                             <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL0)} / {formatBytes(totalL0)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
-                            <span>LOD1:</span>
+                            <span>LOD1 ({countL1}):</span>
                             <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL1)} / {formatBytes(totalL1)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-sub)' }}>
-                            <span>LOD2:</span>
+                            <span>LOD2 ({countL2}):</span>
                             <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{formatBytes(renderedL2)} / {formatBytes(totalL2)}</span>
                         </div>
                     </div>
 
-                    {sceneGraph.mapMetadata?.full_regions?.size > 0 && (
-                        <div className="debug-control-group">
-                            <div className="debug-label-row">
-                                <span>Max LOD0</span>
-                                <span className="debug-badge">{maxHighResChunks} = {maxHighResChunks * 256} chunks</span>
-                            </div>
-                            <input
-                                type="range"
-                                className="premium-slider"
-                                min="0"
-                                max="64"
-                                value={maxHighResChunks}
-                                onInput={handleSliderChange}
-                            />
+                    <div className="debug-control-group">
+                        <div className="debug-label-row">
+                            <span>LOD0 Max Distance</span>
+                            <span className="debug-badge">{formatDistance(lod0Dist, true)}</span>
                         </div>
-                    )}
+                        <input
+                            type="range"
+                            className="premium-slider"
+                            min="0"
+                            max={stops.length - 1}
+                            step="1"
+                            value={stops.indexOf(lod0Dist)}
+                            onInput={handleLod0Change}
+                        />
+                    </div>
+                    <div className="debug-control-group">
+                        <div className="debug-label-row">
+                            <span>LOD1 Max Distance</span>
+                            <span className="debug-badge">{formatDistance(lod1Dist)}</span>
+                        </div>
+                        <input
+                            type="range"
+                            className="premium-slider"
+                            min="0"
+                            max={stops.length - 1}
+                            step="1"
+                            value={stops.indexOf(lod1Dist)}
+                            onInput={handleLod1Change}
+                        />
+                    </div>
+                    <div className="debug-control-group">
+                        <div className="debug-label-row">
+                            <span>LOD2 Max Distance</span>
+                            <span className="debug-badge">{formatDistance(lod2Dist)}</span>
+                        </div>
+                        <input
+                            type="range"
+                            className="premium-slider"
+                            min="0"
+                            max={stops.length - 1}
+                            step="1"
+                            value={stops.indexOf(lod2Dist)}
+                            onInput={handleLod2Change}
+                        />
+                    </div>
                     <div className="switch-container">
                         <span className="switch-label">LOD1 Mesh Reconstruction</span>
                         <label className="premium-switch">
@@ -306,21 +374,6 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
                             />
                             <span className="switch-slider"></span>
                         </label>
-                    </div>
-                    <div className="debug-control-group">
-                        <div className="debug-label-row">
-                            <span>LOD2 Start Distance</span>
-                            <span className="debug-badge">{lod2StartDistance.toFixed(0)}m</span>
-                        </div>
-                        <input
-                            type="range"
-                            className="premium-slider"
-                            min="512"
-                            max="8192"
-                            step="256"
-                            value={lod2StartDistance}
-                            onInput={handleLod2StartDistanceChange}
-                        />
                     </div>
                     <div className="debug-control-group">
                         <div className="debug-label-row">
@@ -821,7 +874,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                 <div className="region-meta-card">
                                     <div className="meta-coord">Group {groupX_current}, {groupZ_current} ({G_current}x{G_current})</div>
                                     <div className="meta-world">Deviation: {lod2GroupDev !== undefined ? `${lod2GroupDev.toFixed(1)}°` : 'N/A'}</div>
-                                    <div className="meta-world">Start Distance: {sceneGraph.lod2StartDistance.toFixed(0)}m</div>
+                                    <div className="meta-world">Start Distance: {formatDistance(sceneGraph.lod1Dist)}</div>
                                 </div>
 
                                 {lod2Canvases && (

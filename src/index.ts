@@ -91,9 +91,9 @@ async function loadMetadata() {
             tile_regions: parseSet(data.tile_regions),
             loaded: true
         };
-        console.debug("Loaded map/metadata.json:", sceneGraph.mapMetadata);
+        console.debug("loaded map/metadata.json:", sceneGraph.mapMetadata);
     } catch (e) {
-        console.warn("Could not load map/metadata.json, falling back to eager loading:", e);
+        console.warn("could not load map/metadata.json, falling back to eager loading:", e);
         sceneGraph.mapMetadata = {
             full_regions: new Set<string>(),
             lod_regions: new Set<string>(),
@@ -753,6 +753,7 @@ function fetchRegion(x: number, z: number, off: number) {
                     }
                     throw new Error(`failed to fetch cmt: ${response.statusText}`);
                 }
+                const filename = response.url.replace(/.*\//, '');
 
                 sceneGraph.updateRegionletStatus(x, z, off, 'STREAM');
 
@@ -778,7 +779,7 @@ function fetchRegion(x: number, z: number, off: number) {
                 }
 
                 const totalLength = rletMetas.flatMap((r: RletMeta) => r.layers).reduce((acc: number, l: LayerMeta) => acc + l.length, 0);
-                console.debug("streaming", response.url, (totalLength / 1024) | 0, "KiB,", rletMetas.length, "regionlets");
+                console.debug("streaming", filename, (totalLength / 1024) | 0, "KiB,", rletMetas.length, "regionlets");
 
                 // Create one Chunk per regionlet, each positioned at its world Y offset
                 const xBase = x * 512 + (off & 1) * 256;
@@ -955,7 +956,7 @@ function fetchRegion(x: number, z: number, off: number) {
                 }
 
                 sceneGraph.updateRegionletStatus(x, z, off, 'READY');
-                console.debug("done streaming", response.url, chunks.map(c => `[${c.minY}..${c.maxY}]`).join(', '));
+                console.debug("done streaming", filename, chunks.map(c => `[${c.minY}..${c.maxY}]`).join(', '));
                 render();
             } catch (e) {
                 sceneGraph.updateRegionletStatus(x, z, off, 'ERROR');
