@@ -104,7 +104,20 @@ void main() {
     t_enter = max(t_enter, 0.0);
 
     if (t_enter > t_exit) discard;
-    if (isSolid(rayOrigin)) discard;
+    if (isSolid(rayOrigin)) {
+        float t = 0.0;
+        for (int i = 0; i < 256; i++) {
+            t += 1.0 / 256.0;
+            if (t > t_exit) break;
+            if (!isSolid(rayOrigin + t * rayDir)) {
+                t_enter = t;
+                break;
+            }
+        }
+        if (isSolid(rayOrigin + t_enter * rayDir) || t_enter > t_exit) {
+            discard;
+        }
+    }
 
     int hitFace = 0;
     if (tMin.x >= tMin.y && tMin.x >= tMin.z) {
