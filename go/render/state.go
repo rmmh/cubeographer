@@ -18,8 +18,16 @@ func stringSliceSearch(slice []string, needle string) int {
 	return -1
 }
 
+func isExhaustiveBool(values []string) bool {
+	if len(values) != 2 {
+		return false
+	}
+	return (values[0] == "false" && values[1] == "true") || (values[0] == "true" && values[1] == "false")
+}
+
 func buildStateList(name string, st *resourcepack.BlockState) [][]string {
 	attrs := map[string][]string{}
+	multipartAttrs := map[string]bool{}
 
 	if st.Variants != nil {
 		for pred := range st.Variants {
@@ -58,6 +66,7 @@ func buildStateList(name string, st *resourcepack.BlockState) [][]string {
 					if stringSliceSearch(attrs[attr], val) == -1 {
 						attrs[attr] = append(attrs[attr], val)
 					}
+					multipartAttrs[attr] = true
 				}
 			}
 		}
@@ -74,6 +83,11 @@ func buildStateList(name string, st *resourcepack.BlockState) [][]string {
 		for name, values := range attrs {
 			if len(values) == 1 && values[0] == "true" {
 				attrs[name] = append(attrs[name], "false")
+				values = attrs[name]
+			} else if multipartAttrs[name] && !isExhaustiveBool(values) {
+				// Prepend "" so unlisted values (e.g. north=none) map to index 0
+				// rather than colliding with the first listed value's index.
+				attrs[name] = append([]string{""}, attrs[name]...)
 				values = attrs[name]
 			}
 			sort.Strings(values)

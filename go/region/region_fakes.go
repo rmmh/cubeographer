@@ -140,8 +140,16 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 		for _, b := range layerMap[layerMask] {
 			ns := []int{}
 			seen := map[string]bool{}
-			maxState := int(bm.nidToSmap[b].Max())
+			smap := bm.nidToSmap[b]
+			isWall := strings.HasSuffix(bm.NidToName[b], "_wall")
+			maxState := int(smap.Max())
 			for i := 0; i <= maxState; i++ {
+				if isWall && smap != nil {
+					props := smap.Decode(i)
+					if props["up"] == "false" && (props["north"] != "" || props["east"] != "" || props["south"] != "" || props["west"] != "") {
+						continue
+					}
+				}
 				tmplIdx := i
 				if len(bm.Tmpl[b]) == 1 {
 					tmplIdx = 0
