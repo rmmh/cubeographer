@@ -3,7 +3,7 @@ import * as twgl from 'twgl.js';
 
 function readDepthAtPixel(context: any, ndcX: number, ndcY: number): number {
     const gl = context.gl;
-    if (!context.fboDepth) return 1.0;
+    if (!context.fboDepth) return 0.0;
 
     // Create resources for depth reading on-demand (only once)
     if (!context._depthReadFBOInfo) {
@@ -26,10 +26,23 @@ function readDepthAtPixel(context: any, ndcX: number, ndcY: number): number {
             uniform sampler2D uDepthTex;
             uniform vec2 uTexCoord;
             out vec4 fragColor;
-            
+
             void main() {
-                float depth = texture(uDepthTex, uTexCoord).r;
-                uint u = floatBitsToUint(depth);
+                ivec2 texSize = textureSize(uDepthTex, 0);
+                float maxDepth = 0.0;
+                for (int dy = -4; dy <= 4; ++dy) {
+                    for (int dx = -4; dx <= 4; ++dx) {
+                        vec2 offset = vec2(dx, dy) / vec2(texSize);
+                        vec2 coord = uTexCoord + offset;
+                        if (coord.x >= 0.0 && coord.x <= 1.0 && coord.y >= 0.0 && coord.y <= 1.0) {
+                            float d = texture(uDepthTex, coord).r;
+                            if (d > maxDepth) {
+                                maxDepth = d;
+                            }
+                        }
+                    }
+                }
+                uint u = floatBitsToUint(maxDepth);
                 fragColor = vec4(
                     float((u >> 24u) & 0xFFu) / 255.0,
                     float((u >> 16u) & 0xFFu) / 255.0,
@@ -117,8 +130,8 @@ export function createOrbitTargetFinder(
         const pixelX = Math.floor(x);
         const pixelY = Math.floor(context.canvas.height - y);
 
-        // Center a 4px target scissor box on (pixelX, pixelY) to cushion subpixel/DPI discrepancies
-        const scissorSize = 4;
+        // Center a 12px target scissor box on (pixelX, pixelY) to cushion subpixel/DPI discrepancies and accommodate 9x9 box sampling
+        const scissorSize = 12;
         const halfSize = Math.floor(scissorSize / 2);
         const scissorX = Math.max(0, pixelX - halfSize);
         const scissorY = Math.max(0, pixelY - halfSize);
@@ -130,7 +143,7 @@ export function createOrbitTargetFinder(
         context.scissorBox = null;
 
         // Read the depth value at this pixel from our FBO depth texture
-        const depth = readDepthAtPixel(context, ndcX, ndcY);
+        let depth = readDepthAtPixel(context, ndcX, ndcY);
 
         // If it's very close to 0.0 (the cleared value), we clicked the sky/background
         if (depth <= 0.000001) {

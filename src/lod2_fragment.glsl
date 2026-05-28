@@ -44,6 +44,8 @@ void main() {
             float z_tex = texture(uDepthTex, uv).r;
 
             if (z_tex > 0.0001) {
+                // Correct for 16-bit depth buffer precision loss
+                z_tex = min(1.0, z_tex + 0.5 / 65535.0);
                 float z_front = ndcP.z * 0.5 + 0.5;
 
                 // 2. Project the exit position to find the depth at the back
