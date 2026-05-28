@@ -456,7 +456,8 @@ function getWebGLTextureAsCanvas(
     texture: WebGLTexture | null | undefined,
     width: number,
     height: number,
-    isDepth: boolean
+    isDepth: boolean,
+    flipY: boolean = false
 ): HTMLCanvasElement | null {
     if (!texture) return null;
 
@@ -503,13 +504,22 @@ function getWebGLTextureAsCanvas(
             }
         }
 
+        const resultPixels = flipY ? new Uint8Array(width * height * 4) : pixels;
+        if (flipY) {
+            for (let y = 0; y < height; y++) {
+                const srcRowOffset = y * width * 4;
+                const destRowOffset = (height - 1 - y) * width * 4;
+                resultPixels.set(pixels.subarray(srcRowOffset, srcRowOffset + width * 4), destRowOffset);
+            }
+        }
+
         const canvas = document.createElement("canvas");
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         if (!ctx) return null;
 
-        const imgData = new ImageData(new Uint8ClampedArray(pixels.buffer), width, height);
+        const imgData = new ImageData(new Uint8ClampedArray(resultPixels), width, height);
         ctx.putImageData(imgData, 0, 0);
         return canvas;
     } catch (e) {
@@ -568,7 +578,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
         if (group && group.hasTexture && group.fbo) {
             try {
                 const gl = sceneGraph.context.gl;
-                const colorCanvas = getWebGLTextureAsCanvas(gl, group.fbo.attachments[0], group.fbo.width, group.fbo.height, false);
+                const colorCanvas = getWebGLTextureAsCanvas(gl, group.fbo.attachments[0], group.fbo.width, group.fbo.height, false, true);
                 if (colorCanvas) {
                     setLod2Canvases({ color: colorCanvas });
                 } else {
