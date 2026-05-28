@@ -23,6 +23,7 @@ type BlockMapper struct {
 	nidToSmap          []render.Statemap
 	Tmpl               [][][][]uint32
 	Layer              [][][]uint8
+	NoShade            [][][]bool
 	Colors             [][][]color.RGBA
 }
 
@@ -34,6 +35,7 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 		solid:     []uint64{},
 		Tmpl:      [][][][]uint32{nil},
 		Layer:     [][][]uint8{nil},
+		NoShade:   [][][]bool{nil},
 		Colors:    [][][]color.RGBA{nil},
 	}
 
@@ -67,20 +69,25 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 			}
 			tmpls := [][][]uint32{}
 			layers := [][]uint8{}
+			noshades := [][]bool{}
 			colors := [][]color.RGBA{}
 			for i, variant := range b.Templates {
 				vtmpls := [][]uint32{}
 				vlayers := []uint8{}
+				vnoshades := []bool{}
 				for _, model := range variant {
 					vtmpls = append(vtmpls, model.Template)
 					vlayers = append(vlayers, uint8(model.Layer))
+					vnoshades = append(vnoshades, model.NoShade)
 				}
 				tmpls = append(tmpls, vtmpls)
 				layers = append(layers, vlayers)
+				noshades = append(noshades, vnoshades)
 				colors = append(colors, convertColors(b.Colors[i]))
 			}
 			bm.Tmpl = append(bm.Tmpl, tmpls)
 			bm.Layer = append(bm.Layer, layers)
+			bm.NoShade = append(bm.NoShade, noshades)
 			bm.Colors = append(bm.Colors, colors)
 		}
 	}

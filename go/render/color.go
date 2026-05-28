@@ -190,6 +190,15 @@ func (be *BlockEntry) updateColors(textures map[string]image.Image) {
 			totg /= pixelCount
 			totb /= pixelCount
 
+			if be.Name == "redstone_wire" || be.Name == "minecraft:redstone_wire" {
+				stateProps := BuildStateMap(be.States).Decode(i)
+				powerVal := 0
+				if pStr, ok := stateProps["power"]; ok {
+					fmt.Sscanf(pStr, "%d", &powerVal)
+				}
+				totr, totg, totb = redstoneColor(powerVal)
+			}
+
 			hexColor := fmt.Sprintf("%02x%02x%02x", uint8(totr), uint8(totg), uint8(totb))
 			faceColors[face] = hexColor
 
@@ -208,4 +217,18 @@ func (be *BlockEntry) updateColors(textures map[string]image.Image) {
 				faceColors[3], faceColors[4], faceColors[5])
 		}
 	}
+}
+
+func redstoneColor(powerVal int) (r, g, b int) {
+	power := float32(powerVal) / 15.0
+
+	red := power*0.6 + 0.4
+	if powerVal == 0 {
+		red = 0.3
+	}
+
+	green := max(0.0, min(1.0, power*power*0.7-0.5))
+	blue := max(0.0, min(1.0, power*power*0.6-0.7))
+
+	return int(red * 255), int(green * 255), int(blue * 255)
 }

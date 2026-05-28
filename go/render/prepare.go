@@ -8,6 +8,8 @@ import (
 	"image/draw"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 
 	rp "github.com/rmmh/cubeographer/go/resourcepack"
 	"github.com/samber/lo"
@@ -104,6 +106,7 @@ type ModelEntry struct {
 	Layer      LayerNumber `json:"layer"`
 	Textures   []string    `json:"textures,omitempty"`
 	Template   []uint32    `json:"tmpl,omitempty"`
+	NoShade    bool        `json:"no_shade,omitempty"`
 	Bounds     []float32   `json:"-"`
 	UVs        [][]float32 `json:"-"`
 	Rotations  []int       `json:"-"`
@@ -176,11 +179,14 @@ func (s *StateConverter) renderCube(m *rp.Model) *ModelEntry {
 		return nil
 	}
 
+	noShade := el.Shade != nil && !*el.Shade
+
 	if !tint { // texs[1] != texs[2] || texs[2] != texs[3] || texs[3] != texs[4] {
 		// grab texs again to match face visibility order
 		texs, _ = getCubeFaces(m, [...]rp.BlockModelFace{el.Faces["west"], el.Faces["east"], el.Faces["south"], el.Faces["north"], el.Faces["up"], el.Faces["down"]})
 		m := &ModelEntry{
-			Layer: LayerVoxel,
+			Layer:   LayerVoxel,
+			NoShade: noShade,
 		}
 		// one cube output per texture
 		for i, t := range texs {
@@ -209,6 +215,7 @@ func (s *StateConverter) renderCube(m *rp.Model) *ModelEntry {
 			Layer:    LayerCube,
 			Textures: []string{texs[1], texs[4], texs[5]},
 			Template: []uint32{0, meta | 1<<30},
+			NoShade:  noShade,
 		}
 	}
 
@@ -216,6 +223,7 @@ func (s *StateConverter) renderCube(m *rp.Model) *ModelEntry {
 		Layer:    LayerCube,
 		Textures: []string{texs[0]},
 		Template: []uint32{0, meta},
+		NoShade:  noShade,
 	}
 }
 
@@ -359,6 +367,7 @@ func (s *StateConverter) renderCuboid(m *rp.Model) *ModelEntry {
 		Layer:      LayerCuboid,
 		Textures:   texs,
 		Template:   []uint32{0, meta},
+		NoShade:    el.Shade != nil && !*el.Shade,
 		Bounds:     []float32{float32(el.From[0]), float32(el.From[1]), float32(el.From[2]), float32(el.To[0]), float32(el.To[1]), float32(el.To[2])},
 		UVs:        uvs,
 		Rotations:  rotations,
@@ -883,8 +892,62 @@ func (s *StateConverter) renderModelSpec(name string, ms *rp.ModelSpec) []ModelE
 	return nil
 }
 
+func matchCondition(cond map[string]any, stateProps map[string]string) bool {
+	for k, condValAny := range cond {
+		stateVal, ok := stateProps[k]
+		if !ok {
+			return false
+		}
+		var condVal string
+		switch v := condValAny.(type) {
+		case string:
+			condVal = v
+		case bool:
+			if v {
+				condVal = "true"
+			} else {
+				condVal = "false"
+			}
+		default:
+			condVal = fmt.Sprintf("%v", v)
+		}
+		matched := false
+		for _, part := range strings.Split(condVal, "|") {
+			if part == stateVal {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func matchWhen(when *rp.BlockStateWhenClause, stateProps map[string]string) bool {
+	if when == nil {
+		return true
+	}
+	if when.IsOr {
+		for _, clause := range when.Clauses {
+			if matchCondition(clause, stateProps) {
+				return true
+			}
+		}
+		return false
+	} else {
+		for _, clause := range when.Clauses {
+			if !matchCondition(clause, stateProps) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
-	slist := buildStateList(st)
+	slist := buildStateList(name, st)
 	smap := BuildStateMap(slist)
 	if st.Variants[""] != nil {
 		models := s.renderModelSpec(name, &st.Variants[""][0])
@@ -896,6 +959,24 @@ func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
 		tmpls := make([][]ModelEntry, smap.Max()+1)
 		for props, models := range st.Variants {
 			tmpls[int(smap.Get(props))] = s.renderModelSpec(name, &models[0])
+		}
+		return BlockEntry{Name: name, States: slist, Templates: tmpls}
+	}
+	if len(st.Multipart) > 0 {
+		tmpls := make([][]ModelEntry, smap.Max()+1)
+		for sIdx := 0; sIdx <= int(smap.Max()); sIdx++ {
+			if !IsValidState(sIdx, slist) {
+				continue
+			}
+			stateProps := BuildStateMap(slist).Decode(sIdx)
+			var combined []ModelEntry
+			for _, part := range st.Multipart {
+				if matchWhen(part.When, stateProps) {
+					models := s.renderModelSpec(name, &part.Apply[0])
+					combined = append(combined, models...)
+				}
+			}
+			tmpls[sIdx] = combined
 		}
 		return BlockEntry{Name: name, States: slist, Templates: tmpls}
 	}
@@ -931,6 +1012,7 @@ type cuboidKey struct {
 	Rotations  [6]int
 	Textures   [6]string
 	Tint       bool
+	Color      uint32
 	RotAxis    string
 	RotAngle   float32
 	RotOrigin  [3]float32
@@ -1197,6 +1279,26 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 					}
 					key.Tint = (model.Template[1] & (1 << 31)) != 0
 
+					if ent.Name == "redstone_wire" || ent.Name == "minecraft:redstone_wire" {
+						rgb, _ := strconv.ParseUint(ent.Colors[0], 16, 32)
+						key.Color = uint32(rgb)
+					}
+
+					var customColor uint32
+					if ent.Name == "redstone_wire" || ent.Name == "minecraft:redstone_wire" {
+						stateProps := BuildStateMap(ent.States).Decode(sIdx)
+						powerVal := 0
+						if pStr, ok := stateProps["power"]; ok {
+							powerVal, _ = strconv.Atoi(pStr)
+						}
+						r, g, b := redstoneColor(powerVal)
+						if 1 == 0 {
+							r, g, b = 255, 0, 0
+						}
+						customColor = uint32((r << 16) | (g << 8) | b)
+					}
+					key.Color = customColor
+
 					if model.RotAxis != "" {
 						key.RotAxis = model.RotAxis
 						key.RotAngle = model.RotAngle
@@ -1236,6 +1338,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								Rotations:  model.Rotations,
 								TexIDs:     texIds,
 								Tint:       key.Tint,
+								Color:      key.Color,
 								RotAxis:    key.RotAxis,
 								RotAngle:   key.RotAngle,
 								RotOrigin:  key.RotOrigin[:],

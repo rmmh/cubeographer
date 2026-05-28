@@ -16,6 +16,7 @@ type UBOModelEntry struct {
 	Rotations  []int       `json:"rotations,omitempty"`
 	TexIDs     []int       `json:"tex_ids,omitempty"`
 	Tint       bool        `json:"tint,omitempty"`
+	Color      uint32      `json:"color,omitempty"`
 	RotAxis    string      `json:"rot_axis,omitempty"`
 	RotAngle   float32     `json:"rot_angle,omitempty"`
 	RotOrigin  []float32   `json:"rot_origin,omitempty"`
@@ -71,7 +72,7 @@ func float32ToFloat16(f float32) uint16 {
 }
 
 func writeMetadataValue(buf []uint32, tid int, offset int, val uint32) {
-	buf[16*tid+offset] = val
+	buf[20*tid+offset] = val
 }
 
 func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
@@ -85,6 +86,9 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 	packedRot := uint32(0)
 	if entry.Tint {
 		packedRot = 1
+	}
+	if entry.Color != 0 {
+		packedRot |= 1 // Ensure tint is enabled
 	}
 
 	// Pack Axis in Bits 1-2
@@ -134,6 +138,10 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 	writeMetadataValue(buf, tid, 2, uint32(ty)|(uint32(tz)<<16))
 	writeMetadataValue(buf, tid, 3, packedRot)
 
+	if entry.Color != 0 {
+		writeMetadataValue(buf, tid, 16, entry.Color)
+	}
+
 	if entry.UVs != nil {
 		for f := 0; f < 6; f++ {
 			if f < len(entry.UVs) && entry.UVs[f] != nil {
@@ -149,12 +157,12 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 				uMax := entry.UVs[f][2]/16.0 + tileX
 				vMax := entry.UVs[f][3]/16.0 + tileY
 
-				packedMin := uint32(math.Round(float64(uMin * 256.0))) | (uint32(math.Round(float64(vMin * 256.0))) << 16)
+				packedMin := uint32(math.Round(float64(uMin*256.0))) | (uint32(math.Round(float64(vMin*256.0))) << 16)
 				if f < len(entry.Rotations) {
 					rotVal := uint32(entry.Rotations[f]/90) % 4
 					packedMin |= rotVal << 14
 				}
-				packedMax := uint32(math.Round(float64(uMax * 256.0))) | (uint32(math.Round(float64(vMax * 256.0))) << 16)
+				packedMax := uint32(math.Round(float64(uMax*256.0))) | (uint32(math.Round(float64(vMax*256.0))) << 16)
 
 				writeMetadataValue(buf, tid, 4+2*f, packedMin)
 				writeMetadataValue(buf, tid, 4+2*f+1, packedMax)
@@ -164,7 +172,7 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 }
 
 func initCuboidMetadataDefaults(buf []uint32) {
-	numEntries := len(buf) / 16
+	numEntries := len(buf) / 20
 	for i := 0; i < numEntries; i++ {
 		fx := float32ToFloat16(0)
 		fy := float32ToFloat16(0)
@@ -177,6 +185,7 @@ func initCuboidMetadataDefaults(buf []uint32) {
 		writeMetadataValue(buf, i, 1, uint32(fz)|(uint32(tx)<<16))
 		writeMetadataValue(buf, i, 2, uint32(ty)|(uint32(tz)<<16))
 		writeMetadataValue(buf, i, 3, 0)
+		// Index 16 (pixel 4) is color (defaults to 0)
 
 		tileX := float32(i % 64)
 		tileY := float32(i / 64)
@@ -187,8 +196,8 @@ func initCuboidMetadataDefaults(buf []uint32) {
 			uMax := 1.0 + tileX
 			vMax := 1.0 + tileY
 
-			packedMin := uint32(math.Round(float64(uMin * 256.0))) | (uint32(math.Round(float64(vMin * 256.0))) << 16)
-			packedMax := uint32(math.Round(float64(uMax * 256.0))) | (uint32(math.Round(float64(vMax * 256.0))) << 16)
+			packedMin := uint32(math.Round(float64(uMin*256.0))) | (uint32(math.Round(float64(vMin*256.0))) << 16)
+			packedMax := uint32(math.Round(float64(uMax*256.0))) | (uint32(math.Round(float64(vMax*256.0))) << 16)
 
 			writeMetadataValue(buf, i, 4+2*f, packedMin)
 			writeMetadataValue(buf, i, 4+2*f+1, packedMax)
@@ -201,7 +210,7 @@ func BuildCuboidMetadata(cuboidEntries map[int]UBOModelEntry, cuboidCount int) [
 	if size == 0 {
 		size = 1
 	}
-	metadataBuf := make([]uint32, size*16)
+	metadataBuf := make([]uint32, size*20)
 	initCuboidMetadataDefaults(metadataBuf)
 
 	// Overwrite with active cuboids

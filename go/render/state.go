@@ -18,7 +18,7 @@ func stringSliceSearch(slice []string, needle string) int {
 	return -1
 }
 
-func buildStateList(st *resourcepack.BlockState) [][]string {
+func buildStateList(name string, st *resourcepack.BlockState) [][]string {
 	attrs := map[string][]string{}
 
 	if st.Variants != nil {
@@ -61,6 +61,11 @@ func buildStateList(st *resourcepack.BlockState) [][]string {
 				}
 			}
 		}
+	}
+
+	if name == "redstone_wire" || name == "minecraft:redstone_wire" {
+		// TODO: must this be hardcoded?
+		attrs["power"] = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"}
 	}
 
 	if len(attrs) > 0 {
@@ -161,4 +166,25 @@ func IsValidState(sIdx int, sl [][]string) bool {
 		offset += attrBits
 	}
 	return true
+}
+
+func (s Statemap) Decode(sIdx int) map[string]string {
+	result := map[string]string{}
+	if len(s) == 0 {
+		return result
+	}
+
+	for key, maskVal := range s {
+		mask := uint16(maskVal >> 16)
+		expectedVal := uint16(maskVal & 0xFFFF)
+
+		if uint16(sIdx)&mask == expectedVal {
+			parts := strings.SplitN(key, "=", 2)
+			if len(parts) == 2 {
+				result[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	return result
 }

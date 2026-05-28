@@ -14,7 +14,7 @@ precision highp int;
 uniform highp usampler2D cuboidDataTex;
 
 uvec4 fetchCuboidPixel(int blockId, int pixelOffset) {
-    int pixelIndex = (blockId << 2) + pixelOffset;
+    int pixelIndex = blockId * 5 + pixelOffset;
     ivec2 texCoord = ivec2(pixelIndex & 511, pixelIndex >> 9);
     return texelFetch(cuboidDataTex, texCoord, 0);
 }
@@ -44,14 +44,24 @@ vec3 unpackPos(uint p) {
     return vec3(raw & 255u);
 }
 
-vec3 unpackColor(int blockId, bool useColor) {
-    // TODO: read biome color from texture?
+vec3 unpackColor(int blockId, bool useColor, uint packedColor) {
     if (!useColor) return vec3(1.0);
+    if (packedColor != 0u) {
+        float r = float((packedColor >> 16u) & 255u) / 255.0;
+        float g = float((packedColor >> 8u) & 255u) / 255.0;
+        float b = float(packedColor & 255u) / 255.0;
+        return vec3(r, g, b);
+    }
 #ifdef WATER_ID
     if (blockId == WATER_ID)
         return vec3(0.2, 0.4, 0.93);
 #endif
+    // TODO: read biome color from texture?
     return vec3(0.4,0.73,0.27);
+}
+
+vec3 unpackColor(int blockId, bool useColor) {
+    return unpackColor(blockId, useColor, 0u);
 }
 
 vec3 getLocalPos(int face, vec3 unitPos) {
@@ -107,11 +117,13 @@ void main()	{
     vTexCoord = vec2(uv.x, 1.0 - uv.y);
     vTexLayer = blockId;
 #else
+    uint packedColor = 0u;
+    bool useColor = false;
 #ifdef CUBOID
     int blockId = int((attr.x >> 24u) | (((attr.y >> 24u) & 255u) << 8u));
 #else
     int blockId = int(attr.x >> 24u);
-    bool useColor = (attr.y & (1u << 8u)) != 0u;
+    useColor = (attr.y & (1u << 8u)) != 0u;
 #endif
 
     int face = int(attr.y & 7u);
@@ -127,7 +139,8 @@ void main()	{
     sideSpecial = false;
     uvec4 p0 = fetchCuboidPixel(blockId, 0);
     uint packedRot = p0.a;
-    bool useColor = (packedRot & 1u) != 0u;
+    packedColor = fetchCuboidPixel(blockId, 4).r;
+    useColor = (packedRot & 1u) != 0u;
     vec2 fxy = unpackHalf2x16(p0.r);
     vec2 fz_tx = unpackHalf2x16(p0.g);
     vec2 tytz = unpackHalf2x16(p0.b);
@@ -215,7 +228,7 @@ void main()	{
     vec3 n = getNormal(face);
 #endif
     gl_Position = projectionMatrix * modelViewMatrix * vec4(localPos + unpackedPos, 1.0 );
-    vColor = vec4(unpackColor(blockId, useColor) * vec3(sideLight), 1.0);
+    vColor = vec4(unpackColor(blockId, useColor, packedColor) * vec3(sideLight), 1.0);
     vNormal = normalize(n);
 
     vec2 mappedLocalUV = vec2(uv.x, 1.0 - uv.y);

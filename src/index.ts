@@ -861,6 +861,7 @@ function fetchRegion(x: number, z: number, off: number) {
                             const faceData = new Uint32Array(visFaces * 2);
                             let destIdx = 0;
 
+                            const isCuboid = layerName === "CUBOID";
                             for (let i = 0; i < blockU32.length; i += 2) {
                                 const attrX = blockU32[i];
                                 const attrY = blockU32[i + 1];
@@ -872,7 +873,15 @@ function fetchRegion(x: number, z: number, off: number) {
                                     if ((vis & (1 << face)) !== 0) {
                                         faceData[destIdx++] = attrX;
 
-                                        const light = (attrY >> (6 + face * 4)) & 15;
+                                        // CUBOID packs 3 bits per face (bits 6-23); others pack 4 bits per face.
+                                        // Scale 3-bit value (0-7) to 4-bit range (0-15) via *2+bit2 for display uniformity.
+                                        let light: number;
+                                        if (isCuboid) {
+                                            const raw = (attrY >> (6 + face * 3)) & 7;
+                                            light = (raw << 1) | (raw >> 2); // maps 0-7 → 0-15
+                                        } else {
+                                            light = (attrY >> (6 + face * 4)) & 15;
+                                        }
                                         const useColor = (attrY >> 31) & 1;
                                         const sideSpecial = ((attrY >> 30) & 1) && (face >= 4) ? 1 : 0;
                                         const highBlockId = attrY & 0xFF000000; // Preserve CUBOID blockId high-byte
