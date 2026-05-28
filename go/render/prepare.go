@@ -1432,8 +1432,16 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 				}
 				// A block is only solid if ALL of its templates are LayerCube or LayerVoxel (standard full cubes),
 				// and all textures used by those states are opaque.
-				if layer == LayerCube || layer == LayerVoxel {
+				if layer == LayerCube || layer == LayerVoxel || layer == LayerCuboid {
 					modelSolid := true
+					if layer == LayerCuboid {
+						if !reflect.DeepEqual(model.Bounds, []float32{0, 0, 0, 16, 16, 16}) {
+							if debugBlock {
+								fmt.Printf("    model %d not solid: not a full cuboid %v\n", modelIdx, model.Bounds)
+							}
+							modelSolid = false
+						}
+					}
 					for _, tex := range model.Textures {
 						texClass := textureClasses[tex]
 						if debugBlock {

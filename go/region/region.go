@@ -25,6 +25,7 @@ type ReadRegionFunc func(path string, bm *BlockMapper, wanted []int) ([]ChunkDat
 var regionMatchRE = regexp.MustCompile(`r\.(-?\d+)\.(-?\d+)`)
 
 var KeepPartial = flag.Bool("keep-partial", false, "keep partial (proto) chunks instead of skipping them")
+var MinWorldY = flag.Int("min-y", -64, "minimum world Y coordinate to include (use 0 for pre-1.17 worlds)")
 
 func ParseRegionPath(path string) (int, int, error) {
 	m := regionMatchRE.FindStringSubmatch(path)
@@ -55,6 +56,7 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 	}
 
 	cdata := make([]ChunkDatum, 1024)
+	sectionBases := make([]int8, 1024) // per-chunk first section Y, used for normalization
 
 	f, closer, err := OpenRegionFile(path)
 	if err != nil {
@@ -240,12 +242,6 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 			fmt.Println(base64.StdEncoding.EncodeToString(chunkDecompressedBytes))
 			panic("stop")
 		}
-		for len(ys) > 1 && ys[0] < 0 {
-			// TODO: actually render negative Y
-			ys = ys[1:]
-			palettes = palettes[1:]
-			blockStates = blockStates[1:]
-		}
 		// omit the all-air sections on top
 		blockStates = blockStates[:len(ys)]
 		for i := len(blockStates) - 1; i >= 0; i-- {
@@ -336,6 +332,9 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 			}
 		}
 		cdata[chunkNum] = ChunkDatum{nblocks, nstates, lights, lightsSky}
+		if len(ys) > 0 {
+			sectionBases[chunkNum] = ys[0]
+		}
 		if err != nil {
 			return cdata, err
 		}
@@ -345,7 +344,44 @@ func ReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error
 		log.Printf("warning: all %d chunks in %s were skipped because they are partial/proto-chunks; run with -keep-partial to include them\n", skippedPartialCount, path)
 	}
 
+	// Normalize all chunks so Blocks[0] corresponds to world Y = *MinWorldY.
+	// Sections with Y values below *MinWorldY are silently dropped.
+	targetSectionY := int8(*MinWorldY >> 4)
+	emptyBlocks := make([]uint16, 4096)
+	emptyStates := make([]render.Stateval, 4096)
+	for i := range cdata {
+		chunk := &cdata[i]
+		if len(chunk.Blocks) == 0 {
+			continue
+		}
+		base := sectionBases[i]
+		chunk.Normalize(base, targetSectionY, emptyBlocks, emptyStates)
+	}
+
 	return cdata, nil
+}
+
+func (chunk *ChunkDatum) Normalize(base, targetSectionY int8, emptyBlocks []uint16, emptyStates []render.Stateval) {
+	if base > targetSectionY {
+		// Chunk starts above targetSectionY: prepend empty sections.
+		padCount := int(base - targetSectionY)
+		chunk.Blocks = append(make([][]uint16, padCount), chunk.Blocks...)
+		chunk.BlockState = append(make([][]render.Stateval, padCount), chunk.BlockState...)
+		for j := range padCount {
+			chunk.Blocks[j] = emptyBlocks
+			chunk.BlockState[j] = emptyStates
+		}
+	} else if base < targetSectionY {
+		// Chunk has sections below targetSectionY: trim them.
+		trim := int(targetSectionY - base)
+		if trim >= len(chunk.Blocks) {
+			chunk.Blocks = nil
+			chunk.BlockState = nil
+		} else {
+			chunk.Blocks = chunk.Blocks[trim:]
+			chunk.BlockState = chunk.BlockState[trim:]
+		}
+	}
 }
 
 // 1.16 64-bit BlockState long array to uint16 array

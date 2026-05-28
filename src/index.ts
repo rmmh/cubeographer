@@ -729,8 +729,6 @@ function fetchRegion(x: number, z: number, off: number) {
     }
 
     sceneGraph.updateRegionletStatus(x, z, off, 'FETCH');
-    regionlet.chunk.minY = 0;
-    regionlet.chunk.maxY = 0;
 
     // Calculate priority based on distance to the regionlet center
     const rletCenter = vec3.fromValues(
@@ -770,40 +768,51 @@ function fetchRegion(x: number, z: number, off: number) {
                     throw new Error(`invalid comte data file magic: ${magic}`);
                 }
                 const headerLength = new Uint32Array(header.slice(8, 8 + 4).buffer)[0];
-                let meta = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
+                const cmtHeader = JSON.parse(new TextDecoder("utf-8").decode(header.subarray(12, 12 + headerLength)));
 
-                let sectionLengths: Array<number> = meta.layers.map((l: { length: number }) => l.length);
-                let length = sectionLengths.reduce((a, b) => a + b);
+                type LayerMeta = { length: number; faces?: number; name: string };
+                type RletMeta = { y_offset: number; layers: LayerMeta[] };
+                const rletMetas: RletMeta[] = cmtHeader.regionlets;
+
+                const totalLength = rletMetas.flatMap((r: RletMeta) => r.layers).reduce((acc: number, l: LayerMeta) => acc + l.length, 0);
+                console.debug("streaming", response.url, (totalLength / 1024) | 0, "KiB,", rletMetas.length, "regionlets");
+
+                // Create one Chunk per regionlet, each positioned at its world Y offset
+                const xBase = x * 512 + (off & 1) * 256;
+                const zBase = z * 512 + (off & 2) * 128;
+                const chunks: renderer.Chunk[] = [];
+                for (const rletMeta of rletMetas) {
+                    const chunk = context.Chunk();
+                    vec3.set(chunk.position, xBase, rletMeta.y_offset, zBase);
+                    chunk.minY = rletMeta.y_offset;
+                    chunk.maxY = rletMeta.y_offset;
+                    const layerSpecs: any = {};
+                    for (const layer of rletMeta.layers) {
+                        if (layer.name === "CROSS" || layer.name === "CROP") {
+                            layerSpecs[layer.name] = {
+                                data: new Uint32Array(layer.length / 4), retain: true,
+                                numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                            };
+                        } else {
+                            const faces = layer.faces || Math.floor(layer.length / 8);
+                            layerSpecs[layer.name] = {
+                                data: new Uint32Array(faces * 2), retain: true,
+                                numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
+                            };
+                        }
+                    }
+                    chunk.setLayers(layerSpecs);
+                    chunks.push(chunk);
+                }
+                regionlet.chunks = chunks;
 
                 let value = header.subarray(12 + headerLength);
                 let done = false;
 
-                console.debug("streaming", response.url, (length / 1024) | 0, "KiB, sections", meta, sectionLengths);
-
-                const chunk = regionlet.chunk;
-
-                let layerSpecs: any = {};
-                for (const layer of meta.layers) {
-                    if (layer.name === "CROSS" || layer.name === "CROP") {
-                        layerSpecs[layer.name] = {
-                            data: new Uint32Array(layer.length / 4), retain: true,
-                            numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
-                        };
-                    } else {
-                        // Pre-allocate buffer based on the visible face count computed by the Go backend!
-                        const faces = layer.faces || Math.floor(layer.length / 8);
-                        layerSpecs[layer.name] = {
-                            data: new Uint32Array(faces * 2), retain: true, // 2 uint32s = 8 bytes per face instance
-                            numComponents: CUBE_ATTRIB_STRIDE, stride: CUBE_ATTRIB_STRIDE * 4, divisor: 1
-                        };
-                    }
-                }
-
-                chunk.setLayers(layerSpecs);
-
+                let rletIdx = 0;
+                let layerNumber = 0;
                 let offset = 0;
                 let faceOffset = 0;
-                let layerNumber = 0;
                 let pendingBytes = new Uint8Array(0);
 
                 while (!done) {
@@ -821,13 +830,16 @@ function fetchRegion(x: number, z: number, off: number) {
                         pendingBytes = new Uint8Array(0);
                     }
 
-                    let wanted = Math.min(packetBytes.length, sectionLengths[layerNumber] - offset);
+                    const currentLayer = rletMetas[rletIdx].layers[layerNumber];
+                    let wanted = Math.min(packetBytes.length, currentLayer.length - offset);
                     let tail = packetBytes.subarray(wanted);
                     packetBytes = packetBytes.subarray(0, wanted);
 
-                    let layerName = meta.layers[layerNumber].name;
+                    const chunk = chunks[rletIdx];
+                    const yOffset = rletMetas[rletIdx].y_offset;
+                    const layerName = currentLayer.name;
 
-                    // Align chunk boundaries to 8-byte blocks
+                    // Align to 8-byte block boundaries
                     if (packetBytes.length % 8 !== 0 && !done) {
                         const alignedLen = Math.floor(packetBytes.length / 8) * 8;
                         pendingBytes = packetBytes.subarray(alignedLen);
@@ -837,11 +849,9 @@ function fetchRegion(x: number, z: number, off: number) {
                     if (packetBytes.length > 0) {
                         if (layerName === "CROSS" || layerName === "CROP") {
                             chunk.updateAttribute(layerName, packetBytes, offset);
-                            let localMaxY = chunk.maxY;
                             for (let i = 0; i < packetBytes.length; i += 8) {
-                                localMaxY = Math.max(localMaxY, packetBytes[i]);
+                                chunk.maxY = Math.max(chunk.maxY, yOffset + packetBytes[i]);
                             }
-                            chunk.maxY = localMaxY;
                             offset += packetBytes.length;
                             const blocks = Math.floor(offset / 8);
                             chunk.layers[layerName].size = blocks;
@@ -886,7 +896,7 @@ function fetchRegion(x: number, z: number, off: number) {
                                         const sideSpecial = (layerName === "VOXEL")
                                             ? ((attrY >> 30) & 1)
                                             : ((((attrY >> 30) & 1) && (face >= 4)) ? 1 : 0);
-                                        const highBlockId = attrY & 0xFF000000; // Preserve CUBOID blockId high-byte
+                                        const highBlockId = attrY & 0xFF000000;
 
                                         const packedMeta = face | (light << 3) | (sideSpecial << 7) | (useColor << 8) | highBlockId;
                                         faceData[destIdx++] = packedMeta;
@@ -895,12 +905,10 @@ function fetchRegion(x: number, z: number, off: number) {
                             }
 
                             chunk.updateAttribute(layerName, new Uint8Array(faceData.buffer), faceOffset * 8);
-                            let localMaxY = chunk.maxY;
                             const faceBytes = new Uint8Array(faceData.buffer);
                             for (let i = 0; i < faceBytes.length; i += 8) {
-                                localMaxY = Math.max(localMaxY, faceBytes[i]);
+                                chunk.maxY = Math.max(chunk.maxY, yOffset + faceBytes[i]);
                             }
-                            chunk.maxY = localMaxY;
                             faceOffset += visFaces;
                             chunk.layers[layerName].size = faceOffset;
                             offset += packetBytes.length;
@@ -910,32 +918,41 @@ function fetchRegion(x: number, z: number, off: number) {
 
                     value = tail;
 
-                    while (offset === sectionLengths[layerNumber]) {
+                    // Advance layer/regionlet pointers when current layer is fully consumed
+                    while (rletIdx < rletMetas.length && offset === rletMetas[rletIdx].layers[layerNumber].length) {
                         offset = 0;
                         faceOffset = 0;
                         layerNumber++;
+                        if (layerNumber >= rletMetas[rletIdx].layers.length) {
+                            layerNumber = 0;
+                            rletIdx++;
+                        }
                     }
                     render();
                     sceneGraph.notify();
                 }
 
-                let minY = 255, maxY = 0;
-                for (const [name, value] of Object.entries(chunk.layers)) {
-                    if (value.data) {
-                        const buf = new Uint8Array(value.data);
-                        for (let o = 0; o < buf.length; o += value.stride) {
-                            let y = buf[o];
-                            minY = Math.min(minY, y);
-                            maxY = Math.max(maxY, y);
+                // Final pass: set accurate minY/maxY per chunk from retained layer data
+                for (const chunk of chunks) {
+                    let minY = chunk.maxY, maxY = chunk.minY;
+                    for (const [, layerInfo] of Object.entries(chunk.layers)) {
+                        if (layerInfo.data) {
+                            const buf = new Uint8Array(layerInfo.data);
+                            const yOff = chunk.position[1];
+                            for (let o = 0; o < buf.length; o += layerInfo.stride) {
+                                const worldY = yOff + buf[o];
+                                minY = Math.min(minY, worldY);
+                                maxY = Math.max(maxY, worldY);
+                            }
+                            layerInfo.data = null;
                         }
-                        value.data = null;
                     }
+                    chunk.minY = minY;
+                    chunk.maxY = maxY;
                 }
-                chunk.minY = minY;
-                chunk.maxY = maxY;
 
                 sceneGraph.updateRegionletStatus(x, z, off, 'READY');
-                console.debug("done streaming", response.url, minY, maxY);
+                console.debug("done streaming", response.url, chunks.map(c => `[${c.minY}..${c.maxY}]`).join(', '));
                 render();
             } catch (e) {
                 sceneGraph.updateRegionletStatus(x, z, off, 'ERROR');

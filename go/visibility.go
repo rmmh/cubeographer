@@ -16,8 +16,9 @@ const visWidthBits = 9 - visDimBits
 // Originally it computed it for 16x16x16 sections, but this was found to be
 // too coarse.
 type blockVis struct {
-	passable  []uint64 // packed bitset representing whether a given cell is passable, with 0 meaning passable
-	reachable []uint32 // which faces can reach this cell?
+	passable   []uint64 // packed bitset representing whether a given cell is passable, with 0 meaning passable
+	reachable  []uint32 // which faces can reach this cell?
+	minWorldY  int      // world Y coordinate that maps to vis index 0
 	// octahedral: 0: -x-y-z, 1: -x-y+z, 2: -x+y-z, ... 31: queued
 }
 
@@ -85,8 +86,12 @@ func (cv *blockVis) isPassable(x, y, z int) bool {
 	return cv.passable[i>>6]&(1<<(i&63)) == 0
 }
 
-func (cv *blockVis) isVisible(x, y, z int) bool {
-	return cv.reachable[(x>>visDimBits)+(z>>visDimBits)*visWidth+(y>>visDimBits)*(visWidth*visWidth)] != 0
+func (cv *blockVis) isVisible(x, worldY, z int) bool {
+	normY := worldY - cv.minWorldY
+	if normY < 0 {
+		return false
+	}
+	return cv.reachable[(x>>visDimBits)+(z>>visDimBits)*visWidth+(normY>>visDimBits)*(visWidth*visWidth)] != 0
 }
 
 type Solider interface {
@@ -177,32 +182,40 @@ zpos:
 func makeBlockvis(chunks []region.ChunkDatum, bm Solider, mode visibilityMode) *blockVis {
 	var cv blockVis
 
+	// All chunks are pre-normalized: Blocks[0] corresponds to world Y = *region.MinWorldY.
+	minWorldY := *region.MinWorldY
+	cv.minWorldY = minWorldY
+
 	maxSectionCount := 0
 	for cx := range 32 {
 		for cz := range 32 {
-			if len(chunks[cx+cz*32].Blocks) > maxSectionCount {
-				maxSectionCount = len(chunks[cx+cz*32].Blocks)
+			if n := len(chunks[cx+cz*32].Blocks); n > maxSectionCount {
+				maxSectionCount = n
 			}
 		}
 	}
-	cv.passable = make([]uint64, visWidth*visWidth*maxSectionCount*(16/visDim)/64)
-	cv.reachable = make([]uint32, visWidth*visWidth*maxSectionCount*(16/visDim))
+
+	maxVisY := maxSectionCount * (16 / visDim)
+	cv.passable = make([]uint64, visWidth*visWidth*maxVisY/64)
+	cv.reachable = make([]uint32, visWidth*visWidth*maxVisY)
 
 	if maxSectionCount == 0 {
 		// empty region?
 		return &cv
 	}
 
-	maxY := maxSectionCount * 16 / visDim
+	maxY := maxVisY
 
 	for cx := range 32 {
 		for cz := range 32 {
-			for ys, section := range chunks[cx+cz*32].Blocks {
+			chunk := &chunks[cx+cz*32]
+			for ys, section := range chunk.Blocks {
+				worldYBase := minWorldY + ys*16
 				for y := 0; y < 16; y += visDim {
 					for z := 0; z < 16; z += visDim {
 						for x := 0; x < 16; x += visDim {
 							if !isPassable(section, bm, x, y, z) {
-								cv.setSolid(cx*16+x, ys*16+y, cz*16+z)
+								cv.setSolid(cx*16+x, worldYBase+y-minWorldY, cz*16+z)
 							}
 						}
 					}

@@ -23,13 +23,14 @@ import (
 )
 
 type regionState struct {
-	openRegion region.ReadRegionFunc
-	dir        string
-	ext        string
-	bm         *region.BlockMapper
-	rx, rz     int
-	cdata      []region.ChunkDatum
-	cadj       [16][]region.ChunkDatum
+	openRegion  region.ReadRegionFunc
+	dir         string
+	ext         string
+	bm          *region.BlockMapper
+	rx, rz      int
+	cdata       []region.ChunkDatum
+	cadj        [16][]region.ChunkDatum
+	minSectionY int // section Y of chunk.Blocks[0] (= *region.MinWorldY >> 4)
 
 	nbs [6]uint16
 	nls [6]byte
@@ -37,9 +38,6 @@ type regionState struct {
 }
 
 func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
-	if y < 0 {
-		return 7, 0, 0xf, 0 // bedrock
-	}
 	var chunk *region.ChunkDatum
 	if (x|z)&512 != 0 {
 		key := (uint(x>>9)&3)<<2 | uint(z>>9)&3
@@ -80,9 +78,9 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 	} else {
 		chunk = &rs.cdata[(x>>4)+(z>>4)*32]
 	}
-	ys := y >> 4
-	if ys >= len(chunk.Blocks) {
-		return 0, 0, 0, 0xf
+	ys := (y >> 4) - rs.minSectionY
+	if ys < 0 || ys >= len(chunk.Blocks) {
+		return 0, 0, 0xf, 0xf
 	}
 	o := x&15 + (z&15)*16 + (y&15)*256
 	s := (x & 1) << 2
@@ -101,8 +99,8 @@ func (rs *regionState) get(x, y, z int) (uint16, render.Stateval, byte, byte) {
 
 func (rs *regionState) getLight(x, y, z int) byte {
 	chunk := &rs.cdata[(x>>4)+(z>>4)*32]
-	ys := y >> 4
-	if ys >= len(chunk.Lights) || ys >= len(chunk.LightsSky) {
+	ys := (y >> 4) - rs.minSectionY
+	if ys < 0 || ys >= len(chunk.Lights) || ys >= len(chunk.LightsSky) {
 		return 15
 	}
 	o := ((x & 15) + (z&15)*16 + (y&15)*256) / 2
@@ -165,13 +163,14 @@ func scanRegion(conf *scanRegionConfig) error {
 	}
 
 	rs := regionState{
-		dir:        conf.dir,
-		ext:        ext,
-		bm:         bm,
-		rx:         rx,
-		rz:         rz,
-		cdata:      cdata,
-		openRegion: readRegion,
+		dir:         conf.dir,
+		ext:         ext,
+		bm:          bm,
+		rx:          rx,
+		rz:          rz,
+		cdata:       cdata,
+		openRegion:  readRegion,
+		minSectionY: *region.MinWorldY >> 4,
 	}
 
 	mode := conf.mode
@@ -184,13 +183,15 @@ func scanRegion(conf *scanRegionConfig) error {
 
 		if conf.prune {
 			chunkVis = makeBlockvis(cdata, bm, visTriakisOctahedral)
-			if len(chunkVis.reachable) > 0 {
-				// fmt.Printf("mid reach=%36b pass=%v\n", chunkVis.reachable[16+16*32], chunkVis.isPassable(16, 0, 16))
-			}
 		}
 
-		var bufs [4][render.NumRenderLayers]bytes.Buffer
-		var faceCounts [4][render.NumRenderLayers]int
+		const sliceHeight = 256
+		minWorldY := *region.MinWorldY
+		numSlices := (320 - minWorldY + sliceHeight - 1) / sliceHeight
+
+		// Index: xzQuad (0-3) + ySlice*4
+		bufs := make([][render.NumRenderLayers]bytes.Buffer, 4*numSlices)
+		faceCounts := make([][render.NumRenderLayers]int, 4*numSlices)
 
 		buf := make([]byte, 64)
 		// TODO: emulate minecraft renderpasses -- solid, cutout (i.e. sprite), translucent (liquid)
@@ -202,7 +203,9 @@ func scanRegion(conf *scanRegionConfig) error {
 
 		blockCounts := make([]int, len(bm.Tmpl))
 
-		for y := 0; y <= 320; y++ {
+		for y := minWorldY; y < 320; y++ {
+			ySlice := (y - minWorldY) / sliceHeight
+			localY := y - (minWorldY + ySlice*sliceHeight)
 			for z := 0; z < 512; z++ {
 				// skipping empty rows is a significant speedup for empty regions
 				minX := 0
@@ -220,7 +223,7 @@ func scanRegion(conf *scanRegionConfig) error {
 					}
 
 					chunk := &cdata[(x>>4)+(z>>4)*32]
-					if len(chunk.Blocks) <= y>>4 {
+					if len(chunk.Blocks) <= (y>>4)-rs.minSectionY {
 						continue
 					}
 
@@ -279,7 +282,7 @@ func scanRegion(conf *scanRegionConfig) error {
 							noshades = bm.NoShade[b][stateIdx]
 						}
 
-						pos := uint32((x&255)<<16 | (z&255)<<8 | y)
+						pos := uint32(x&255)<<16 | uint32(z&255)<<8 | uint32(localY)
 
 						// uniform light for no-shade elements: max(blocklight, skylight) broadcast to all faces
 						uniformLight := uint32(max(bl, bsl)) * 0x111111 // replicate 4-bit value across all 6 faces (24 bits)
@@ -324,11 +327,11 @@ func scanRegion(conf *scanRegionConfig) error {
 									}
 									binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
 									blen += 8
-									faceCounts[x>>8+2*(z>>8)][layer] += bits.OnesCount32(visibleFaces)
+									faceCounts[x>>8+2*(z>>8)+ySlice*4][layer] += bits.OnesCount32(visibleFaces)
 								}
 							}
 							if blen > 0 {
-								bufs[x>>8+2*(z>>8)][layer].Write(buf[:blen])
+								bufs[x>>8+2*(z>>8)+ySlice*4][layer].Write(buf[:blen])
 							}
 						}
 					}
@@ -347,8 +350,21 @@ func scanRegion(conf *scanRegionConfig) error {
 		outLenComp := int64(0)
 		// note: the gzip.BestCompression level is 4x slower and <1% smaller for our files
 		outComp := gzip.NewWriter(nil)
-		for bi := range bufs {
-			bs := &bufs[bi]
+
+		type layerHeader struct {
+			Length int    `json:"length"`
+			Faces  int    `json:"faces"`
+			Name   string `json:"name"`
+		}
+		type regionletHeader struct {
+			YOffset int                                 `json:"y_offset"`
+			Layers  [render.NumRenderLayers]layerHeader `json:"layers"`
+		}
+		type cmtHeader struct {
+			Regionlets []regionletHeader `json:"regionlets"`
+		}
+
+		for bi := 0; bi < 4; bi++ {
 			out, err := os.Create(fmt.Sprintf("%s.%d.cmt", nameBase, bi))
 			if err != nil {
 				log.Println("unable to open dest file")
@@ -358,18 +374,23 @@ func scanRegion(conf *scanRegionConfig) error {
 			outComp.Reset(out)
 			outComp.Write([]byte("COMTE00\n"))
 
-			var header (struct {
-				Layers [render.NumRenderLayers]struct {
-					Length int    `json:"length"`
-					Faces  int    `json:"faces"`
-					Name   string `json:"name"`
-				} `json:"layers"`
-			})
-
-			for i, obuf := range bs {
-				header.Layers[i].Length = obuf.Len()
-				header.Layers[i].Faces = faceCounts[bi][i]
-				header.Layers[i].Name = render.LayerNames[i]
+			header := cmtHeader{}
+			for ys := 0; ys < numSlices; ys++ {
+				bufIdx := bi + ys*4
+				total := 0
+				for i := range bufs[bufIdx] {
+					total += bufs[bufIdx][i].Len()
+				}
+				if total == 0 {
+					continue
+				}
+				rlet := regionletHeader{YOffset: minWorldY + ys*sliceHeight}
+				for i := range rlet.Layers {
+					rlet.Layers[i].Length = bufs[bufIdx][i].Len()
+					rlet.Layers[i].Faces = faceCounts[bufIdx][i]
+					rlet.Layers[i].Name = render.LayerNames[i]
+				}
+				header.Regionlets = append(header.Regionlets, rlet)
 			}
 			headerJSON, err := json.Marshal(header)
 			if err != nil {
@@ -379,9 +400,19 @@ func scanRegion(conf *scanRegionConfig) error {
 			outComp.Write(buf[:4])
 			outComp.Write(headerJSON)
 
-			for _, obuf := range bs {
-				outLen += obuf.Len()
-				outComp.Write(obuf.Bytes())
+			for ys := 0; ys < numSlices; ys++ {
+				bufIdx := bi + ys*4
+				total := 0
+				for i := range bufs[bufIdx] {
+					total += bufs[bufIdx][i].Len()
+				}
+				if total == 0 {
+					continue
+				}
+				for _, obuf := range bufs[bufIdx] {
+					outLen += obuf.Len()
+					outComp.Write(obuf.Bytes())
+				}
 			}
 			outComp.Flush()
 			outComp.Close()

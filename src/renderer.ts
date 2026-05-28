@@ -426,8 +426,8 @@ export class Frustum {
         return this.intersectsAABB(min, max);
     }
 
-    intersectsRegion(rx: number, rz: number, maxHeight: number = 320.0): boolean {
-        const min = vec3.fromValues(rx * 512, 0, rz * 512);
+    intersectsRegion(rx: number, rz: number, maxHeight: number = 320.0, minHeight: number = -64): boolean {
+        const min = vec3.fromValues(rx * 512, minHeight, rz * 512);
         const max = vec3.fromValues(rx * 512 + 512, maxHeight, rz * 512 + 512);
         return this.intersectsAABB(min, max);
     }
@@ -450,7 +450,7 @@ export interface RegionletNode {
     rz: number;
     off: number;
     status: RegionletStatus;
-    chunk: Chunk;
+    chunks: Chunk[]; // one per y-slice, populated when CMT is loaded
 }
 
 export interface ImpostorNode {
@@ -594,15 +594,7 @@ export class SceneGraph {
 
         const regionlets: RegionletNode[] = [];
         for (let off = 0; off < 4; off++) {
-            const chunk = new Chunk(this.context.gl);
-            vec3.set(chunk.position, rx * 512 + (off & 1) * 256, 0, rz * 512 + (off & 2) * 128);
-            chunk.minY = 0;
-            chunk.maxY = 255;
-            regionlets.push({
-                rx, rz, off,
-                status: 'NONE',
-                chunk
-            });
+            regionlets.push({ rx, rz, off, status: 'NONE', chunks: [] });
         }
 
         const node: RegionNode = {
@@ -621,13 +613,10 @@ export class SceneGraph {
         return node;
     }
 
-    updateRegionletStatus(rx: number, rz: number, off: number, status: RegionletStatus, chunkDataCallback?: (chunk: Chunk) => void) {
+    updateRegionletStatus(rx: number, rz: number, off: number, status: RegionletStatus) {
         const region = this.getOrCreateRegion(rx, rz);
         const regionlet = region.regionlets[off];
         regionlet.status = status;
-        if (chunkDataCallback) {
-            chunkDataCallback(regionlet.chunk);
-        }
         this.notify();
     }
 
@@ -674,9 +663,18 @@ export class SceneGraph {
             }
 
             for (const rlet of region.regionlets) {
-                if (frustum.intersects(rlet.chunk)) {
-                    const min = vec3.fromValues(rlet.chunk.position[0], rlet.chunk.minY, rlet.chunk.position[2]);
-                    const max = vec3.fromValues(rlet.chunk.position[0] + 256, rlet.chunk.maxY, rlet.chunk.position[2] + 256);
+                const xBase = region.rx * 512 + (rlet.off & 1) * 256;
+                const zBase = region.rz * 512 + (rlet.off & 2) * 128;
+                let minY: number, maxY: number;
+                if (rlet.chunks.length > 0) {
+                    minY = Math.min(...rlet.chunks.map(c => c.minY));
+                    maxY = Math.max(...rlet.chunks.map(c => c.maxY));
+                } else {
+                    minY = -64; maxY = 320;
+                }
+                const min = vec3.fromValues(xBase, minY, zBase);
+                const max = vec3.fromValues(xBase + 256, maxY, zBase + 256);
+                if (frustum.intersectsAABB(min, max)) {
                     const distSq = sqrDistPointToAABB(camera.position, min, max);
                     allVisibleRegionlets.push({ rlet, distSq });
                     visibleRegionletSet.add(rlet);
@@ -719,7 +717,7 @@ export class SceneGraph {
             if (allVisibleAreRendered) {
                 // Render them as chunks!
                 for (const rlet of regionVisibleRlets) {
-                    chunksToRender.push(rlet.chunk);
+                    for (const chunk of rlet.chunks) chunksToRender.push(chunk);
                 }
             } else {
                 // Check if this region belongs to a distant LOD2 group
@@ -760,7 +758,7 @@ export class SceneGraph {
                     // B) Render any loaded/streaming regionlets that are in our renderedChunkSet!
                     for (const rlet of regionVisibleRlets) {
                         if (renderedChunkSet.has(rlet)) {
-                            chunksToRender.push(rlet.chunk);
+                            for (const chunk of rlet.chunks) chunksToRender.push(chunk);
                         }
                     }
 
@@ -905,19 +903,16 @@ export function render(
     var projectionMatrix = camera.getProjection();
 
     // 2. Perform frustum and visibility culling on the Scene Graph
-    let culledChunks = cullResults.chunks;
+    let renderedChunks = cullResults.chunks;
 
     // Sort renderable chunks by distance to camera
-    culledChunks.sort((a, b) => {
+    renderedChunks.sort((a, b) => {
         const amin = vec3.fromValues(a.position[0], a.minY, a.position[2]);
         const amax = vec3.fromValues(a.position[0] + 256, a.maxY, a.position[2] + 256);
         const bmin = vec3.fromValues(b.position[0], b.minY, b.position[2]);
         const bmax = vec3.fromValues(b.position[0] + 256, b.maxY, b.position[2] + 256);
         return sqrDistPointToAABB(camera.position, amin, amax) - sqrDistPointToAABB(camera.position, bmin, bmax);
     });
-
-    // Limit to rendering top chunks to match original behavior / performance target
-    const renderedChunks = culledChunks.slice(0, sceneGraph.lod0Max);
 
     var activeProgram: WebGLProgram
     function bind(mat: Material, geo: Geometry) {
@@ -1019,11 +1014,12 @@ export function render(
             const region = sceneGraph.getOrCreateRegion(lod.rx, lod.rz);
             for (let off = 0; off < 4; off++) {
                 const rlet = region.regionlets[off];
-                if (renderedChunkSet.has(rlet.chunk)) {
+                const renderedFromRlet = rlet.chunks.filter(c => renderedChunkSet.has(c));
+                if (renderedFromRlet.length > 0) {
                     if (rlet.status === 'READY') {
                         chunkMaxY[off] = 320.0;
                     } else if (rlet.status === 'STREAM') {
-                        chunkMaxY[off] = rlet.chunk.maxY;
+                        chunkMaxY[off] = Math.max(...renderedFromRlet.map(c => c.maxY));
                     }
                 }
             }

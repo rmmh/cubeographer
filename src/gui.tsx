@@ -75,15 +75,15 @@ function DebugGUI({ sceneGraph, controls, context, render }: DebugGUIProps) {
         for (const region of sceneGraph.regions.values()) {
             // LOD0 total
             for (const rlet of region.regionlets) {
-                if (rlet.chunk && rlet.chunk.layers) {
+                for (const chunk of rlet.chunks) {
                     let size = 0;
-                    for (const layerAttrib of Object.values(rlet.chunk.layers)) {
+                    for (const layerAttrib of Object.values(chunk.layers)) {
                         if (layerAttrib && layerAttrib.size > 0) {
                             size += layerAttrib.size * 8;
                         }
                     }
                     totalL0 += size;
-                    if (renderedChunks.has(rlet.chunk)) {
+                    if (renderedChunks.has(chunk)) {
                         renderedL0 += size;
                     }
                 }
@@ -598,10 +598,10 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
     let regionTotalFaces = 0;
     if (region) {
         for (const rlet of region.regionlets) {
-            if (rlet.chunk && rlet.chunk.layers) {
-                for (const [name, layerAttrib] of Object.entries(rlet.chunk.layers)) {
+            for (const chunk of rlet.chunks) {
+                for (const [name, layerAttrib] of Object.entries(chunk.layers)) {
                     if (layerAttrib && layerAttrib.size > 0) {
-                        regionVboVram += layerAttrib.size * 8; // Both block and face buffers are 8 bytes/entry (uvec2)
+                        regionVboVram += layerAttrib.size * 8;
                         const isPlant = name === "CROSS" || name === "CROP";
                         if (isPlant) {
                             regionTotalBlocks += layerAttrib.size;
@@ -707,7 +707,16 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                     {region.regionlets.map((rlet, idx) => {
                                         let totalBlocks = 0;
                                         let totalVram = 0;
-                                        const layers = rlet.chunk?.layers || {};
+                                        // Merge layers across all y-slice chunks for display
+                                        const mergedLayers: Record<string, any> = {};
+                                        for (const chunk of rlet.chunks) {
+                                            for (const [ln, la] of Object.entries(chunk.layers)) {
+                                                if (!mergedLayers[ln]) mergedLayers[ln] = { size: 0, blockCount: 0 };
+                                                mergedLayers[ln].size += la.size;
+                                                mergedLayers[ln].blockCount += (la as any).blockCount || 0;
+                                            }
+                                        }
+                                        const layers = mergedLayers;
                                         const layerItems = Object.entries(layers)
                                             .filter(([_, layerAttrib]) => layerAttrib && layerAttrib.size > 0)
                                             .map(([layerName, layerAttrib]) => {
@@ -737,7 +746,7 @@ function RegionInspector({ activeRegion, sceneGraph, onClose, updateTick }: Regi
                                                 <div className="regionlet-body">
                                                     <div className="meta-row">
                                                         <span>Y Bounds:</span>
-                                                        <span>{rlet.chunk ? `${rlet.chunk.minY} - ${rlet.chunk.maxY}` : 'N/A'}</span>
+                                                        <span>{rlet.chunks.length > 0 ? `${Math.min(...rlet.chunks.map(c => c.minY))} - ${Math.max(...rlet.chunks.map(c => c.maxY))}` : 'N/A'}</span>
                                                     </div>
                                                     <div className="meta-row">
                                                         <span>Blocks:</span>

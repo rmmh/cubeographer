@@ -423,12 +423,11 @@ func ReadZVCR(filePath string, bm *region.BlockMapper, wanted []int) ([]region.C
 
 		var nblocks [][]uint16
 		var nstates [][]render.Stateval
-		minYSections := minY / 16
-		nonNegativeSections := sectionCount + minYSections
+		fileSectionBase := int8(minY / 16) // section Y of nblocks[0] in this file
 
 		if isWanted {
-			nblocks = make([][]uint16, nonNegativeSections)
-			nstates = make([][]render.Stateval, nonNegativeSections)
+			nblocks = make([][]uint16, sectionCount)
+			nstates = make([][]render.Stateval, sectionCount)
 		}
 
 		// Block sections
@@ -448,28 +447,22 @@ func ReadZVCR(filePath string, bm *region.BlockMapper, wanted []int) ([]region.C
 				}
 			}
 
-			if isWanted {
-				sectionY := sectionIdx + minYSections
-				if sectionY >= 0 && sectionY < nonNegativeSections && len(unpackedBlocks) == 4096 {
-					nb := make([]uint16, 4096)
-					ns := make([]render.Stateval, 4096)
-					for i, atom := range unpackedBlocks {
-						if pm != nil {
-							if int(atom) < len(pm.nid) {
-								nb[i] = pm.nid[atom]
-								ns[i] = pm.nstate[atom]
-							} else {
-								nb[i] = 0
-								ns[i] = 0
-							}
-						} else {
-							nb[i] = atom >> 5
-							ns[i] = render.Stateval(atom & 31)
+			if isWanted && len(unpackedBlocks) == 4096 {
+				nb := make([]uint16, 4096)
+				ns := make([]render.Stateval, 4096)
+				for i, atom := range unpackedBlocks {
+					if pm != nil {
+						if int(atom) < len(pm.nid) {
+							nb[i] = pm.nid[atom]
+							ns[i] = pm.nstate[atom]
 						}
+					} else {
+						nb[i] = atom >> 5
+						ns[i] = render.Stateval(atom & 31)
 					}
-					nblocks[sectionY] = nb
-					nstates[sectionY] = ns
 				}
+				nblocks[sectionIdx] = nb
+				nstates[sectionIdx] = ns
 			}
 		}
 
@@ -510,12 +503,18 @@ func ReadZVCR(filePath string, bm *region.BlockMapper, wanted []int) ([]region.C
 		}
 
 		if isWanted {
-			cdata[chunkNum] = region.ChunkDatum{
+			// Normalize from fileSectionBase to *MinWorldY's section.
+			targetSectionY := int8(*region.MinWorldY >> 4)
+
+			emptyBlocks := make([]uint16, 4096)
+			emptyStates := make([]render.Stateval, 4096)
+
+			chunk := region.ChunkDatum{
 				Blocks:     nblocks,
 				BlockState: nstates,
-				Lights:     nil,
-				LightsSky:  nil,
 			}
+			chunk.Normalize(fileSectionBase, targetSectionY, emptyBlocks, emptyStates)
+			cdata[chunkNum] = chunk
 		}
 	}
 
