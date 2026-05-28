@@ -107,8 +107,8 @@ class OrbitControls extends EventDispatcher {
     maxZoom = Infinity;
     // How far you can orbit vertically, upper and lower limits.
     // Range is 0 to Math.PI radians.
-    minPolarAngle = 0; // radians
-    maxPolarAngle = Math.PI; // radians
+    minPolarAngle = 0.005; // radians
+    maxPolarAngle = Math.PI - 0.005; // radians
     // How far you can orbit horizontally, upper and lower limits.
     // If set, the interval [ min, max ] must be a sub-interval of [ - 2 PI, 2 PI ], with ( max - min < 2 PI )
     minAzimuthAngle = - Infinity; // radians
@@ -994,9 +994,9 @@ class Spherical {
         this.theta = other.theta;
         return this;
     }
-    // restrict phi to be betwee EPS and PI-EPS
+    // restrict phi to be between EPS and PI-EPS
     makeSafe() {
-        const EPS = 0.000001;
+        const EPS = 0.005;
         this.phi = Math.max(EPS, Math.min(Math.PI - EPS, this.phi));
         return this;
     }
@@ -1034,20 +1034,6 @@ export function safeLookAt(out: mat4, eye: vec3, center: vec3, up: vec3): mat4 {
     if (vec3.length(dir) < 1e-4) {
         let perturbedEye = vec3.fromValues(eye[0] + 1e-5, eye[1], eye[2]);
         return mat4.lookAt(out, perturbedEye, center, up);
-    }
-
-    let normDir = vec3.normalize(vec3.create(), dir);
-    const dot = vec3.dot(normDir, up);
-    if (Math.abs(dot) > 0.99999999999999) {
-        // Collinear fallback: use a secondary up vector that is perpendicular to the line of sight
-        // to prevent degenerate rotation matrices and NaN values.
-        let altUp = vec3.fromValues(0, 0, -1);
-        if (Math.abs(up[1]) > 0.9) {
-            altUp = vec3.fromValues(0, 0, -1);
-        } else {
-            altUp = vec3.fromValues(0, 1, 0);
-        }
-        return mat4.lookAt(out, eye, center, altUp);
     }
     return mat4.lookAt(out, eye, center, up);
 }

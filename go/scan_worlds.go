@@ -333,6 +333,10 @@ func findMaps(inputDirs []string) ([]minecraftMap, error) {
 		return natural.Less(maps[i].Name, maps[j].Name)
 	})
 
+	if len(maps) == 1 {
+		maps[0].Name = ""
+	}
+
 	return maps, nil
 }
 
@@ -340,11 +344,10 @@ func writeWorldsJSON(outDir string, maps []minecraftMap) error {
 	for i := range maps {
 		var metadataPath string
 		if maps[i].Name == "" {
-			metadataPath = filepath.Join(outDir, "metadata.json")
+			metadataPath = filepath.Join(outDir, "map", "metadata.json")
 		} else {
 			metadataPath = filepath.Join(outDir, maps[i].Name, "map", "metadata.json")
 		}
-
 		if meta, err := ReadMapMetadata(metadataPath); err == nil {
 			maps[i].FullRegionsCount = len(meta.FullRegions)
 			maps[i].LodRegionsCount = len(meta.LodRegions)

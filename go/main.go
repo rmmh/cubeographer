@@ -88,7 +88,7 @@ func convert(numProcs int, inputDirs []string, outDir string, filters []string, 
 	for _, m := range maps {
 		var targetOutDir string
 		if m.Name == "" {
-			targetOutDir = outDir
+			targetOutDir = path.Join(outDir, "map")
 		} else {
 			targetOutDir = path.Join(outDir, m.Name, "map")
 		}
