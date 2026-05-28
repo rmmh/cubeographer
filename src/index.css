@@ -17,6 +17,9 @@ body {
 
 canvas {
     display: block;
+    width: 100vw;
+    height: 100vh;
+    background-color: #7eabff;
 }
 
 #debug-menu {

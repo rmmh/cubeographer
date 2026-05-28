@@ -168,8 +168,8 @@ export class Context {
     }
 
     setSize(width: number, height: number) {
-        this.canvas.height = innerHeight;
         this.canvas.width = width;
+        this.canvas.height = height;
     }
 
     setClearColor(r: number, g: number, b: number, a?: number) {

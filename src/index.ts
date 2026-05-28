@@ -42,23 +42,40 @@ if ((window as any).ASSET_PREFIX !== undefined) {
 }
 
 const context = new renderer.Context(document.querySelector('#canvas'));
-context.setSize(window.innerWidth, window.innerHeight);
 
-const aspect = window.innerWidth / window.innerHeight;
-const camera = new renderer.PerspectiveCamera(75, aspect, 0.1, 30000);
+const camera = new renderer.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 30000);
 
 vec3.set(camera.position, 100, 40, 100);  // face northish
 vec3.set(camera.target, 0, 0, 0);
 camera.update();
 
-window.addEventListener('resize', onWindowResize, false);
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    context.setSize(window.innerWidth, window.innerHeight);
-    camera.update();
+const resizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+        let width = entry.contentRect.width;
+        let height = entry.contentRect.height;
 
-    if (ONDEMAND) render();
-}
+        if (entry.devicePixelContentBoxSize && entry.devicePixelContentBoxSize.length > 0) {
+            // Precise physical device pixels
+            width = entry.devicePixelContentBoxSize[0].inlineSize;
+            height = entry.devicePixelContentBoxSize[0].blockSize;
+        } else {
+            // Fallback for older browsers
+            const dpr = window.devicePixelRatio || 1;
+            width = Math.round(width * dpr);
+            height = Math.round(height * dpr);
+        }
+
+        context.setSize(width, height);
+        context.gl.viewport(0, 0, width, height);
+
+        camera.aspect = width / height;
+        camera.update();
+
+        // Render synchronously to prevent ugly black frame flicker on resize
+        renderFrame();
+    }
+});
+resizeObserver.observe(context.canvas, { box: 'device-pixel-content-box' });
 
 const Stats = require("stats.js");
 
