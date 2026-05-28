@@ -772,7 +772,10 @@ function fetchRegion(x: number, z: number, off: number) {
 
                 type LayerMeta = { length: number; faces?: number; name: string };
                 type RletMeta = { y_offset: number; layers: LayerMeta[] };
-                const rletMetas: RletMeta[] = cmtHeader.regionlets;
+                const rletMetas: RletMeta[] | null = cmtHeader.regionlets;
+                if (!rletMetas) {
+                    return;
+                }
 
                 const totalLength = rletMetas.flatMap((r: RletMeta) => r.layers).reduce((acc: number, l: LayerMeta) => acc + l.length, 0);
                 console.debug("streaming", response.url, (totalLength / 1024) | 0, "KiB,", rletMetas.length, "regionlets");
