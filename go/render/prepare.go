@@ -623,11 +623,11 @@ func (s *StateConverter) applyRotations(ms *rp.ModelSpec, model *rp.Model) *rp.M
 			swapFaces(e.Faces, []string{"north", "east", "south", "west"}, nil)
 
 			if f, ok := e.Faces["up"]; ok {
-				f.Rotation = addRotation(f.Rotation, 90)
+				f.Rotation = addRotation(f.Rotation, 270)
 				e.Faces["up"] = f
 			}
 			if f, ok := e.Faces["down"]; ok {
-				f.Rotation = addRotation(f.Rotation, 270)
+				f.Rotation = addRotation(f.Rotation, 90)
 				e.Faces["down"] = f
 			}
 
