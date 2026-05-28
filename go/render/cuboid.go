@@ -16,6 +16,7 @@ type UBOModelEntry struct {
 	Rotations  []int       `json:"rotations,omitempty"`
 	TexIDs     []int       `json:"tex_ids,omitempty"`
 	Tint       bool        `json:"tint,omitempty"`
+	NoShade    bool        `json:"no_shade,omitempty"`
 	Color      uint32      `json:"color,omitempty"`
 	RotAxis    string      `json:"rot_axis,omitempty"`
 	RotAngle   float32     `json:"rot_angle,omitempty"`
@@ -89,6 +90,9 @@ func writeCuboidMetadata(buf []uint32, tid int, entry UBOModelEntry) {
 	}
 	if entry.Color != 0 {
 		packedRot |= 1 // Ensure tint is enabled
+	}
+	if entry.NoShade {
+		packedRot |= 1 << 31
 	}
 
 	// Pack Axis in Bits 1-2

@@ -35,7 +35,6 @@ in vec2 uv;
 in uvec2 attr;
 
 out vec4 vColor;
-out vec3 vNormal;
 out vec2 vTexCoord;
 flat out int vTexLayer;
 
@@ -112,7 +111,6 @@ void main()	{
     float light = float(attr.y&0xFu)/15.0 * 0.7 + 0.3;
     bool useColor = (attr.y & (1u << 31u)) != 0u;
     vColor = vec4(unpackColor(blockId, useColor) * vec3(light), 1.0);
-    vNormal = normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position + unpackedPos, 1.0 );
     vTexCoord = vec2(uv.x, 1.0 - uv.y);
     vTexLayer = blockId;
@@ -228,8 +226,15 @@ void main()	{
     vec3 n = getNormal(face);
 #endif
     gl_Position = projectionMatrix * modelViewMatrix * vec4(localPos + unpackedPos, 1.0 );
-    vColor = vec4(unpackColor(blockId, useColor, packedColor) * vec3(sideLight), 1.0);
-    vNormal = normalize(n);
+    vec3 nn = normalize(n);
+    // OFFICIAL MINECRAFT: *0.8 on the Z axis faces, *0.6 on the X axis faces, *0.5 on the bottom face
+#ifdef CUBOID
+    bool noShade = (packedRot & (1u << 31u)) != 0u;
+    float normalDarkening = noShade ? 1.0 : max(0.5, dot(vec3(abs(nn.x), nn.y, abs(nn.z)), vec3(0.6, 1.0, 0.8)));
+#else
+    float normalDarkening = max(0.5, dot(vec3(abs(nn.x), nn.y, abs(nn.z)), vec3(0.6, 1.0, 0.8)));
+#endif
+    vColor = vec4(unpackColor(blockId, useColor, packedColor) * vec3(sideLight * normalDarkening), 1.0);
 
     vec2 mappedLocalUV = vec2(uv.x, 1.0 - uv.y);
     if (face >= 2) {

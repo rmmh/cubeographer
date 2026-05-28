@@ -1012,6 +1012,7 @@ type cuboidKey struct {
 	Rotations  [6]int
 	Textures   [6]string
 	Tint       bool
+	NoShade    bool
 	Color      uint32
 	RotAxis    string
 	RotAngle   float32
@@ -1278,6 +1279,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 						}
 					}
 					key.Tint = (model.Template[1] & (1 << 31)) != 0
+					key.NoShade = model.NoShade
 
 					if ent.Name == "redstone_wire" || ent.Name == "minecraft:redstone_wire" {
 						rgb, _ := strconv.ParseUint(ent.Colors[0], 16, 32)
@@ -1338,6 +1340,7 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 								Rotations:  model.Rotations,
 								TexIDs:     texIds,
 								Tint:       key.Tint,
+								NoShade:    key.NoShade,
 								Color:      key.Color,
 								RotAxis:    key.RotAxis,
 								RotAngle:   key.RotAngle,
