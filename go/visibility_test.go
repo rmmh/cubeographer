@@ -144,6 +144,7 @@ func TestIsPassable(t *testing.T) {
 
 func TestMakeChunkvis(t *testing.T) {
 	m := onlyZeroIsSolid(false)
+	minWorldY := *region.MinWorldY
 
 	empty := make([]uint16, 4096)
 	solid := make([]uint16, 4096)
@@ -219,7 +220,7 @@ func TestMakeChunkvis(t *testing.T) {
 						fmt.Print("#")
 						//assert.Equal(t, "#", el)
 					} else {
-						if cv.isVisible(3*16, y*16, ho*16) {
+						if cv.isVisible(3*16, minWorldY+y*16, ho*16) {
 							fmt.Print("+")
 						} else {
 							fmt.Print(" ")
@@ -232,7 +233,7 @@ func TestMakeChunkvis(t *testing.T) {
 			for n, els := range lines {
 				for ho, el := range els {
 					y := len(lines) - n
-					visible := cv.isVisible(3*16, y*16, ho*16)
+					visible := cv.isVisible(3*16, minWorldY+y*16, ho*16)
 					if el == "0" {
 						assert.False(t, visible, "section should be invisible")
 					} else if el != "#" {
