@@ -246,8 +246,12 @@ func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.
 	}
 
 	// Helper to collect all interfaces implemented by a class and its hierarchy
+	ifaceCache := make(map[string]map[string]bool)
 	var collectAllInterfaces func(className string) (map[string]bool, error)
 	collectAllInterfaces = func(className string) (map[string]bool, error) {
+		if cached, ok := ifaceCache[className]; ok {
+			return cached, nil
+		}
 		interfaces := make(map[string]bool)
 		curr := className
 		for curr != "" && curr != "java/lang/Object" {
@@ -266,6 +270,7 @@ func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.
 			}
 			curr = cf.SuperClass
 		}
+		ifaceCache[className] = interfaces
 		return interfaces, nil
 	}
 	var intersection map[string]bool

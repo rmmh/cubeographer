@@ -35,6 +35,7 @@ type ClassProvider interface {
 type ZipClassProvider struct {
 	Zip   *zip.ReadCloser
 	files map[string]*zip.File
+	cache map[string]*ClassFile
 }
 
 func NewZipClassProvider(z *zip.ReadCloser) *ZipClassProvider {
@@ -42,10 +43,13 @@ func NewZipClassProvider(z *zip.ReadCloser) *ZipClassProvider {
 	for _, f := range z.File {
 		files[f.Name] = f
 	}
-	return &ZipClassProvider{Zip: z, files: files}
+	return &ZipClassProvider{Zip: z, files: files, cache: make(map[string]*ClassFile)}
 }
 
 func (p *ZipClassProvider) GetClass(className string) (*ClassFile, error) {
+	if cached, ok := p.cache[className]; ok {
+		return cached, nil
+	}
 	path := className + ".class"
 	f, ok := p.files[path]
 	if !ok {
@@ -60,7 +64,12 @@ func (p *ZipClassProvider) GetClass(className string) (*ClassFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseClassFile(data)
+	cf, err := ParseClassFile(data)
+	if err != nil {
+		return nil, err
+	}
+	p.cache[className] = cf
+	return cf, nil
 }
 
 type Interpreter struct {
