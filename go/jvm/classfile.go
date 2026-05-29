@@ -1,4 +1,4 @@
-package resourcepack
+package jvm
 
 import (
 	"encoding/binary"
@@ -22,7 +22,7 @@ const (
 	CONSTANT_InvokeDynamic      = 18
 )
 
-var javaOpcodes = []struct {
+var JavaOpcodes = []struct {
 	Name   string
 	Desc   string
 	Length int
@@ -234,9 +234,9 @@ var javaOpcodes = []struct {
 	0xff: {"impdep2", "Reserved for implementation-dependent operations", 1},
 }
 
-// Walk a Java class file, and increment stringCounts every time a given string constant
+// WalkClassForCounts walks a Java class file, and increment stringCounts every time a given string constant
 // is referenced in the bytecode.
-func walkClassForCounts(data []byte, stringCounts map[string]int) {
+func WalkClassForCounts(data []byte, stringCounts map[string]int) {
 	magic := binary.BigEndian.Uint32(data[0:4])
 	if magic != 0xCAFEBABE {
 		log.Fatalf("Not a class file")
@@ -336,11 +336,11 @@ func walkClassForCounts(data []byte, stringCounts map[string]int) {
 				for pc := 0; pc < len(code); {
 					opcode := code[pc]
 
-					if int(opcode) >= len(javaOpcodes) || javaOpcodes[opcode].Name == "" {
+					if int(opcode) >= len(JavaOpcodes) || JavaOpcodes[opcode].Name == "" {
 						log.Fatalf("Unknown opcode: 0x%x at pc %d", opcode, pc)
 					}
 
-					instr := javaOpcodes[opcode]
+					instr := JavaOpcodes[opcode]
 					// fmt.Printf("PC: %04x | Opcode: 0x%x (%s)\n", pc, opcode, instr.Name)
 
 					switch opcode {

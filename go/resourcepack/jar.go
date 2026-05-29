@@ -19,6 +19,7 @@ import (
 
 	"github.com/nsf/jsondiff"
 	"github.com/pkg/errors"
+	"github.com/rmmh/cubeographer/go/jvm"
 )
 
 var MajorMCVersions = []string{
@@ -358,7 +359,7 @@ type Block struct{}
 
 var assetRe = regexp.MustCompile(`^assets/(\w+)/(\w+)/(.*?)\.(.*)$`)
 
-func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
+func ExtractRenderData(jar *zip.ReadCloser) (*ResourceJar, error) {
 	rj := &ResourceJar{
 		Blocks:       map[string]*Block{},
 		BlockStates:  map[string]*BlockState{},
@@ -399,7 +400,7 @@ func JarFromZip(jar *zip.ReadCloser) (*ResourceJar, error) {
 					rj.Version = decode.Name
 					rj.WorldVersion = decode.WorldVersion
 				} else {
-					walkClassForCounts(buf, rj.StringCounts)
+					jvm.WalkClassForCounts(buf, rj.StringCounts)
 				}
 			}
 			continue

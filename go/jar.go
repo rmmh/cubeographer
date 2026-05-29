@@ -45,7 +45,7 @@ func generate(outDir string) {
 		fmt.Println("unable to open jar", jarPath)
 	}
 
-	pack, err := rp.JarFromZip(jar)
+	pack, err := rp.ExtractRenderData(jar)
 	if err != nil {
 		log.Fatal(err)
 	}
