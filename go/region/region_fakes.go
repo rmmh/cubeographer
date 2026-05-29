@@ -12,7 +12,7 @@ import (
 func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, error) {
 	cdata := make([]ChunkDatum, 1024)
 
-	if path != "r.0.0.mca" {
+	if !strings.HasSuffix(path, "r.0.0.mca") {
 		return cdata, nil
 	}
 
@@ -31,7 +31,7 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 		nstates := [][]render.Stateval{}
 		nsky := [][]byte{}
 
-		for layer := 0; layer < 1; layer++ {
+		for layer := 0; layer < 24; layer++ {
 			nb := make([]uint16, 4096)
 			ns := make([]render.Stateval, 4096)
 			for i := range 4096 {
@@ -53,7 +53,7 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 
 	for x := range 256 {
 		for z := range 256 {
-			set(x, 1, z, grass, 0)
+			set(x, 101, z, grass, 0)
 		}
 	}
 
@@ -168,8 +168,8 @@ func FakeReadRegion(path string, bm *BlockMapper, wanted []int) ([]ChunkDatum, e
 				bz += 8
 			}
 			for i, s := range ns {
-				set(bx+i%nl, 3+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(s))
-				set(bx+i%nl, 1, bz+i/nl, qualBlock, 0)
+				set(bx+i%nl, 103+(i%nl+i/nl)%2, bz+i/nl, uint16(b), render.Stateval(s))
+				set(bx+i%nl, 101, bz+i/nl, qualBlock, 0)
 			}
 			bx += nl
 			bx += 2

@@ -51,6 +51,17 @@ func cleanWorldName(s string) string {
 // findMaps scans the input folders, discovers worlds and dimensions,
 // and returns them with unique terse names assigned.
 func findMaps(inputDirs []string) ([]minecraftMap, error) {
+	if len(inputDirs) == 1 && inputDirs[0] == "test" {
+		return []minecraftMap{
+			{
+				Name:      "",
+				RegionDir: "test",
+				WorldDir:  "test",
+				Dimension: "overworld",
+			},
+		}, nil
+	}
+
 	if len(inputDirs) == 1 {
 		inputDir := inputDirs[0]
 		// 1. Check if inputDir itself contains .mca files directly.

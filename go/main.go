@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path"
@@ -95,29 +94,37 @@ func convert(numProcs int, inputDirs []string, outDir string, filters []string, 
 
 		log.Printf("Converting map %q (%s) -> %s", m.Name, m.RegionDir, targetOutDir)
 
-		files, err := region.ReadDir(m.RegionDir)
-		if err != nil {
-			log.Printf("error reading region dir %s: %v", m.RegionDir, err)
-			continue
+		var filenames []string
+		if m.RegionDir == "test" {
+			filenames = []string{"r.0.0.mca"}
+		} else {
+			dirEntries, err := region.ReadDir(m.RegionDir)
+			if err != nil {
+				log.Printf("error reading region dir %s: %v", m.RegionDir, err)
+				continue
+			}
+			for _, entry := range dirEntries {
+				filenames = append(filenames, entry.Name())
+			}
 		}
-		sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+		sort.Strings(filenames)
 
-		work := make(chan fs.FileInfo)
+		work := make(chan string)
 		var wg sync.WaitGroup
 		for i := 0; i < numProcs; i++ {
 			go func() {
-				for file := range work {
+				for filename := range work {
 					err = scanRegion(&scanRegionConfig{
 						dir:    m.RegionDir,
 						outdir: targetOutDir,
-						file:   file.Name(),
+						file:   filename,
 						bm:     bm,
 						prune:  prune,
 						debug:  *debugFlag,
 						mode:   mode,
 					})
 					if err != nil {
-						log.Fatal("error converting ", file.Name(), ": ", err)
+						log.Fatal("error converting ", filename, ": ", err)
 					}
 					wg.Done()
 				}
@@ -128,11 +135,11 @@ func convert(numProcs int, inputDirs []string, outDir string, filters []string, 
 			return regexp.MustCompile(f)
 		})
 
-		for _, file := range files {
+		for _, filename := range filenames {
 			if len(filters) > 0 {
 				good := 0
 				for _, filter := range filtersRe {
-					if filter.MatchString(file.Name()) {
+					if filter.MatchString(filename) {
 						good++
 					}
 				}
@@ -140,15 +147,8 @@ func convert(numProcs int, inputDirs []string, outDir string, filters []string, 
 					continue
 				}
 			}
-			info, err := file.Info()
-			if err != nil {
-				log.Println("error getting file info: ", file.Name(), err)
-			}
-			if info.Size() == 0 || info.IsDir() {
-				continue
-			}
 			wg.Add(1)
-			work <- info
+			work <- filename
 		}
 		close(work)
 		wg.Wait()

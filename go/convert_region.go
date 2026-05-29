@@ -132,6 +132,9 @@ type scanRegionConfig struct {
 }
 
 func scanRegion(conf *scanRegionConfig) error {
+	if conf.dir == "test" {
+		conf.readRegion = region.FakeReadRegion
+	}
 	ext := path.Ext(conf.file)
 	readRegion := conf.readRegion
 	if readRegion == nil {
