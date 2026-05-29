@@ -16,6 +16,7 @@ type BlockMapper struct {
 	migrateBlockMaps []migrateVersionedBlockMap
 
 	solid              []uint64
+	waterloggable      []uint64
 	blockstateToNid    [4096]uint16
 	blockstateToNstate [4096]render.Stateval
 	NameToNid          map[string]uint16
@@ -29,14 +30,15 @@ type BlockMapper struct {
 
 func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 	bm := &BlockMapper{
-		NameToNid: map[string]uint16{},
-		NidToName: []string{""},
-		nidToSmap: []render.Statemap{nil},
-		solid:     []uint64{},
-		Tmpl:      [][][][]uint32{nil},
-		Layer:     [][][]uint8{nil},
-		NoShade:   [][][]bool{nil},
-		Colors:    [][][]color.RGBA{nil},
+		NameToNid:     map[string]uint16{},
+		NidToName:     []string{""},
+		nidToSmap:     []render.Statemap{nil},
+		solid:         []uint64{},
+		waterloggable: []uint64{},
+		Tmpl:          [][][][]uint32{nil},
+		Layer:         [][][]uint8{nil},
+		NoShade:       [][][]bool{nil},
+		Colors:        [][][]color.RGBA{nil},
 	}
 
 	err := json.Unmarshal(buf, &bm.meta)
@@ -66,6 +68,12 @@ func LoadBlockMapper(buf []byte) (*BlockMapper, error) {
 			}
 			if b.Solid {
 				bm.solid[n>>6] |= 1 << (n & 63)
+			}
+			if int(n>>6) >= len(bm.waterloggable) {
+				bm.waterloggable = append(bm.waterloggable, 0)
+			}
+			if b.Waterloggable || b.Waterlogged {
+				bm.waterloggable[n>>6] |= 1 << (n & 63)
 			}
 			tmpls := [][][]uint32{}
 			layers := [][]uint8{}
@@ -143,6 +151,37 @@ func convertColors(s string) []color.RGBA {
 func (bm *BlockMapper) IsSolid(b uint16) bool {
 	// instead of trying to track every transparent block, keep a list of *known* solid blocks
 	return bm.solid[b>>6]&(1<<(b&63)) != 0
+}
+
+func (bm *BlockMapper) IsWaterloggable(b uint16) bool {
+	if int(b>>6) >= len(bm.waterloggable) {
+		return false
+	}
+	return bm.waterloggable[b>>6]&(1<<(b&63)) != 0
+}
+
+func (bm *BlockMapper) IsWaterlogged(nid uint16, state render.Stateval) bool {
+	if !bm.IsWaterloggable(nid) {
+		return false
+	}
+	if int(nid) >= len(bm.nidToSmap) {
+		return false
+	}
+	smap := bm.nidToSmap[nid]
+	if smap == nil {
+		// It is waterloggable but has no properties (no statemap).
+		// This means it is implicitly ALWAYS waterlogged!
+		return true
+	}
+	val, ok := smap["waterlogged=true"]
+	if !ok {
+		// It is waterloggable but does not have a "waterlogged" blockstate property.
+		// This means it is implicitly ALWAYS waterlogged!
+		return true
+	}
+	mask := uint16(val >> 16)
+	expectedVal := uint16(val & 0xFFFF)
+	return uint16(state)&mask == expectedVal
 }
 
 func (bm *BlockMapper) GetStateval(nid uint16, props []string) render.Stateval {

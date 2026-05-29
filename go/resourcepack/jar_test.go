@@ -101,15 +101,21 @@ func TestExtractWaterloggableBlocks(t *testing.T) {
 			err = interp.InterpretClassClinit(blocksClass)
 			require.NoError(t, err)
 			t.Logf("Successfully interpreted block registry for %s: found %d blocks", ver, len(interp.Blocks))
-			waterloggableBlocks, err := FindWaterloggableBlocks(provider, interp.Blocks)
+			waterlogInfo, err := FindWaterloggableBlocks(provider, interp.Blocks)
 			if err != nil {
 				t.Skipf("Skipping version %s: %v", ver, err)
 			}
 
-			if len(waterloggableBlocks) > 10 {
-				t.Logf("Discovered %d waterloggable blocks for version %s (showing 10): %v ... and %d more", len(waterloggableBlocks), ver, waterloggableBlocks[:10], len(waterloggableBlocks)-10)
+			if len(waterlogInfo.Waterloggable) > 10 {
+				t.Logf("Discovered %d waterloggable blocks for version %s (showing 10): %v ... and %d more", len(waterlogInfo.Waterloggable), ver, waterlogInfo.Waterloggable[:10], len(waterlogInfo.Waterloggable)-10)
 			} else {
-				t.Logf("Discovered %d waterloggable blocks for version %s: %v", len(waterloggableBlocks), ver, waterloggableBlocks)
+				t.Logf("Discovered %d waterloggable blocks for version %s: %v", len(waterlogInfo.Waterloggable), ver, waterlogInfo.Waterloggable)
+			}
+
+			if len(waterlogInfo.Waterlogged) > 10 {
+				t.Logf("Discovered %d always-waterlogged blocks for version %s (showing 10): %v ... and %d more", len(waterlogInfo.Waterlogged), ver, waterlogInfo.Waterlogged[:10], len(waterlogInfo.Waterlogged)-10)
+			} else {
+				t.Logf("Discovered %d always-waterlogged blocks for version %s: %v", len(waterlogInfo.Waterlogged), ver, waterlogInfo.Waterlogged)
 			}
 		})
 	}

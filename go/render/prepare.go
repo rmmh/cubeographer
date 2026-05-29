@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"math/bits"
 	"reflect"
 	"sort"
 	"strconv"
@@ -117,12 +118,14 @@ type ModelEntry struct {
 }
 
 type BlockEntry struct {
-	Name        string         `json:"name"`
-	DisplayName string         `json:"display_name"`
-	States      [][]string     `json:"states,omitempty"`
-	Solid       bool           `json:"solid,omitempty"`
-	Templates   [][]ModelEntry `json:"templates"`
-	Colors      []string       `json:"colors"`
+	Name          string         `json:"name"`
+	DisplayName   string         `json:"display_name"`
+	States        [][]string     `json:"states,omitempty"`
+	Solid         bool           `json:"solid,omitempty"`
+	Templates     [][]ModelEntry `json:"templates"`
+	Colors        []string       `json:"colors"`
+	Waterloggable bool           `json:"waterloggable,omitempty"`
+	Waterlogged   bool           `json:"waterlogged,omitempty"`
 }
 
 type BlockEntryMetadata struct {
@@ -947,6 +950,54 @@ func matchWhen(when *rp.BlockStateWhenClause, stateProps map[string]string) bool
 }
 
 func (s *StateConverter) Render(name string, st *rp.BlockState) BlockEntry {
+	entry := s.renderInner(name, st)
+	if entry.Name == "" || len(entry.Templates) == 0 {
+		return entry
+	}
+	if st.Waterloggable {
+		entry.Waterloggable = true
+		smap := BuildStateMap(entry.States)
+		if smap != nil {
+			var waterloggedMask uint16
+			var waterloggedTrueVal uint16
+			offset := 0
+			for _, attrs := range entry.States {
+				attr := attrs[0]
+				attrs = attrs[1:]
+				attrBits := bits.Len(uint(len(attrs) - 1))
+				if attr == "waterlogged" {
+					waterloggedMask = uint16((1<<attrBits)-1) << offset
+					waterloggedTrueVal = uint16(1) << offset
+					break
+				}
+				offset += attrBits
+			}
+
+			maxIdx := int(smap.Max())
+			if len(entry.Templates) < maxIdx+1 {
+				newTmpls := make([][]ModelEntry, maxIdx+1)
+				copy(newTmpls, entry.Templates)
+				entry.Templates = newTmpls
+			}
+
+			for sIdx := 0; sIdx <= maxIdx; sIdx++ {
+				if (sIdx & int(waterloggedMask)) == int(waterloggedTrueVal) {
+					dryIdx := sIdx & ^int(waterloggedMask)
+					if len(entry.Templates[sIdx]) == 0 && len(entry.Templates[dryIdx]) > 0 {
+						entry.Templates[sIdx] = make([]ModelEntry, len(entry.Templates[dryIdx]))
+						copy(entry.Templates[sIdx], entry.Templates[dryIdx])
+					}
+				}
+			}
+		}
+	}
+	if st.Waterlogged {
+		entry.Waterlogged = true
+	}
+	return entry
+}
+
+func (s *StateConverter) renderInner(name string, st *rp.BlockState) BlockEntry {
 	slist := buildStateList(name, st)
 	smap := BuildStateMap(slist)
 	if st.Variants[""] != nil {
@@ -1041,6 +1092,18 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 		textureClasses[name] = ty
 	}
 
+	waterloggableBlocks := pack.WaterloggableBlocks
+	waterloggableMap := make(map[string]bool, len(waterloggableBlocks))
+	for _, b := range waterloggableBlocks {
+		waterloggableMap[b] = true
+	}
+
+	waterloggedBlocks := pack.WaterloggedBlocks
+	waterloggedMap := make(map[string]bool, len(waterloggedBlocks))
+	for _, b := range waterloggedBlocks {
+		waterloggedMap[b] = true
+	}
+
 	slotTextures := [NumRenderLayers]map[int]string{}
 	for i := range slotTextures {
 		slotTextures[i] = map[int]string{}
@@ -1071,8 +1134,13 @@ func Prepare(pack *rp.ResourceJar, genDebug string) (BlockEntryMetadata, []*imag
 	cuboidCount := 0
 
 	for name, st := range pack.BlockStates {
+		nameNoPrefix := rp.RemoveDefaultPrefix(name)
+		st.Waterloggable = waterloggableMap[nameNoPrefix]
+		st.Waterlogged = waterloggedMap[nameNoPrefix]
 		entry := converter.Render(name, st)
 		if len(entry.Templates) > 0 {
+			entry.Waterloggable = waterloggableMap[nameNoPrefix]
+			entry.Waterlogged = waterloggedMap[nameNoPrefix]
 			*blockEntries = append(*blockEntries, entry)
 		} else {
 			fmt.Println("unhandled", name, st)

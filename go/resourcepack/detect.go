@@ -231,7 +231,12 @@ func DetectRegistryMeta(jar *zip.ReadCloser) (blocksClass, blockClass, registerM
 	return blocksClass, blockClass, registerMethod, initMethod, nil
 }
 
-func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.JVMObject) ([]string, error) {
+type WaterloggedBlocks struct {
+	Waterlogged   []string
+	Waterloggable []string
+}
+
+func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.JVMObject) (WaterloggedBlocks, error) {
 	knownWaterloggableIDs := []string{
 		"oak_slab",
 		"oak_stairs",
@@ -311,27 +316,31 @@ func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.
 	}
 
 	var waterloggedInterface string
+	var waterloggableInterface string
 	if len(intersection) == 0 {
-		return nil, fmt.Errorf("could not find a common interface amongst known waterloggable blocks")
+		return WaterloggedBlocks{}, fmt.Errorf("could not find a common interface amongst known waterloggable blocks")
 	} else if len(intersection) == 1 {
 		for k := range intersection {
 			waterloggedInterface = k
+			waterloggableInterface = k
 		}
 	} else {
-		// Prefer the most specific interface (i.e. one that is not extended by another interface in the set)
+		// Prefer the most general (root-most) interface (i.e. one that does not extend any other interface in the set)
 		for k := range intersection {
-			isExtended := false
-			for other := range intersection {
-				if k == other {
-					continue
-				}
-				otherIfaces, err := collectAllInterfaces(other)
-				if err == nil && otherIfaces[k] {
-					isExtended = true
-					break
+			extendsOther := false
+			kIfaces, err := collectAllInterfaces(k)
+			if err == nil {
+				for other := range intersection {
+					if k == other {
+						continue
+					}
+					if kIfaces[other] {
+						extendsOther = true
+						break
+					}
 				}
 			}
-			if !isExtended {
+			if !extendsOther {
 				waterloggedInterface = k
 				break
 			}
@@ -350,19 +359,61 @@ func FindWaterloggableBlocks(provider jvm.ClassProvider, blocks map[string]*jvm.
 				break
 			}
 		}
+
+		// Prefer the most specific (leaf-most) interface (i.e. one that is not extended by another interface in the set)
+		for k := range intersection {
+			isExtended := false
+			for other := range intersection {
+				if k == other {
+					continue
+				}
+				otherIfaces, err := collectAllInterfaces(other)
+				if err == nil && otherIfaces[k] {
+					isExtended = true
+					break
+				}
+			}
+			if !isExtended {
+				waterloggableInterface = k
+				break
+			}
+		}
+		if waterloggableInterface == "" {
+			for k := range intersection {
+				if strings.Contains(strings.ToLower(k), "waterlog") {
+					waterloggableInterface = k
+					break
+				}
+			}
+		}
+		if waterloggableInterface == "" {
+			for k := range intersection {
+				waterloggableInterface = k
+				break
+			}
+		}
 	}
 
+	// fmt.Printf("Detected waterloggedInterface: %s, waterloggableInterface: %s\n", waterloggedInterface, waterloggableInterface)
+
 	var waterloggableBlocks []string
+	var waterloggedBlocks []string
 	for blockID, obj := range blocks {
 		ifaces, err := collectAllInterfaces(obj.ClassName)
 		if err != nil {
 			continue
 		}
-		if ifaces[waterloggedInterface] {
+		if ifaces[waterloggableInterface] {
 			waterloggableBlocks = append(waterloggableBlocks, blockID)
+		} else if ifaces[waterloggedInterface] {
+			waterloggedBlocks = append(waterloggedBlocks, blockID)
 		}
 	}
 
 	sort.Strings(waterloggableBlocks)
-	return waterloggableBlocks, nil
+	sort.Strings(waterloggedBlocks)
+	return WaterloggedBlocks{
+		Waterlogged:   waterloggedBlocks,
+		Waterloggable: waterloggableBlocks,
+	}, nil
 }

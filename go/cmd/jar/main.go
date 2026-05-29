@@ -151,7 +151,7 @@ func findWaterloggable(jarPath string, outDir string) error {
 	}
 
 	fmt.Println("Discovering waterloggable blocks dynamically using library...")
-	waterloggableBlocks, err := rp.FindWaterloggableBlocks(provider, interp.Blocks)
+	waterlogInfo, err := rp.FindWaterloggableBlocks(provider, interp.Blocks)
 	if err != nil {
 		return fmt.Errorf("failed to find waterloggable blocks: %v", err)
 	}
@@ -166,12 +166,12 @@ func findWaterloggable(jarPath string, outDir string) error {
 
 	encoder := json.NewEncoder(jsonFile)
 	encoder.SetIndent("", "  ")
-	err = encoder.Encode(waterloggableBlocks)
+	err = encoder.Encode(waterlogInfo)
 	if err != nil {
 		return fmt.Errorf("failed to encode waterloggable_blocks.json: %v", err)
 	}
 
-	fmt.Printf("Successfully identified %d waterloggable blocks!\n", len(waterloggableBlocks))
+	fmt.Printf("Successfully identified %d waterloggable and %d always-waterlogged blocks!\n", len(waterlogInfo.Waterloggable), len(waterlogInfo.Waterlogged))
 	fmt.Printf("List saved to %s\n", jsonPath)
 	return nil
 }

@@ -239,99 +239,146 @@ func scanRegion(conf *scanRegionConfig) error {
 						continue
 					}
 
-					ns, nl, nsl := rs.neighs(x, y, z)
+					// waterlogged blocks render as *two* blocks on top of each other,
+					// so we have to be able to process multiple blocks per coordinate!
+					blocksToProcess := [2]uint16{b, 0}
+					statesToProcess := [2]render.Stateval{bs, 0}
+					numBlocks := 1
 
-					sideVis := uint32(0)
-					sideLight := uint32(0)
-					for i, nb := range ns {
-						if b == waterID {
-							if nb == 0 || (nb != waterID && !bm.IsSolid(nb)) {
-								sideVis |= 1 << i
-							}
-						} else if !bm.IsSolid(nb) {
-							sideVis |= 1 << i
-						}
-						l := nsl[i]
-						if nl[i] > l {
-							l = nl[i]
-						} else if bl > l {
-							l = bl
-						} else if bsl > l {
-							l = bsl
-						}
-						sideLight |= uint32(l) << (4 * i)
+					if b != waterID && bm.IsWaterloggable(b) && bm.IsWaterlogged(b, bs) {
+						blocksToProcess[1] = waterID
+						statesToProcess[1] = 0 // default state for water
+						numBlocks = 2
 					}
 
-					if sideVis != 0 {
-						blockCounts[b]++
+					ns, nl, nsl := rs.neighs(x, y, z)
 
-						// extra rendering flags
-						// 0: use sprite+256 for sides
-						// 1: tint according to biome colors
-						// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
-						var tmpls [][]uint32
-						var layers []uint8
-						var noshades []bool
-						stateIdx := int(bs)
-						if stateIdx >= len(bm.Tmpl[b]) {
-							stateIdx = 0
-						}
-						tmpls = bm.Tmpl[b][stateIdx]
-						layers = bm.Layer[b][stateIdx]
-						if stateIdx < len(bm.NoShade[b]) {
-							noshades = bm.NoShade[b][stateIdx]
-						}
+					for idx := 0; idx < numBlocks; idx++ {
+						b = blocksToProcess[idx]
+						bs = statesToProcess[idx]
 
-						pos := uint32(x&255)<<16 | uint32(z&255)<<8 | uint32(localY)
-
-						// uniform light for no-shade elements: max(blocklight, skylight) broadcast to all faces
-						uniformLight := uint32(max(bl, bsl)) * 0x111111 // replicate 4-bit value across all 6 faces (24 bits)
-
-						for eIdx, tmpl := range tmpls {
-							layer := layers[eIdx]
-							noShade := eIdx < len(noshades) && noshades[eIdx]
-							eSideLight := sideLight
-							if noShade {
-								eSideLight = uniformLight
-							}
-							blen := 0
-
-							for i := 0; i < len(tmpl); i += 2 {
-								// x: 8b z: 8b y: 8b   8+8+8=24b
-								var visibleFaces uint32
-								if render.LayerNumber(layer) == render.LayerCuboid {
-									cullableMask := (tmpl[i+1] >> 18) & 0b111111
-									visibleFaces = tmpl[i+1] & (sideVis | ^cullableMask) & 0b111111
-								} else {
-									visibleFaces = sideVis & tmpl[i+1]
-								}
-
-								if visibleFaces != 0 {
-									binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
-									var yVal uint32
-									if render.LayerNumber(layer) == render.LayerCuboid {
-										cuboidSideLight := ((eSideLight >> 1) & 7) |
-											((eSideLight >> 2) & 0x38) |
-											((eSideLight >> 3) & 0x1C0) |
-											((eSideLight >> 4) & 0xE00) |
-											((eSideLight >> 5) & 0x7000) |
-											((eSideLight >> 6) & 0x38000)
-										// Cuboid template attr.y:
-										// - Bits 24-31: top 8 bits of 16-bit cuboid ID.
-										// - Bits 0-5: face presence mask.
-										// We clear bottom 6 bits of the template, OR in cuboidSideLight (18 bits) at bits 6-23,
-										// and OR in the visibility mask (visibleFaces).
-										yVal = (tmpl[i+1] & ^uint32(0b111111)) | (cuboidSideLight << 6) | visibleFaces
-									} else {
-										yVal = (tmpl[i+1] & ^uint32(0b111111)) | (eSideLight << 6) | visibleFaces
+						sideVis := uint32(0)
+						sideLight := uint32(0)
+						for i, nb := range ns {
+							if b == waterID {
+								if nb == 0 || (nb != waterID && !bm.IsSolid(nb)) {
+									isWaterlogged := false
+									if nb != 0 {
+										nx, ny, nz := x, y, z
+										switch i {
+										case 0:
+											nx--
+										case 1:
+											nx++
+										case 2:
+											nz++
+										case 3:
+											nz--
+										case 4:
+											ny++
+										case 5:
+											ny--
+										}
+										_, nbState, _, _ := rs.get(nx, ny, nz)
+										if bm.IsWaterlogged(nb, nbState) {
+											isWaterlogged = true
+										}
+										if conf.debug != "" && strings.Contains(conf.debug, "waterlogged") {
+											fmt.Printf("[debug waterlogged] Water neighbor is %s (stateval %d), IsWaterlogged=%t\n",
+												bm.NidToName[nb], nbState, isWaterlogged)
+										}
 									}
-									binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
-									blen += 8
-									faceCounts[x>>8+2*(z>>8)+ySlice*4][layer] += bits.OnesCount32(visibleFaces)
+									if isWaterlogged {
+										// Neighbor is waterlogged, cull this water face
+									} else {
+										sideVis |= 1 << i
+									}
 								}
+							} else if !bm.IsSolid(nb) {
+								sideVis |= 1 << i
 							}
-							if blen > 0 {
-								bufs[x>>8+2*(z>>8)+ySlice*4][layer].Write(buf[:blen])
+							l := nsl[i]
+							if nl[i] > l {
+								l = nl[i]
+							} else if bl > l {
+								l = bl
+							} else if bsl > l {
+								l = bsl
+							}
+							sideLight |= uint32(l) << (4 * i)
+						}
+
+						if sideVis != 0 {
+							blockCounts[b]++
+
+							// extra rendering flags
+							// 0: use sprite+256 for sides
+							// 1: tint according to biome colors
+							// fmt.Println(x, y, z, b, bm.nidToName[b], bs)
+							var tmpls [][]uint32
+							var layers []uint8
+							var noshades []bool
+							stateIdx := int(bs)
+							if stateIdx >= len(bm.Tmpl[b]) {
+								stateIdx = 0
+							}
+							tmpls = bm.Tmpl[b][stateIdx]
+							layers = bm.Layer[b][stateIdx]
+							if stateIdx < len(bm.NoShade[b]) {
+								noshades = bm.NoShade[b][stateIdx]
+							}
+
+							pos := uint32(x&255)<<16 | uint32(z&255)<<8 | uint32(localY)
+
+							// uniform light for no-shade elements: max(blocklight, skylight) broadcast to all faces
+							uniformLight := uint32(max(bl, bsl)) * 0x111111 // replicate 4-bit value across all 6 faces (24 bits)
+
+							for eIdx, tmpl := range tmpls {
+								layer := layers[eIdx]
+								noShade := eIdx < len(noshades) && noshades[eIdx]
+								eSideLight := sideLight
+								if noShade {
+									eSideLight = uniformLight
+								}
+								blen := 0
+
+								for i := 0; i < len(tmpl); i += 2 {
+									// x: 8b z: 8b y: 8b   8+8+8=24b
+									var visibleFaces uint32
+									if render.LayerNumber(layer) == render.LayerCuboid {
+										cullableMask := (tmpl[i+1] >> 18) & 0b111111
+										visibleFaces = tmpl[i+1] & (sideVis | ^cullableMask) & 0b111111
+									} else {
+										visibleFaces = sideVis & tmpl[i+1]
+									}
+
+									if visibleFaces != 0 {
+										binary.LittleEndian.PutUint32(buf[blen:], tmpl[i]|pos)
+										var yVal uint32
+										if render.LayerNumber(layer) == render.LayerCuboid {
+											cuboidSideLight := ((eSideLight >> 1) & 7) |
+												((eSideLight >> 2) & 0x38) |
+												((eSideLight >> 3) & 0x1C0) |
+												((eSideLight >> 4) & 0xE00) |
+												((eSideLight >> 5) & 0x7000) |
+												((eSideLight >> 6) & 0x38000)
+											// Cuboid template attr.y:
+											// - Bits 24-31: top 8 bits of 16-bit cuboid ID.
+											// - Bits 0-5: face presence mask.
+											// We clear bottom 6 bits of the template, OR in cuboidSideLight (18 bits) at bits 6-23,
+											// and OR in the visibility mask (visibleFaces).
+											yVal = (tmpl[i+1] & ^uint32(0b111111)) | (cuboidSideLight << 6) | visibleFaces
+										} else {
+											yVal = (tmpl[i+1] & ^uint32(0b111111)) | (eSideLight << 6) | visibleFaces
+										}
+										binary.LittleEndian.PutUint32(buf[blen+4:], yVal)
+										blen += 8
+										faceCounts[x>>8+2*(z>>8)+ySlice*4][layer] += bits.OnesCount32(visibleFaces)
+									}
+								}
+								if blen > 0 {
+									bufs[x>>8+2*(z>>8)+ySlice*4][layer].Write(buf[:blen])
+								}
 							}
 						}
 					}

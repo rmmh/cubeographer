@@ -191,6 +191,8 @@ type BlockState struct {
 		When  *BlockStateWhenClause    `json:"when,omitempty"`
 		Apply SingleOrSlice[ModelSpec] `json:"apply,omitempty"`
 	} `json:"multipart,omitempty"`
+	Waterloggable bool `json:"waterloggable,omitempty"`
+	Waterlogged   bool `json:"waterlogged,omitempty"`
 }
 
 type BlockModelFace struct {
@@ -345,14 +347,16 @@ type ModelRef struct {
 }
 
 type ResourceJar struct {
-	Blocks       map[string]*Block
-	BlockStates  map[string]*BlockState
-	Models       map[string]*Model
-	Textures     map[string]image.Image
-	Translations map[string]string
-	StringCounts map[string]int
-	Version      string
-	WorldVersion int
+	Blocks              map[string]*Block
+	BlockStates         map[string]*BlockState
+	Models              map[string]*Model
+	Textures            map[string]image.Image
+	Translations        map[string]string
+	StringCounts        map[string]int
+	Version             string
+	WorldVersion        int
+	WaterloggableBlocks []string
+	WaterloggedBlocks   []string
 }
 
 type Block struct{}
@@ -482,6 +486,31 @@ func ExtractRenderData(jar *zip.ReadCloser) (*ResourceJar, error) {
 	}
 	if mm > 0 {
 		fmt.Println("mismatch count:", mm)
+	}
+
+	// Try to dynamically detect waterloggable blocks from the jar
+	blocksClass, blockClass, registerMethod, _, detectErr := DetectRegistryMeta(jar)
+	if detectErr == nil {
+		provider := jvm.NewZipClassProvider(jar)
+		interp := jvm.NewInterpreter(provider)
+		interp.BlocksClassName = blocksClass
+		interp.BlockClassName = blockClass
+		interp.RegisterMethodName = registerMethod
+
+		if clinitErr := interp.InterpretClassClinit(blocksClass); clinitErr == nil {
+			waterlogInfo, findErr := FindWaterloggableBlocks(provider, interp.Blocks)
+			if findErr != nil {
+				fmt.Printf("warning: failed to find waterloggable blocks: %v\n", findErr)
+			} else {
+				rj.WaterloggableBlocks = waterlogInfo.Waterloggable
+				rj.WaterloggedBlocks = waterlogInfo.Waterlogged
+				fmt.Printf("identified %d waterloggable and %d always-waterlogged blocks dynamically\n", len(waterlogInfo.Waterloggable), len(waterlogInfo.Waterlogged))
+			}
+		} else {
+			fmt.Printf("warning: failed to interpret registry clinit: %v\n", clinitErr)
+		}
+	} else {
+		fmt.Printf("warning: failed to detect registry metadata: %v\n", detectErr)
 	}
 
 	return rj, nil

@@ -29,6 +29,10 @@ func buildStateList(name string, st *resourcepack.BlockState) [][]string {
 	attrs := map[string][]string{}
 	multipartAttrs := map[string]bool{}
 
+	if st.Waterloggable {
+		attrs["waterlogged"] = []string{"false", "true"}
+	}
+
 	if st.Variants != nil {
 		for pred := range st.Variants {
 			if pred != "" && pred != "normal" {
